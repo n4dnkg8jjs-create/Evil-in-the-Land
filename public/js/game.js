@@ -9,6 +9,8 @@ import { FX } from './fx.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
 import { CHAPTERS, PRAYERS, HEALED } from './chapters.js';
+import { Story } from './story.js';
+import { Dread } from './dread.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, rng, TAU } from './util.js';
 
 const DIFF = { pilgrim: { dmg: 0.55, spawn: 0.75, prayer: 0.85 }, knight: { dmg: 1, spawn: 1, prayer: 1 }, martyr: { dmg: 1.4, spawn: 1.3, prayer: 1.15 } };
@@ -28,7 +30,7 @@ export class Game {
     this.horde.onScream = (d) => {
       const p = V(d.pos.x, d.pos.y + d.def.height * 0.85, d.pos.z);
       this.audio.chatter(p, 0.45);
-      if (R() < 0.55) this.audio.scream(p, !!d.def.big, 0.5, { crawler: 1.25, wraith: 1.15, husk: 0.8, brute: 0.7 }[d.type] || 1);
+      if (R() < 0.55) this.audio.scream(p, !!d.def.big, 0.5, { crawler: 1.06, wraith: 1.0, husk: 0.85, brute: 0.75 }[d.type] || 0.95);
     };
     this.knights = new Map(); this.companions = []; this.trails = new Map();
     this.cam = { yaw: 0, pitch: 0.22, dist: 4.4, targetDist: 4.4, pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: app.settings.fov || 62 };
@@ -42,6 +44,7 @@ export class Game {
     this.ui.setSelf(this.me);
     let role = 0;
     for (const p of opts.players) if (p.ai) { const k = this.knights.get(p.id); this.companions.push(new Companion(k, role++)); }
+    this.story = new Story(this); this.dread = new Dread(this);
     this.bindNet();
   }
 
@@ -66,6 +69,7 @@ export class Game {
     if (this.watcher) { this.scene.remove(this.watcher.mesh); this.watcher = null; }
     this.crevices = null;
     this.world = new World(this.engine, this.engine.q, n);
+    this.story.build(this.world, n); this.dread.clear();
     if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
@@ -192,6 +196,7 @@ export class Game {
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
+    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); }
     // the sky answers the land beneath you: blue over living country, ember-red in the blight
     if (this.world) {
       const life = this.world.lifeAt(this.me.pos.x, this.me.pos.z);
@@ -783,7 +788,7 @@ export class Game {
     const p = V(a.x, a.y + 1.2, a.z);
     if (a.type === 'altar') { this.audio.growl(p, 0.5, 2, 0.5); this.ui.toast('The altar wakes. Kneel and pray', 3); return; }
     if (a.type === 'boss') return;
-    const pitch = { shade: 1.3, crawler: 1.8, wretch: 1.1, husk: 0.7, brute: 0.5, wraith: 1.5, herald: 1.0 }[a.type] || 1;
+    const pitch = { shade: 1.0, crawler: 1.1, wretch: 0.95, husk: 0.75, brute: 0.6, wraith: 1.05, herald: 0.85 }[a.type] || 1;
     switch (a.kind) {
       case 'windup': if (R() < 0.6) this.audio.scream(p, pitch < 0.8, 0.45, pitch * 0.85); else this.audio.shriek(p, pitch, 0.35, 0.22); break;
       case 'leap': this.audio.scream(p, pitch < 0.8, 0.55, pitch); break;
@@ -803,7 +808,7 @@ export class Game {
   watcherEvent(s) {
     if (!this.watcher) return;
     const p = this.watcher.pos.clone(); p.y += 3;
-    if (s === 'appear') { this.audio.whisper(p, 3, 0.5); this.audio.heartbeat(0.35); if (!this.watcherSeen) { this.watcherSeen = true; this.ui.subtitle(['Something stands on the ridge, watching.', ''], 4); } }
+    if (s === 'appear') { this.audio.whisper(p, 3, 0.5); this.audio.heartbeat(0.35); if (!this.watcherSeen) { this.watcherSeen = true; this.ui.subtitle(['Something stands on the ridge, watching.', ''], 4); } else if (R() < 0.6) setTimeout(() => this.story.whisper(this.dread.alone), 2500); }
     if (s === 'turn') this.audio.whisper(p, 2, 0.7);
   }
   cleanseFx(i) {
@@ -852,7 +857,7 @@ export class Game {
     // Heaven's light breaks over the summit and runs down the mountain
     this.fx.beam(V(p.x, p.y, p.z), 0xfff4d0, 12, 6, 200); this.fx.holyBurst(p, 14);
     this.audio.bell(p, 0.5, 1); setTimeout(() => this.audio.bell(p, 0.75, 0.8), 1500); setTimeout(() => this.audio.bell(p, 1, 0.7), 3000);
-    let f = 0; const tick = setInterval(() => { f = Math.min(1, f + 0.05); this.blendAtmosphere(f); for (const a of this.world.altars) this.world.paintLife(a.x, a.z, 60 * f, 1); if (f >= 1) clearInterval(tick); }, 300);
+    let f = 0, step = 0; const tick = setInterval(() => { f = Math.min(1, f + 0.05); this.blendAtmosphere(f, f >= 1 || ++step % 5 === 0); /* reflections rebuilt now and then, not every step */ for (const a of this.world.altars) this.world.paintLife(a.x, a.z, 60 * f, 1); if (f >= 1) clearInterval(tick); }, 300);
     for (const k of this.knightList) if (!k.downed) setTimeout(() => k.salute(), 1500);
     const me = this.me.pos;
     this.cinema.play([
@@ -894,7 +899,7 @@ export class Game {
     ui.updateSelf(me);
     ui.party(this.knightList, this.meId);
     ui.hurt(this.engine.fx.hurt * 0.9 + (me.hp / me.maxHp < 0.25 ? 0.25 + Math.sin(this.time * 4) * 0.1 : 0));
-    this.engine.fx.desat = me.downed ? 0.8 : me.hp / me.maxHp < 0.25 ? 0.35 : 0;
+    this.engine.fx.desat = Math.max(me.downed ? 0.8 : me.hp / me.maxHp < 0.25 ? 0.35 : 0, this.engine.fx.dreadDesat || 0);
     if (me.hp / me.maxHp < 0.25 && !me.downed) { this.heartT = (this.heartT || 0) - dt; if (this.heartT <= 0) { this.heartT = 1.1; this.audio.heartbeat(0.4); } }
     if (!o || !this.world) return;
     const ch = CHAPTERS[this.chapterIdx];
@@ -925,6 +930,7 @@ export class Game {
     const tgt = o.wards ? this.activeWard() : (o.ph === 'travel' || o.ph === 'pray') ? a : null;
     if (tgt) marks.push({ yaw: Math.atan2(tgt.x - me.pos.x, tgt.z - me.pos.z), kind: 'altar' });
     if (this.boss && this.boss.alive) marks.push({ yaw: Math.atan2(this.boss.pos.x - me.pos.x, this.boss.pos.z - me.pos.z), kind: 'boss' });
+    for (const sp of this.story.spots) if (!sp.taken && Math.hypot(sp.x - me.pos.x, sp.z - me.pos.z) < 70) marks.push({ yaw: Math.atan2(sp.x - me.pos.x, sp.z - me.pos.z), kind: 'page' });
     ui.compass(this.cam.yaw, marks);
   }
 
@@ -933,6 +939,7 @@ export class Game {
     for (const t of this.trails.values()) t.dispose(this.scene);
     this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
+    this.story.dispose(); this.dread.dispose();
     for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:skip', 'left']) this.net?.off(k);
   }
 }

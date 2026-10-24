@@ -89,7 +89,7 @@ export class UI {
     let html = '';
     const place = (yaw) => { let d = yaw - camYaw; d = Math.atan2(Math.sin(d), Math.cos(d)); if (Math.abs(d) > span / 2) return null; return W / 2 - (d / span) * W; };
     for (const [n, y] of items) { const x = place(y); if (x !== null) html += `<span class="${n.length === 1 ? 'card' : ''}" style="left:${x.toFixed(0)}px">${n}</span>`; }
-    for (const m of marks) { const x = place(m.yaw); if (x !== null) html += `<span class="mk ${m.kind}" style="left:${x.toFixed(0)}px">${m.kind === 'boss' ? '◆' : '✝'}</span>`; }
+    for (const m of marks) { const x = place(m.yaw); if (x !== null) html += `<span class="mk ${m.kind}" style="left:${x.toFixed(0)}px">${m.kind === 'boss' ? '◆' : m.kind === 'page' ? '❦' : '✝'}</span>`; }
     if (html !== this._cmp) { strip.innerHTML = html; this._cmp = html; }
   }
   update(dt) {

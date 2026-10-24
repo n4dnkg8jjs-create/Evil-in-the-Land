@@ -30,7 +30,7 @@ function hazed(mat, haze) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uHaze = haze.color; sh.uniforms.uHazeAmt = haze.amt; sh.uniforms.uFlash = haze.flash;
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uHaze; uniform float uHazeAmt, uFlash;')
-      .replace('#include <dithering_fragment>', '#include <dithering_fragment>\ngl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze, uHazeAmt) + vec3(0.55, 0.6, 0.8) * uFlash * 0.25;');
+      .replace('#include <tonemapping_fragment>', 'gl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze, uHazeAmt) + vec3(0.55, 0.6, 0.8) * uFlash * 0.25;\n#include <tonemapping_fragment>');
   };
   return mat;
 }
@@ -41,10 +41,11 @@ export class Vista {
     this.group = new THREE.Group(); engine.scene.add(this.group);
     this.time = 0; this.strikes = []; this.nextStrike = 2; this.flash = 0;
     const fog = new THREE.Color(ch.atmos.fog);
-    this.haze = { color: { value: fog.clone().lerp(new THREE.Color(ch.atmos.skyBottom), 0.5) }, amt: { value: 0.5 }, flash: { value: 0 } };
+    this.haze = { color: { value: fog.clone() }, amt: { value: 0.5 }, flash: { value: 0 } };
+    this.hazeDark = { color: { value: fog.clone().multiplyScalar(0.8) }, amt: { value: 0.72 }, flash: this.haze.flash };
     this.groundAt = groundAt;
     const kind = ch.terrain.kind;
-    if (kind !== 'peak') this.buildCity(kind === 'mountain' ? 2600 : 700 + chIdx * 230, kind === 'mountain' ? -300 : null);
+    if (kind !== 'peak') this.buildCity(kind === 'mountain' ? 3300 : 1500 + chIdx * 280, kind === 'mountain' ? -300 : null);
     if (kind !== 'peak') this.buildMountain(kind === 'mountain' ? 1500 : 2700 - chIdx * 330, kind === 'mountain' ? 260 : 0);
     else this.storm = this.buildStorm(new THREE.Vector3(0, 60, 0), 900, 160, true);
   }
@@ -53,7 +54,8 @@ export class Vista {
   buildCity(dist, baseY) {
     const r = rng(9001);
     const cz = -128 - dist, cx = 60;
-    const y0 = baseY ?? (this.groundAt(cx, cz) - 4);
+    // sit on the highest ground under the walls (the mound hides the rest)
+    let y0 = baseY ?? -1e9; if (baseY == null) for (let k = 0; k < 24; k++) { const a = (k / 24) * TAU; y0 = Math.max(y0, this.groundAt(cx + Math.cos(a) * 200, cz + Math.sin(a) * 150)); }
     const st = stoneTextures(256, true);
     const haze = this.haze;
     const stone = hazed(new THREE.MeshStandardMaterial({ color: 0xb8ad98, map: st.map, roughness: 0.9 }), haze);
@@ -109,7 +111,12 @@ export class Vista {
     slates.push(xf(new THREE.ConeGeometry(11, 46, 8), [C[0], 83, C[1] - 18], [0, PI / 8, 0]));
     // great west window and the rose
     lights.push({ x: C[0], y: 30, z: C[1] + 60, rot: 0, w: 8, dp: 0, rose: true });
+    // the city stands on its own low hill, whose skirts run down below the surrounding land so nothing floats
+    const earth = hazed(new THREE.MeshStandardMaterial({ color: 0x3a3428, roughness: 1 }), haze);
+    const mound = xf(new THREE.CylinderGeometry(R + 34, R + 190, 140, 40, 3), [0, -70, 0], [0, 0, 0], [1, 1, 0.75]);
+    { const mp = mound.attributes.position; for (let i = 0; i < mp.count; i++) { const y = mp.getY(i); if (y < -1 && y > -139) { const a = Math.atan2(mp.getZ(i), mp.getX(i)); mp.setY(i, y + Math.sin(a * 5 + 1) * 12 + Math.cos(a * 9) * 6); } } mound.computeVertexNormals(); }
     const g = new THREE.Group(); g.position.set(cx, y0, cz);
+    g.add(new THREE.Mesh(mound, earth));
     g.rotation.y = Math.atan2(-cx, 128 + 128 - cz) * 0.3;
     const add = (list, m) => { if (!list.length) return; const mesh = new THREE.Mesh(merge(list), m); g.add(mesh); };
     add(walls, stone); add(roofs, roofM); add(slates, slate);
@@ -142,31 +149,42 @@ export class Vista {
   buildMountain(dist, baseY) {
     const n = makeNoise(666);
     const cz = 128 + dist, cx = -120;
-    const Rm = 1300, Hm = 1250;
+    const Rm = 1500, Hm = 1550;
     const rings = 70, segs = 120;
     const pos = [], idx = [];
-    for (let i = 0; i <= rings; i++) {
-      const t = i / rings;
+    // one extra ring: a skirt that plunges far below the horizon, so the mountain never floats
+    for (let i = 0; i <= rings + 1; i++) {
+      const t = Math.min(1, i / rings), skirt = i > rings;
       for (let j = 0; j <= segs; j++) {
         const a = (j / segs) * TAU;
-        const rr = t * Rm;
+        const rr = skirt ? Rm * 1.35 : t * Rm;
         const ridge = n.ridge(Math.cos(a) * t * 3 + 5, Math.sin(a) * t * 3 + 5, 5);
         let h = Hm * Math.pow(1 - t, 1.55) * (0.78 + ridge * 0.45) + n.fbm(Math.cos(a) * t * 9, Math.sin(a) * t * 9, 4) * 70 * (1 - t);
         h += Math.exp(-(((t - 0.3) / 0.08) ** 2)) * Math.max(0, Math.sin(a * 3 + 1)) * 160;   // shoulder crags
         if (i === 0) h = Hm * 1.06;
+        if (skirt) h = -700;
         pos.push(Math.cos(a) * rr * (1 + ridge * 0.06), h - 60 * t, Math.sin(a) * rr * (1 + ridge * 0.06));
       }
     }
-    for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) { const a = i * (segs + 1) + j, b = a + segs + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
+    for (let i = 0; i <= rings; i++) for (let j = 0; j < segs; j++) { const a = i * (segs + 1) + j, b = a + segs + 1; idx.push(a, a + 1, b, a + 1, b + 1, b); }   // outward-facing
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-    const mat = hazed(new THREE.MeshStandardMaterial({ color: 0x0b0909, roughness: 1, flatShading: true }), { color: { value: this.haze.color.value.clone().multiplyScalar(0.3) }, amt: { value: 0.32 }, flash: this.haze.flash });
+    // dark rock sunk in haze, and a mist that thickens toward its foot so it rises out of the distant land rather than sitting on it
+    const mat = new THREE.MeshStandardMaterial({ color: 0x24201e, roughness: 1, flatShading: true }); mat.fog = false;
+    const hz = this.haze, my = { value: new THREE.Vector2((baseY || 0) - 40, (baseY || 0) + 760) };
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uHaze = hz.color; sh.uniforms.uFlash = hz.flash; sh.uniforms.uMistY = my;
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;').replace('#include <project_vertex>', '#include <project_vertex>\nvWY = (modelMatrix * vec4(transformed, 1.0)).y;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uHaze; uniform float uFlash; uniform vec2 uMistY; varying float vWY;')
+        .replace('#include <tonemapping_fragment>', 'float hh = smoothstep(uMistY.x, uMistY.y, vWY); float mist = mix(0.97, 0.5, hh);\ngl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze * mix(1.0, 0.45, smoothstep(0.0, 2.2, (vWY - uMistY.x) / (uMistY.y - uMistY.x))), mist) + vec3(0.55, 0.6, 0.8) * uFlash * 0.25;\n#include <tonemapping_fragment>');
+    };
+    mat.customProgramCacheKey = () => 'vistaMountain';
     // the summit glows faintly red, as if something burns inside
     const m = new THREE.Mesh(g, mat);
     const y0 = baseY || 0;
     m.position.set(cx, y0 - 40, cz); this.group.add(m); this.mountain = m;
     const glow = new THREE.Mesh(new THREE.SphereGeometry(60, 16, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.18, 0.04).multiplyScalar(2.2), fog: false, transparent: true, opacity: 0.55, depthWrite: false }));
     glow.position.set(cx, y0 + Hm * 1.0, cz); this.group.add(glow); this.summitGlow = glow;
-    this.storm = this.buildStorm(new THREE.Vector3(cx, y0 + Hm * 0.78, cz), 1500, Hm * 0.5, false);
+    this.storm = this.buildStorm(new THREE.Vector3(cx, y0 + Hm * 1.02, cz), 1300, Hm * 0.28, false);
     this.peakPos = new THREE.Vector3(cx, y0 + Hm, cz);
   }
   buildStorm(centre, radius, thick, around) {
@@ -176,15 +194,16 @@ export class Vista {
     const clouds = [];
     const n = around ? 36 : 44;
     for (let k = 0; k < n; k++) {
-      const a = r() * TAU, d = radius * (around ? lerp(0.35, 1.0, r()) : lerp(0.05, 0.75, Math.sqrt(r())));
+      const a = r() * TAU, d = radius * (around ? lerp(0.35, 1.0, r()) : lerp(0.2, 0.85, Math.sqrt(r())));
       const mat = new THREE.SpriteMaterial({ map: tex, color: 0x1a1820, transparent: true, opacity: around ? 0.9 : 0.95, depthWrite: false, fog: false });
       const s = new THREE.Sprite(mat);
       s.position.set(centre.x + Math.cos(a) * d, centre.y + (r() - 0.25) * thick * (around ? 1 : 1.4), centre.z + Math.sin(a) * d * (around ? 1 : 0.6));
-      const sc = around ? lerp(220, 420, r()) : lerp(650, 1150, r()); s.scale.set(sc, sc * 0.6, 1);
+      const sc = around ? lerp(220, 420, r()) : lerp(420, 820, r()); s.scale.set(sc, sc * 0.6, 1);
       mat.rotation = r() * TAU;
       this.group.add(s); clouds.push({ s, mat, a, d, base: s.position.clone(), spin: (r() - 0.5) * 0.004, lit: 0 });
     }
-    const bolt = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: new THREE.Color(0.85, 0.85, 1.0).multiplyScalar(8), toneMapped: false, fog: false, transparent: true }));
+    // the bolt is a camera-facing ribbon rather than GL lines: lines are a single pixel wide on most GPUs and some drivers choke on them
+    const bolt = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 0.85, 1.0).multiplyScalar(6), toneMapped: false, fog: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     bolt.frustumCulled = false; this.group.add(bolt);
     return { centre, radius, thick, clouds, bolt, around };
   }
@@ -200,13 +219,21 @@ export class Vista {
       for (let i = 1; i <= n; i++) {
         const t = i / n; const p = p0.clone().lerp(p1, t);
         if (i < n) p.add(new THREE.Vector3((r() - 0.5) * jag, (r() - 0.5) * jag * 0.4, (r() - 0.5) * jag));
-        segs.push(prev.x, prev.y, prev.z, p.x, p.y, p.z);
+        segs.push([prev, p, depth]);
         if (depth < 2 && r() < 0.18) branch(p.clone(), p.clone().add(new THREE.Vector3((r() - 0.5) * jag * 4, -jag * (2 + r() * 3), (r() - 0.5) * jag * 4)), jag * 0.6, depth + 1);
         prev = p;
       }
     };
     branch(top, target, top.distanceTo(target) * 0.08, 0);
-    S.bolt.geometry.dispose(); S.bolt.geometry = new THREE.BufferGeometry(); S.bolt.geometry.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
+    const cam0 = this.engine.camera.position, pos = [], dir = new THREE.Vector3(), toCam = new THREE.Vector3(), side = new THREE.Vector3();
+    for (const [a0, a1, dp] of segs) {
+      dir.subVectors(a1, a0); toCam.subVectors(cam0, a0);
+      side.crossVectors(dir, toCam); if (side.lengthSq() < 1e-6) continue;
+      side.normalize().multiplyScalar((dp === 0 ? 4.5 : dp === 1 ? 2.4 : 1.4) * Math.max(1, toCam.length() / 1800));
+      pos.push(a0.x - side.x, a0.y - side.y, a0.z - side.z, a0.x + side.x, a0.y + side.y, a0.z + side.z, a1.x + side.x, a1.y + side.y, a1.z + side.z,
+        a0.x - side.x, a0.y - side.y, a0.z - side.z, a1.x + side.x, a1.y + side.y, a1.z + side.z, a1.x - side.x, a1.y - side.y, a1.z - side.z);
+    }
+    S.bolt.geometry.dispose(); S.bolt.geometry = new THREE.BufferGeometry(); S.bolt.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     this.boltT = 0.22 + r() * 0.15; this.flash = 1;
     for (const c of S.clouds) { const dd = c.s.position.distanceTo(top); c.lit = Math.max(c.lit, clamp(1 - dd / (S.radius * 0.7), 0, 1)); }
     const cam = this.engine.camera.position; const dist = cam.distanceTo(top);
@@ -220,6 +247,8 @@ export class Vista {
     if (this.boltT > 0) { this.boltT -= dt; const S = this.storm; if (S) { S.bolt.visible = this.boltT > 0 && Math.sin(this.time * 90) > -0.6; } }
     this.flash = Math.max(0, this.flash - dt * 4.5);
     this.haze.flash.value = this.flash * this.flash;
+    // follow the sky as the land heals: the haze is always the colour of the horizon
+    const fc = this.engine.scene.fog.color; this.haze.color.value.copy(fc); this.hazeDark.color.value.copy(fc).multiplyScalar(0.8);
     if (this.storm) for (const c of this.storm.clouds) {
       c.lit = Math.max(0, c.lit - dt * 3);
       const L = c.lit * c.lit;

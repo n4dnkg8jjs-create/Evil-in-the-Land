@@ -54,7 +54,7 @@ function dragonMaterial() {
 // knee, ram horns, a ragged cloak, and two wide white eyes that never blink.
 // He stands perfectly still. Only the head moves, in sudden snaps, and at the
 // end it turns all the way round before he is gone.
-const WATCHER_DEF = { rim: 0x5a0806, skin: 0x0c0a0a, horns: [0.95, 0.07, 3.8], cloak: 2.9, eyeScale: 1.55 };
+const WATCHER_DEF = { rim: 0x1a0606, skin: 0x8a8c8a, horns: [0.58, 0.055, 3.1], hooded: true, eyeScale: 1.7 };
 
 export class Watcher {
   constructor(scene, fx) {
@@ -113,16 +113,33 @@ export class Watcher {
       this.retarget = 0.6 + R() * 1.8;
       let best = null, bd = 1e9; for (const k of knights || []) { const d = k.pos.distanceTo(this.pos); if (d < bd) { bd = d; best = k; } }
       const look = best ? angleDiff(this.yaw, Math.atan2(best.pos.x - this.pos.x, best.pos.z - this.pos.z)) : 0;
-      this.headTarget = clamp(look, -1.8, 1.8); this.rollTarget = (R() - 0.5) * 0.9;
+      this.headTarget = clamp(look, -1.8, 1.8);
+      // now and then the head lolls over, far past where a neck should allow, and stays there
+      this.tilt = R() < 0.3 ? (R() < 0.5 ? -1 : 1) * (0.75 + R() * 0.35) : (R() - 0.5) * 0.35;
+      this.snap = R() < 0.6;   // most moves are a single sudden snap; the rest a slow, deliberate creep
     }
-    let hy = this.headTarget;
-    if (this.state === 'turn') hy = this.headTarget + Math.sign(this.headTarget || 1) * Math.PI * smooth(clamp(this.t / 2.0, 0, 1)); // the owl-turn, all the way round
-    this.headYaw = dampAngle(this.headYaw, hy, this.state === 'turn' ? 3 : 26, dt);
-    this.headRoll = damp(this.headRoll, this.rollTarget || 0, 3, dt);
+    let hy = this.headTarget, roll = this.tilt || 0;
+    if (this.state === 'turn') {
+      // the owl-turn: all the way round, in small jerking steps, the head tipping over as it goes
+      const p = smooth(clamp(this.t / 2.2, 0, 1)), steps = Math.floor(p * 9) / 9;
+      const q = lerp(steps, p, 0.25) + Math.sin(time * 41) * 0.006;
+      hy = this.turnFrom === undefined ? (this.turnFrom = this.headYaw) : this.turnFrom;
+      hy += Math.sign(this.headTarget || 1) * Math.PI * q;
+      roll = Math.sin(q * Math.PI) * 0.55 * Math.sign(this.headTarget || 1);
+      this.headYaw = hy;
+    } else {
+      this.turnFrom = undefined;
+      this.headYaw = dampAngle(this.headYaw, hy, this.snap ? 30 : 1.6, dt);
+    }
+    this.headRoll = damp(this.headRoll, roll, this.state === 'turn' ? 30 : 2.2, dt);
+    const tremor = Math.sin(time * 29) * 0.012 + Math.sin(time * 17.3) * 0.008;
     // utterly still; a slow breath and nothing else
     const breath = Math.sin(time * 0.5) * 1.2;
-    e(B.hips, 0, 0, 0); e(B.spine, 4, 0, 0); e(B.chest, 6 + breath, 0, 0); e(B.neck, 8, this.headYaw * 0.12 * 57.3, 0);
-    B.head.rotation.set(-0.05, this.headYaw * 0.88, this.headRoll, 'YXZ');
+    e(B.hips, 0, 0, 0); e(B.spine, 4, 0, 0); e(B.chest, 6 + breath, 0, 0);
+    // the neck takes a little of the turn and leans into the tilt; the head does the rest
+    const ny = clamp(this.headYaw, -0.6, 0.6) * 0.3;
+    B.neck.rotation.set(0.14 - Math.abs(this.headRoll) * 0.1, ny, this.headRoll * 0.25, 'YXZ');
+    B.head.rotation.set(-0.08 + Math.abs(this.headRoll) * 0.12 + tremor, this.headYaw - ny, this.headRoll * 0.8 + tremor, 'YXZ');
     e(B.jaw, 4, 0, 0);
     for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['clav' + k], 0, 0, 0); e(B['thigh' + k], 0, 0, sg * 3); e(B['shin' + k], 2, 0, 0); e(B['foot' + k], 0, 0, 0); }
     if (this.mode === 'army') { // arms raised, presenting his legion

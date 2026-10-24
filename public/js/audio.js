@@ -102,7 +102,7 @@ const RENDER = {
   // inhuman screeching: harsh formant voice with jitter and a breaking pitch
   async screech(low) {
     const dur = low ? 1.5 : 0.9; const ctx = off(dur + 0.1);
-    const f0 = low ? 90 + R() * 40 : 320 + R() * 260;
+    const f0 = low ? 80 + R() * 35 : 150 + R() * 90;
     const mix = ctx.createGain(); mix.gain.value = 0.6;
     const ws = ctx.createWaveShaper(); const k = 25; const curve = new Float32Array(1024); for (let i = 0; i < 1024; i++) { const x = i * 2 / 1024 - 1; curve[i] = (1 + k) * x / (1 + k * Math.abs(x)); } ws.curve = curve;
     const out = gainEnv(ctx, [[0, 0], [0.05, 1], [dur * 0.6, 0.8], [dur, 0.0001, 'e']]);
@@ -114,7 +114,7 @@ const RENDER = {
     }
     mix.connect(ws);
     const v = Object.values(VOWELS)[Math.floor(R() * 4)];
-    for (const [f, a] of v) { const b = bp(ctx, f * (low ? 0.8 : 1.4), 5); const g = ctx.createGain(); g.gain.value = a * 1.5; ws.connect(b).connect(g).connect(out); }
+    for (const [f, a] of v) { const b = bp(ctx, f * (low ? 0.8 : 1.05), 5); const g = ctx.createGain(); g.gain.value = a * 1.5; ws.connect(b).connect(g).connect(out); }
     const n = src(ctx, noiseBuf(ctx, dur + 0.1)); const nb = bp(ctx, low ? 600 : 2500, 0.6); const ng = gainEnv(ctx, [[0, 0], [0.04, 0.35], [dur, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(out); n.start();
     out.connect(ctx.destination);
     return normalize(await ctx.startRendering(), 0.8);
@@ -194,27 +194,37 @@ const RENDER = {
   // a demon screaming: a torn human voice that climbs from a wail into a shriek,
   // two throats slightly out of tune, gargling distortion, a rasp of breath
   async scream(low) {
-    const dur = low ? 2.0 : 1.3 + R() * 0.6; const ctx = off(dur + 0.2);
-    const f0 = low ? 95 + R() * 30 : 210 + R() * 120;
-    const out = gainEnv(ctx, [[0, 0], [0.06, 0.6], [0.22, 1], [dur * 0.75, 0.85], [dur, 0.0001, 'e']]);
-    const ws = ctx.createWaveShaper(); const k = low ? 40 : 14; const curve = new Float32Array(2048); for (let i = 0; i < 2048; i++) { const x = i * 2 / 2048 - 1; curve[i] = (1 + k) * x / (1 + k * Math.abs(x)); } ws.curve = curve;
-    const voice = ctx.createGain(); voice.gain.value = 0.5; voice.connect(ws);
-    for (const det of [1, 1.034, 0.5]) {
-      const o = ctx.createOscillator(); o.type = 'sawtooth';
-      o.frequency.setValueAtTime(f0 * det, 0); o.frequency.exponentialRampToValueAtTime(f0 * det * (low ? 1.6 : 2.6 + R()), dur * 0.35); o.frequency.exponentialRampToValueAtTime(f0 * det * (low ? 1.3 : 2.1), dur * 0.8); o.frequency.exponentialRampToValueAtTime(f0 * det * 0.8, dur);
-      // vocal fry and break: fast, uneven wobble
-      const j = ctx.createOscillator(); j.type = 'square'; j.frequency.value = 23 + R() * 18; const jg = ctx.createGain(); jg.gain.value = f0 * det * 0.08; j.connect(jg).connect(o.frequency); j.start();
-      const g = ctx.createGain(); g.gain.value = det === 0.5 ? 0.6 : 0.8; o.connect(g).connect(voice); o.start();
+    // a grown throat torn open in agony: a ragged gasp, the howl climbing out of the chest, a voice that cracks
+    // and wavers on the sustain, then sinks, shuddering, into a sob. Low enough to be a man's, rough enough to be wrong.
+    const dur = low ? 2.4 + R() * 0.6 : 1.8 + R() * 0.9; const T0 = 0.16 + R() * 0.08; const ctx = off(dur + T0 + 0.2);
+    const f0 = low ? 70 + R() * 16 : 118 + R() * 42, peak = low ? 1.5 + R() * 0.2 : 1.7 + R() * 0.35;
+    const end = T0 + dur;
+    const out = gainEnv(ctx, [[0, 0], [T0, 0], [T0 + 0.07, 0.7], [T0 + 0.3, 1], [T0 + dur * 0.7, 0.85], [end, 0.0001, 'e']]);
+    // the sob: the sustain starts to shudder near the end
+    const trem = ctx.createGain(); trem.gain.value = 1; const tl = ctx.createOscillator(); tl.frequency.value = 6 + R() * 2.5; const tg = ctx.createGain(); tg.gain.setValueAtTime(0, 0); tg.gain.setValueAtTime(0, T0 + dur * 0.6); tg.gain.linearRampToValueAtTime(0.45, end); tl.connect(tg).connect(trem.gain); tl.start();
+    trem.connect(ctx.destination); out.connect(trem);
+    const ws = ctx.createWaveShaper(); const k = low ? 45 : 28; const curve = new Float32Array(2048); for (let i = 0; i < 2048; i++) { const x = i * 2 / 2048 - 1; curve[i] = (1 + k) * x / (1 + k * Math.abs(x)); } ws.curve = curve;
+    const voice = ctx.createGain(); voice.gain.value = 0.45; voice.connect(ws);
+    const crack = T0 + dur * (0.45 + R() * 0.25);
+    for (const [det, gain] of [[1, 0.8], [1.013, 0.55], [0.5, 0.42]]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; const F = (m) => f0 * det * m;
+      o.frequency.setValueAtTime(F(0.8), T0); o.frequency.exponentialRampToValueAtTime(F(peak), T0 + 0.35 + R() * 0.15);
+      o.frequency.exponentialRampToValueAtTime(F(peak * 0.94), crack - 0.02); o.frequency.exponentialRampToValueAtTime(F(peak * 0.78), crack + 0.05);   // the voice cracks
+      o.frequency.exponentialRampToValueAtTime(F(peak * 0.9), crack + 0.25); o.frequency.exponentialRampToValueAtTime(F(0.62), end);
+      // anguished wavering and the rasp of a throat giving out
+      const v = ctx.createOscillator(); v.frequency.value = 4.5 + R() * 2; const vg = ctx.createGain(); vg.gain.value = F(0.035); v.connect(vg).connect(o.frequency); v.start();
+      const j = ctx.createOscillator(); j.type = 'square'; j.frequency.value = 27 + R() * 16; const jg = ctx.createGain(); jg.gain.value = F(0.05); j.connect(jg).connect(o.frequency); j.start();
+      const g = ctx.createGain(); g.gain.value = gain; o.connect(g).connect(voice); o.start(T0);
     }
-    // formants morph ah -> eh -> ee as the mouth stretches
-    const fA = VOWELS.ah, fE = VOWELS.eh;
-    for (let i = 0; i < 3; i++) {
-      const b = bp(ctx, fA[i][0] * (low ? 0.75 : 1.25), low ? 5 : 7);
-      b.frequency.setValueAtTime(fA[i][0] * (low ? 0.75 : 1.25), 0); b.frequency.linearRampToValueAtTime(fE[i][0] * (low ? 0.8 : 1.45) * (i === 1 ? 1.25 : 1), dur * 0.5);
-      const g = ctx.createGain(); g.gain.value = [1.6, 1.1, 0.6][i]; ws.connect(b).connect(g).connect(out);
+    // an open, bawling 'AAH' that rounds toward 'OH' as the breath runs out
+    const fA = VOWELS.ah, fO = VOWELS.oh, sc = low ? 0.78 : 1.0;
+    for (let i = 0; i < 4; i++) {
+      const b = bp(ctx, fA[i][0] * sc, low ? 4.5 : 6);
+      b.frequency.setValueAtTime(fA[i][0] * sc * 0.9, T0); b.frequency.linearRampToValueAtTime(fA[i][0] * sc * 1.06, T0 + 0.4); b.frequency.linearRampToValueAtTime(fO[i][0] * sc, end);
+      const g = ctx.createGain(); g.gain.value = [1.7, 1.0, 0.5, 0.22][i]; ws.connect(b).connect(g).connect(out);
     }
-    const n = src(ctx, noiseBuf(ctx, dur + 0.2, 'pink')); const nb = bp(ctx, low ? 900 : 3000, 0.7); const ng = gainEnv(ctx, [[0, 0], [0.1, 0.5], [dur, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(out); n.start();
-    out.connect(ctx.destination);
+    // breath through the scream, and the ragged gasp before it
+    const n = src(ctx, noiseBuf(ctx, end + 0.2, 'pink')); const nb = bp(ctx, low ? 800 : 1300, 0.8); const ng = gainEnv(ctx, [[0, 0], [T0 * 0.5, 0.5], [T0, 0.08], [T0 + 0.1, 0.28], [end, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(trem); n.start();
     return normalize(await ctx.startRendering(), 0.85);
   },
   // the head-shaking fit: a gargled stutter in the throat and teeth clattering
@@ -431,7 +441,7 @@ export class AudioEngine {
   distant(kind = 'scream') {
     const a = R() * Math.PI * 2, d = 60 + R() * 70, L = this.listenerPos;
     const p = { x: L.x + Math.cos(a) * d, y: L.y + 2, z: L.z + Math.sin(a) * d };
-    if (kind === 'scream') this.play(R() < 0.3 ? 'screamLow' : 'scream', p, 1.0, 1.2, 0.8 + R() * 0.3);
+    if (kind === 'scream') this.play(R() < 0.3 ? 'screamLow' : 'scream', p, 1.0, 1.2, 0.82 + R() * 0.16);
     else this.play(kind, p, 0.9, 1.2);
   }
 
@@ -453,9 +463,9 @@ export class AudioEngine {
   }
   liveShriek(pos, pitch, len, gain) {
     const o = this.out(pos, gain, 0.45, len + 0.3); if (!o) return; const ctx = this.ctx, t = ctx.currentTime;
-    const osc = ctx.createOscillator(); osc.type = 'sawtooth'; const f0 = (380 + R() * 160) * pitch;
+    const osc = ctx.createOscillator(); osc.type = 'sawtooth'; const f0 = (170 + R() * 70) * pitch;
     osc.frequency.setValueAtTime(f0 * 0.7, t); osc.frequency.exponentialRampToValueAtTime(f0 * 1.6, t + len * 0.25); osc.frequency.exponentialRampToValueAtTime(f0 * 0.5, t + len);
-    const b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = 1100 * pitch; b.Q.value = 3; const g = ctx.createGain(); this.env(g.gain, t, 0.05, 1, len);
+    const b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = 760 * pitch; b.Q.value = 3; const g = ctx.createGain(); this.env(g.gain, t, 0.05, 1, len);
     osc.connect(b).connect(g).connect(o); osc.start(t); osc.stop(t + len + 0.1);
   }
   liveGrowl(pos, pitch, len, gain) {
@@ -545,6 +555,8 @@ class Score {
     this.out = this.ctx.createGain(); this.out.gain.value = 0.9; this.out.connect(a.musicBus);
     const rs = this.ctx.createGain(); rs.gain.value = 0.55; this.out.connect(rs); rs.connect(a.revSend);
     this.chord = PROG.dread[0]; this.stems = null;
+    // the choir has its own fader: hymns belong to prayer alone, and fade the moment the knights rise
+    this.choirOut = this.ctx.createGain(); this.choirOut.gain.value = 0; this.choirOut.connect(this.out);
   }
   start() { this.started = true; this.nextBar = this.ctx.currentTime + 0.2; this.nextBeat = this.nextBar; }
   setMood(m) { if (PROG[m] && m !== this.mood) { this.mood = m; this.moodChanged = true; } }
@@ -555,13 +567,13 @@ class Score {
     this.stems = {}; const ctx = this.ctx;
     for (const k in stems) { const g = ctx.createGain(); g.gain.value = 0; g.connect(this.a.musicBus); const s = ctx.createBufferSource(); s.buffer = stems[k]; s.loop = true; s.connect(g); s.start(); this.stems[k] = g; }
   }
-  sample(bank, note, prefix, when, gain, dur, attack = 0.3) {
+  sample(bank, note, prefix, when, gain, dur, attack = 0.3, dest = this.out) {
     const s = this.a.sampleFor(bank, note, prefix); if (!s) return;
     const b = this.ctx.createBufferSource(); b.buffer = s.buf; b.playbackRate.value = s.rate;
     const g = this.ctx.createGain(); g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(gain, when + attack);
     const len = Math.min(dur, s.buf.duration / s.rate - 0.05);
     g.gain.setValueAtTime(gain, when + Math.max(attack, len - 0.6)); g.gain.linearRampToValueAtTime(0, when + len);
-    b.connect(g).connect(this.out); b.start(when); b.stop(when + len + 0.1);
+    b.connect(g).connect(dest); b.start(when); b.stop(when + len + 0.1);
   }
   one(buf, when, gain, rate = 1) { if (!buf) return; const b = this.ctx.createBufferSource(); b.buffer = buf; b.playbackRate.value = rate; const g = this.ctx.createGain(); g.gain.value = gain; b.connect(g).connect(this.out); b.start(when); }
 
@@ -578,39 +590,50 @@ class Score {
     const I = this.intensity; const mood = this.mood === 'dread' && I > 0.35 ? 'combat' : this.mood;
     const bpm = mood === 'boss' ? 96 : mood === 'combat' ? 88 : 72; const spb = 60 / bpm;
     if (this.nextBar < now - 0.5) { this.nextBar = now + 0.1; this.nextBeat = this.nextBar; }
+    const hymn = mood === 'prayer';
+    this.choirOut.gain.setTargetAtTime(hymn ? 1 : 0, now, hymn ? 0.8 : 0.35);
     // a chord per two bars
     while (this.nextBar < now + 0.3) {
       const prog = PROG[mood]; this.chord = prog[this.chordIdx++ % prog.length];
       const bar = this.nextBar, len = spb * 8;
       const [root, fifth, oct, third] = this.chord;
-      // drone strings, always
-      this.sample(L.strings, root - 12, '', bar, 0.55, len + 1, 1.2); this.sample(L.strings, fifth - 12, '', bar, 0.35, len + 1, 1.5);
-      // choir: 'oo' when quiet, 'ah' swelling in prayer, battle and triumph
-      const vowel = mood === 'dread' ? 'oo' : 'ah'; const cg = mood === 'dread' ? 0.22 + I * 0.2 : mood === 'combat' ? 0.3 + I * 0.25 : 0.42;
-      if (mood !== 'dread' || this.chordIdx % 2 === 0) for (const n of [oct, third + 12, fifth + 12, oct + 12]) this.sample(L.choir, n, vowel, bar + R() * 0.05, cg * (n > 60 ? 0.8 : 1), len, mood === 'combat' || mood === 'boss' ? 0.6 : 1.4);
-      // low brass on the downbeat when the battle is fierce
-      if ((mood === 'boss' || (mood === 'combat' && I > 0.65)) && L.brass) { this.sample(L.brass, root, '', bar, 0.5, 2.4, 0.05); this.sample(L.brass, fifth, '', bar, 0.35, 2.4, 0.05); }
-      if (mood === 'triumph' && this.chordIdx % 2 === 1) this.one(L.bells.mid, bar, 0.25, Math.pow(2, (root + 24 - 57) / 12));
-      // the creeping dread: dissonance under the hymn, gone when the knights pray
-      if (mood === 'dread' || mood === 'combat' || mood === 'boss') {
+      const dark = mood === 'dread', fight = mood === 'combat' || mood === 'boss';
+      // drone strings, always: in the dark they sit low, with a semitone rubbing beneath
+      this.sample(L.strings, root - 12, '', bar, dark ? 0.5 : 0.55, len + 1, 1.2);
+      this.sample(L.strings, dark ? root - 11 : fifth - 12, '', bar + (dark ? spb * 3 : 0), dark ? 0.16 : 0.35, len + 1, dark ? 3 : 1.5);
+      if (hymn) { // the hymn, and the angelic answer above it
+        for (const n of [oct, third + 12, fifth + 12, oct + 12]) this.sample(L.choir, n, 'ah', bar + R() * 0.05, 0.42 * (n > 60 ? 0.8 : 1), len, 1.4, this.choirOut);
+        for (const n of [oct + 24, third + 24]) this.sample(L.choir, n, 'ah', bar + 0.2, 0.18, len, 2.0, this.choirOut);
+      }
+      if (fight) { // war: the strings take the tune up high, brass hammers the downbeats
+        this.sample(L.strings, oct, '', bar, 0.22 + I * 0.18, len, 0.25); this.sample(L.strings, third + 12, '', bar + spb * 4, 0.16 + I * 0.14, len - spb * 4, 0.25);
+        if ((mood === 'boss' || I > 0.4) && L.brass) { this.sample(L.brass, root, '', bar, 0.5, 2.4, 0.05); this.sample(L.brass, fifth, '', bar, 0.35, 2.4, 0.05); if (mood === 'boss' || I > 0.7) this.sample(L.brass, root + 12, '', bar + spb * 4, 0.3, 2.0, 0.05); }
+      }
+      if (mood === 'triumph') { // the land breathes again: open strings, a soft horn, bells
+        for (const n of [oct, fifth + 12, third + 12]) this.sample(L.strings, n, '', bar, 0.22, len, 1.6);
+        if (L.brass && this.chordIdx % 2 === 0) this.sample(L.brass, root + 12, '', bar + 0.3, 0.22, 3.2, 0.4);
+        if (this.chordIdx % 2 === 1) this.one(L.bells.mid, bar, 0.25, Math.pow(2, (root + 24 - 57) / 12));
+      }
+      // the creeping dread: dissonance, breath and far-off screams, never while the knights pray
+      if (dark || fight) {
         const k = R();
-        if (k < 0.24) this.a.stinger('drone', 0.35);
-        else if (k < 0.42) this.a.stinger('cluster', mood === 'dread' ? 0.22 : 0.3);
-        else if (k < 0.5) this.a.stinger('scrape', 0.18);
-        else if (k < 0.58 && mood === 'dread') this.a.stinger('breath', 0.25);
-        // a semitone grinding against the choir's top note
-        if (mood !== 'boss' && R() < 0.5) this.sample(L.choir, oct + 13, 'oo', bar + spb * 2, 0.12, len - spb * 2, 2.5);
-        if (mood === 'dread' && R() < 0.25) this.a.distant('scream');
+        if (k < (dark ? 0.32 : 0.16)) this.a.stinger('drone', 0.35);
+        else if (k < (dark ? 0.52 : 0.28)) this.a.stinger('cluster', dark ? 0.24 : 0.28);
+        else if (k < (dark ? 0.62 : 0.34)) this.a.stinger('scrape', 0.18);
+        else if (dark && k < 0.74) this.a.stinger('breath', 0.25);
+        // high strings hanging a semitone off the chord, barely there
+        if (dark && R() < 0.45) this.sample(L.strings, oct + 13, '', bar + spb * 2, 0.07, len - spb * 2, 3);
+        if (dark && R() < 0.3) this.a.distant('scream');
       }
-      if (mood === 'prayer') { // the angelic answer: a high descant over the hymn
-        for (const n of [oct + 24, third + 24]) this.sample(L.choir, n, 'ah', bar + 0.2, 0.18, len, 2.0);
-      }
+      this.heart = dark && R() < 0.55;
       this.nextBar += len;
     }
     // drums and spiccato ostinato
     while (this.nextBeat < now + 0.25) {
       const b = this.beat++ % 16; const t = this.nextBeat;
-      const drums = mood === 'boss' ? 1 : mood === 'combat' ? I : mood === 'prayer' ? I * 0.5 : 0;
+      // in the dark, only a slow heartbeat; in prayer, nothing but the hymn
+      if (mood === 'dread' && this.heart && (b === 0 || b === 1)) this.one(L.drums.low, t, b === 0 ? 0.2 : 0.12, 0.8);
+      const drums = mood === 'boss' ? 1 : mood === 'combat' ? 0.35 + I * 0.65 : 0;
       const pat = [1, 0, 0, 0.4, 0.7, 0, 0.3, 0, 1, 0, 0.5, 0, 0.7, 0.3, 0.5, 0.6];
       if (drums > 0.05 && pat[b] > 0 && pat[b] <= drums + 0.35) this.one(b % 4 === 0 ? L.drums.low : L.drums.mid, t, 0.5 * pat[b] * (0.5 + drums * 0.5));
       if (drums > 0.6 && b % 2 === 1) this.one(L.drums.rim, t, 0.12);

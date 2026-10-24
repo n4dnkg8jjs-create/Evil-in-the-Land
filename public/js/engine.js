@@ -54,13 +54,13 @@ export function makeSky() {
     uTop: { value: new THREE.Color(0x0c0d12) }, uMid: { value: new THREE.Color(0x3a2a2a) }, uBottom: { value: new THREE.Color(0x120a0a) },
     uSunDir: { value: new THREE.Vector3(0.3, 0.2, -1).normalize() }, uSunColor: { value: new THREE.Color(0xff6a30) },
     uSunSize: { value: 0.03 }, uCloud: { value: new THREE.Color(0x1a1416) }, uCloudLit: { value: new THREE.Color(0x804030) },
-    uCover: { value: 0.65 }, uTime: { value: 0 }, uGlow: { value: new THREE.Color(0x601a10) },
+    uCover: { value: 0.65 }, uTime: { value: 0 }, uGlow: { value: new THREE.Color(0x601a10) }, uFog: { value: new THREE.Color(0x2a1e1e) },
   };
   const mat = new THREE.ShaderMaterial({
     uniforms, side: THREE.BackSide, depthWrite: false, fog: false,
     vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = modelViewMatrix * vec4(position,1.0); gl_Position = projectionMatrix * p; gl_Position.z = gl_Position.w; }`,
     fragmentShader: `
-      uniform vec3 uTop, uMid, uBottom, uSunDir, uSunColor, uCloud, uCloudLit, uGlow; uniform float uSunSize, uCover, uTime;
+      uniform vec3 uTop, uMid, uBottom, uSunDir, uSunColor, uCloud, uCloudLit, uGlow, uFog; uniform float uSunSize, uCover, uTime;
       varying vec3 vDir;
       float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
       float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -84,13 +84,21 @@ export function makeSky() {
           vec3 cc = mix(uCloud, uCloudLit, clamp(lit * 1.5, 0.0, 1.0));
           col = mix(col, cc, cl * smoothstep(-0.05, 0.12, h) * 0.95);
         }
+        // the horizon dissolves into the same haze as the distant land, so far hills sink into the sky instead of glowing against it
+        col = mix(col, uFog, (1.0 - smoothstep(-0.02, 0.16, h)) * 0.85);
         gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`,
   });
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(900, 48, 24), mat);
   mesh.frustumCulled = false; mesh.renderOrder = -10;
   return { mesh, uniforms };
 }
+
+// Fog never quite swallows the land: distant hills keep a trace of their own darkness, so they stay a
+// silhouette against the hazy horizon and the far mountain rises from them instead of floating in the sky.
+THREE.ShaderChunk.fog_fragment = THREE.ShaderChunk.fog_fragment.replace('mix( gl_FragColor.rgb, fogColor, fogFactor )', 'mix( gl_FragColor.rgb, fogColor, min( fogFactor, 0.88 ) )');
 
 export class Engine {
   constructor(canvas, qualityKey = 'high') {
@@ -175,7 +183,7 @@ export class Engine {
     this.sun.color.set(a.sunLight); this.sun.intensity = a.sunIntensity;
     this.hemi.color.set(a.hemiSky); this.hemi.groundColor.set(a.hemiGround); this.hemi.intensity = a.hemiIntensity;
     this.fill.color.set(a.fillColor || 0x6070a0); this.fill.intensity = a.fillIntensity ?? 0.25;
-    this.scene.fog.color.set(a.fog); this.scene.fog.density = a.fogDensity;
+    this.scene.fog.color.set(a.fog); this.scene.fog.density = a.fogDensity; u.uFog.value.set(a.fog);
     this.renderer.toneMappingExposure = a.exposure ?? 1.0;
     this.baseAtmos = a;
     if (env) this.buildEnvironment();

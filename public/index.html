@@ -161,6 +161,10 @@
         <h4>The pilgrimage</h4>
         <p>The land is dead. At each blighted altar, kneel and pray: make the sign of the cross and hold your prayer while the swarm comes for you. The more knights pray together, the faster the prayer is answered. Those who do not pray must defend those who do.</p>
         <p>When a prayer is answered, the land around the altar lives again, every knight is healed, and the fallen rise.</p>
+        <h4>Dread</h4>
+        <p>Fear is its own enemy. It rises when you stand alone in the blight, when demons close in, when you bleed, and when the hooded one on the ridge is watching. As it climbs you will hear things, the edges of sight go dark, and you will see things that are not there. At its worst your hands shake. Pray, keep close to your brothers, and stand in the light of cleansed altars to master it.</p>
+        <h4>The First Company</h4>
+        <p>Twenty knights took this road a year before you. Their graves lie beside it, and with them the pages of their chaplain, Brother Anselm. Walk up to a cairn to read what he wrote.</p>
         <p>Seven chapters climb from the Vale of Ashes to the mountain's peak. A full pilgrimage takes an hour to an hour and a half. Your progress is saved after each chapter.</p>
         <h4>Playing together</h4>
         <p>The host runs the start script on their PC, which opens a lobby with a four-letter code and an address. Friends on the same network choose Join with a Code and enter both.</p>
@@ -205,7 +209,9 @@
     <div class="bar hp"><i id="hpBar"></i><b id="hpLag"></b></div>
     <div class="bar st"><i id="stBar"></i></div>
     <div class="relic" id="relic"><span id="relicName"></span><i id="relicCd"></i></div>
+    <div class="dread" id="dread" hidden title="Dread: rises when you are alone in the dark, near demons, wounded, or watched. Pray, keep together, stand in the altar light."><span>Dread</span><div class="bar"><i id="dreadBar"></i></div></div>
   </div>
+  <div class="page" id="page"></div>
   <div class="prompt" id="prompt" hidden></div>
   <div class="counter" id="counter"></div>
   <div class="crosshair" id="crosshair"></div>
@@ -215,6 +221,7 @@
 
 <!-- overlays -->
 <div id="hurt" class="hurt"></div>
+<div id="dreadVeil" class="dread-veil"></div>
 <div id="letterTop" class="letterbox top"></div>
 <div id="letterBot" class="letterbox bot"></div>
 <div id="subtitle" class="subtitle" aria-live="polite"></div>

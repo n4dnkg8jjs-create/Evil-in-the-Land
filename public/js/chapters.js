@@ -19,10 +19,10 @@ export const CHAPTERS = [
     id: 'vale', title: 'The Vale of Ashes', latin: 'Vallis Cinerum', seed: 1101, altars: 3, prayer: 48,
     intro: [
       'Anno Domini 1523. The harvest did not come.',
-      'A black rot rose out of the earth, and the dead land did not stay quiet.',
-      'Five knights rode north to the vale where it began.',
+      'A black rot rose out of the earth. Last Lent, twenty knights under Sir Godric rode out to end it. None came home.',
+      'Now five more ride north from the city, toward the mountain, along the road the First Company took.',
     ],
-    outro: ['Three lights burn in the Vale.', 'On the ridge, something watched you work.'],
+    outro: ['Three lights burn in the Vale.', 'On the ridge, something watched you work. Look for the First Company along the road.'],
     terrain: { kind: 'vale', amp: 9, hill: 28, edge: 40 },
     atmos: A({ skyTop: 0x0e0f14, skyMid: 0x3b2a26, skyBottom: 0x160d0b, sunColor: 0xff5a24, cloud: 0x1b1517, cloudLit: 0x7a3a26, glow: 0x5a1a0e, cover: 0.68, sunDir: [0.55, 0.12, -0.83], sunLight: 0xffa070, sunIntensity: 2.2, hemiSky: 0x7a6e70, hemiGround: 0x1a1210, hemiIntensity: 0.55, fog: 0x2b201e, fogDensity: 0.0125, exposure: 1.3, fillColor: 0x5a6a90, fillIntensity: 0.35 }),
     props: { deadTrees: 150, rocks: 80, graves: 36, crosses: 10, farm: 3, fences: 18 },
@@ -100,6 +100,6 @@ export const CHAPTERS = [
 
 // Atmosphere after the land is healed (blended in as altars are cleansed)
 export const HEALED = {
-  skyTop: 0x3a5a8a, skyMid: 0xa8b8c8, skyBottom: 0x5a6a50, sunColor: 0xffe0a0, cloud: 0x8a8c94, cloudLit: 0xffe8c8, glow: 0xffc890,
-  sunLight: 0xfff0d8, hemiSky: 0xb8c8e0, hemiGround: 0x4a5a30, fog: 0x8a98a8,
+  skyTop: 0x3a5a8a, skyMid: 0x8a96a2, skyBottom: 0x4a5444, sunColor: 0xffe0a0, cloud: 0x8a8c94, cloudLit: 0xffe8c8, glow: 0xffc890,
+  sunLight: 0xfff0d8, hemiSky: 0xb8c8e0, hemiGround: 0x4a5a30, fog: 0x66707a,
 };

@@ -99,7 +99,12 @@ export class World {
       }
       default: h = n.fbm(x * 0.009, z * 0.009, 5) * T.amp + n.ridge(x * 0.02, z * 0.02, 4) * T.amp * 0.25;
     }
-    for (const s of this.devilSpots) { const d2 = (x - s.x) ** 2 + (z - s.z) ** 2; h += s.hill * Math.exp(-d2 / (2 * 24 * 24)); }
+    // the Devil's vantage points: broken crags rather than smooth mounds
+    for (const s of this.devilSpots) {
+      const d2 = (x - s.x) ** 2 + (z - s.z) ** 2; if (d2 > 120 * 120) continue;
+      const g = Math.exp(-d2 / (2 * 30 * 30));
+      h += s.hill * g * (0.62 + 0.55 * n.ridge(x * 0.03 + 7, z * 0.03 - 3, 4)) + s.hill * 0.16 * Math.pow(g, 0.6) * n.fbm(x * 0.11, z * 0.11, 3);
+    }
     return h;
   }
 
@@ -273,7 +278,11 @@ export class World {
     const idx = [];
     for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) { const a = i * (segs + 1) + j, b = a + segs + 1; idx.push(a, a + 1, b, a + 1, b + 1, b); }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-    const m = new THREE.Mesh(g, this.terrain.material); m.receiveShadow = true; this.group.add(m); this.farTerrain = m;
+    // the same ground, but the fog never fully swallows it: distant ridges stay dark layered silhouettes under the hazy horizon
+    const base = this.terrain.material, mat = base.clone();
+    mat.onBeforeCompile = (sh, r) => { base.onBeforeCompile(sh, r); sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', THREE.ShaderChunk.fog_fragment.replace('min( fogFactor, 0.88 )', 'min( fogFactor, 0.62 )')); };
+    mat.customProgramCacheKey = () => 'farTerrain';
+    const m = new THREE.Mesh(g, mat); m.receiveShadow = true; this.group.add(m); this.farTerrain = m;
   }
 
   // how alive the land is here, 0..1 (beyond the battlefield, as at its edge)

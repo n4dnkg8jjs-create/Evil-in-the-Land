@@ -2,7 +2,7 @@
 // combat state machine, two-bone IK for hands, the kneeling prayer with the
 // sign of the cross, and a verlet-simulated cape.
 import * as THREE from 'three';
-import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER, clearTorso } from './rig.js';
+import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER, clearTorso, armInTorso } from './rig.js';
 import { dressRig, STYLES } from './armor.js';
 import { dressBody, field } from './body.js';
 import { buildWeapon, WEAPONS } from './weapons.js';
@@ -420,7 +420,7 @@ export class Knight {
     }
     // stamina
     this.staminaDelay = Math.max(0, (this.staminaDelay || 0) - dt);
-    if (this.staminaDelay <= 0 && !(input.sprint && this.speed > 4)) this.stamina = Math.min(this.maxStamina, this.stamina + dt * 30 * this.style.stamina * (this.blocking ? 0.4 : 1));
+    if (this.staminaDelay <= 0 && !(input.sprint && this.speed > 4)) this.stamina = Math.min(this.maxStamina, this.stamina + dt * 30 * this.style.stamina * (this.blocking ? 0.4 : 1) * (this.dreadStam || 1));
 
     // prayer
     const wantPray = input.pray && !this.action && world.canPrayAt(this);
@@ -499,7 +499,7 @@ export class Knight {
     }
     if (this.actT >= a.dur) { this.action = null; this.queued = null; }
   }
-  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1); }
+  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1) * (this.dreadMul || 1); }
 
   // Active hit windows this frame (attack authority runs collision)
   currentHits() {
@@ -723,21 +723,31 @@ export class Knight {
       // right hand to the grip (unless the sign of the cross has it)
       const crossR = this.kneel > 0.6 ? this.crossTarget() : null;
       const roll = this.wdef.roll || [0, 0];
-      if (crossR) {
-        this.rig.solveArm('R', crossR.wrist, crossR.pole, crossR.q);
-      } else {
-        this.rig.gripArmClear('R', wp, wd, wu, dirWorld(PO[0], PO[1], PO[2], _c), roll[0] * D2R, field('torso'));
-      }
-      // left hand: on the haft / hilt, or free (buckler, relic)
-      if (this.wdef.twoHanded && !freeLeft) {
-        const lg = this.kneel > 0.3 ? this.plantedSpec().lg : (this.leftGripS ?? this.wdef.leftGrip);
-        const g = _b.copy(wp).addScaledVector(wd, lg);
-        this.rig.gripArmClear('L', g, wd, wu, dirWorld(PO[3], PO[4], PO[5], _c), roll[1] * D2R, field('torso'));
-      } else if (hasL || freeLeft) {
-        const lp = toWorld(Lh[0], Lh[1], Lh[2], new THREE.Vector3());
-        const ld = dirWorld(Lh[3], Lh[4], Lh[5], new THREE.Vector3()).normalize(); const lu = dirWorld(Lh[6], Lh[7], Lh[8], new THREE.Vector3());
-        if (this.kneel > 0.3 && !this.wdef.twoHanded) { const ps = this.plantedSpec(); toWorld(...ps.lp, lp); }
-        this.rig.gripArmClear('L', lp, ld, lu, dirWorld(PO[3], PO[4], PO[5], _c), (freeLeft ? 60 : roll[1]) * D2R, field('torso'));
+      const TF = field('torso');
+      // if an arm still cannot get round the body (the pole alone can't free a forearm folded across the chest),
+      // the whole weapon is carried out away from the body and both arms solved again
+      let pushed = 0;
+      for (let pass = 0; pass < 3; pass++) {
+        if (crossR) this.rig.solveArm('R', crossR.wrist, crossR.pole, crossR.q);
+        else this.rig.gripArmClear('R', wp, wd, wu, dirWorld(PO[0], PO[1], PO[2], _c), roll[0] * D2R, TF);
+        // left hand: on the haft / hilt, or free (buckler, relic)
+        const twoH = this.wdef.twoHanded && !freeLeft;
+        if (twoH) {
+          const lg = this.kneel > 0.3 ? this.plantedSpec().lg : (this.leftGripS ?? this.wdef.leftGrip);
+          const g = _b.copy(wp).addScaledVector(wd, lg);
+          this.rig.gripArmClear('L', g, wd, wu, dirWorld(PO[3], PO[4], PO[5], _c), roll[1] * D2R, TF);
+        } else if (hasL || freeLeft) {
+          const lp = toWorld(Lh[0], Lh[1], Lh[2], new THREE.Vector3());
+          const ld = dirWorld(Lh[3], Lh[4], Lh[5], new THREE.Vector3()).normalize(); const lu = dirWorld(Lh[6], Lh[7], Lh[8], new THREE.Vector3());
+          if (this.kneel > 0.3 && !this.wdef.twoHanded) { const ps = this.plantedSpec(); toWorld(...ps.lp, lp); }
+          this.rig.gripArmClear('L', lp, ld, lu, dirWorld(PO[3], PO[4], PO[5], _c), (freeLeft ? 60 : roll[1]) * D2R, TF);
+        }
+        if (crossR || planted > 0.5 || !TF) break;
+        const hR = armInTorso(this.rig, 'R', TF), dR = hR.depth, dirR = _c.copy(hR.dir);
+        const hL = twoH ? armInTorso(this.rig, 'L', TF) : { depth: 0 };
+        const deep = Math.min(Math.max(dR, hL.depth), 0.1 - pushed); if (deep < 0.025) break;
+        wp.addScaledVector(hL.depth > dR ? hL.dir : dirR, deep * 1.15); pushed += deep;
+        this.rig.fitWeapon(wp, wd, wu, twoH ? (this.leftGripS ?? this.wdef.leftGrip) : null);   // never out of reach of the hands
       }
     }
     // smooth arm transitions (IK <-> keyed arms)
