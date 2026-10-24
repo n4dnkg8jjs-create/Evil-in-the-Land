@@ -175,7 +175,7 @@ export class Vista {
       sh.uniforms.uHaze = hz.color; sh.uniforms.uFlash = hz.flash; sh.uniforms.uMistY = my;
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWY;').replace('#include <project_vertex>', '#include <project_vertex>\nvWY = (modelMatrix * vec4(transformed, 1.0)).y;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uHaze; uniform float uFlash; uniform vec2 uMistY; varying float vWY;')
-        .replace('#include <tonemapping_fragment>', 'float hh = smoothstep(uMistY.x, uMistY.y, vWY); float mist = mix(0.97, 0.5, hh);\ngl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze * mix(1.0, 0.45, smoothstep(0.0, 2.2, (vWY - uMistY.x) / (uMistY.y - uMistY.x))), mist) + vec3(0.55, 0.6, 0.8) * uFlash * 0.25;\n#include <tonemapping_fragment>');
+        .replace('#include <tonemapping_fragment>', 'float hh = smoothstep(uMistY.x, uMistY.y, vWY); float mist = mix(0.97, 0.4, hh);\ngl_FragColor.rgb = mix(gl_FragColor.rgb, uHaze * mix(1.0, 0.3, smoothstep(0.0, 2.2, (vWY - uMistY.x) / (uMistY.y - uMistY.x))), mist) + vec3(0.55, 0.6, 0.8) * uFlash * 0.06;\n#include <tonemapping_fragment>');
     };
     mat.customProgramCacheKey = () => 'vistaMountain';
     // the summit glows faintly red, as if something burns inside
@@ -188,24 +188,71 @@ export class Vista {
     this.peakPos = new THREE.Vector3(cx, y0 + Hm, cz);
   }
   buildStorm(centre, radius, thick, around) {
-    // thunderheads: big dark billows ringed around the mountain, lit from within by the lightning
-    const tex = cloudTexture();
-    const r = rng(4040);
-    const clouds = [];
-    const n = around ? 36 : 44;
-    for (let k = 0; k < n; k++) {
-      const a = r() * TAU, d = radius * (around ? lerp(0.35, 1.0, r()) : lerp(0.2, 0.85, Math.sqrt(r())));
-      const mat = new THREE.SpriteMaterial({ map: tex, color: 0x1a1820, transparent: true, opacity: around ? 0.9 : 0.95, depthWrite: false, fog: false });
-      const s = new THREE.Sprite(mat);
-      s.position.set(centre.x + Math.cos(a) * d, centre.y + (r() - 0.25) * thick * (around ? 1 : 1.4), centre.z + Math.sin(a) * d * (around ? 1 : 0.6));
-      const sc = around ? lerp(220, 420, r()) : lerp(420, 820, r()); s.scale.set(sc, sc * 0.6, 1);
-      mat.rotation = r() * TAU;
-      this.group.add(s); clouds.push({ s, mat, a, d, base: s.position.clone(), spin: (r() - 0.5) * 0.004, lit: 0 });
-    }
+    // The thunderhead as a volume: a stack of slices across the view, each one cutting through a 3-D noise field
+    // shaped like a storm cell (a ring hugging the summit that spreads into an anvil above it, or, on the peak
+    // itself, a wall of cloud all round). Lightning lights the cloud from inside, near where it strikes.
+    const n = this.engine.q && !this.engine.q.post ? 9 : 14;
+    const U = {
+      uCentre: { value: centre.clone() }, uTime: { value: 0 }, uFlash: { value: 0 }, uStrike: { value: centre.clone() },
+      uHaze: this.haze.color, uAround: { value: around ? 1 : 0 }, uAlpha: { value: (around ? 3.2 : 5.5) / n },
+      uR0: { value: around ? 520 : radius * 0.18 }, uR1: { value: around ? 1500 : radius * 1.45 },
+      uH0: { value: around ? -260 : -thick * 1.9 }, uH1: { value: around ? 170 : thick * 1.6 },
+    };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: U, transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
+      vertexShader: 'varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+      fragmentShader: `
+        uniform vec3 uCentre, uStrike, uHaze; uniform float uTime, uFlash, uAround, uAlpha, uR0, uR1, uH0, uH1;
+        varying vec3 vW;
+        float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+        float noise(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                     mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+        float fbm(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a * noise(p); p = p * 2.07 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return s; }
+        void main(){
+          vec3 q = vW - uCentre; float h = q.y, r = length(q.xz);
+          float k = clamp((h - uH0) / (uH1 - uH0), 0.0, 1.0);
+          float band = smoothstep(0.0, 0.18, k) * (1.0 - smoothstep(0.8, 1.0, k));
+          float rIn = uAround > 0.5 ? uR0 : uR0 * (1.0 - 0.85 * smoothstep(0.35, 0.75, k));   // low down it rings the summit; high up it closes over it
+          float rOut = uR1 * (uAround > 0.5 ? 1.0 : mix(0.7, 1.35, smoothstep(0.45, 0.95, k)));   // and spreads into an anvil
+          float shape = band * smoothstep(rIn, rIn + 220.0, r) * (1.0 - smoothstep(rOut * 0.7, rOut, r));
+          if (shape < 0.02) discard;
+          vec3 w = q / 420.0 + vec3(uTime * 0.012, -uTime * 0.004, uTime * 0.007);
+          float n = fbm(w + 0.6 * vec3(fbm(w * 0.7 + 4.0), 0.0, fbm(w * 0.7 + 8.0)));     // warped: billows, not blobs
+          float dens = smoothstep(0.3, 0.62, n * (0.6 + 0.65 * shape));
+          if (dens < 0.01) discard;
+          // dark, heavy undersides; tops faintly catching what light there is
+          vec3 col = mix(vec3(0.016, 0.015, 0.02), vec3(0.075, 0.072, 0.085), k * (0.4 + 0.6 * n));
+          col *= 0.7 + 0.6 * smoothstep(0.45, 0.8, n);
+          float lit = uFlash * exp(-length(vW - uStrike) / 520.0);
+          col += vec3(0.55, 0.6, 0.85) * lit * (0.5 + 1.6 * (1.0 - dens));
+          col = mix(col, uHaze * 0.75, 0.3);
+          gl_FragColor = vec4(col, clamp(dens * uAlpha * (0.6 + 0.4 * shape), 0.0, 0.95));
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+    });
+    const slices = [];
+    for (let i = 0; i < n; i++) { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat); m.frustumCulled = false; this.group.add(m); slices.push(m); }
     // the bolt is a camera-facing ribbon rather than GL lines: lines are a single pixel wide on most GPUs and some drivers choke on them
     const bolt = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 0.85, 1.0).multiplyScalar(6), toneMapped: false, fog: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     bolt.frustumCulled = false; this.group.add(bolt);
-    return { centre, radius, thick, clouds, bolt, around };
+    return { centre, radius, thick, around, slices, U, mat, bolt, span: around ? [300, 1900] : [radius * 1.6, radius * 1.6] };
+  }
+  // lay the slices across the view, back to front, each just big enough to fill the frame at its distance
+  placeSlices() {
+    const S = this.storm; if (!S || !S.slices) return;
+    const cam = this.engine.camera, cp = cam.position;
+    const f = new THREE.Vector3(); cam.getWorldDirection(f);
+    let d0, d1;
+    if (S.around) { d0 = S.span[0]; d1 = S.span[1]; }
+    else { const dc = f.dot(new THREE.Vector3().subVectors(S.centre, cp)); d0 = Math.max(60, dc - S.span[0]); d1 = Math.max(d0 + 200, dc + S.span[1]); }
+    const n = S.slices.length, th = Math.tan(cam.fov * Math.PI / 360) * 1.15;
+    S.slices.forEach((m, i) => {
+      const d = d1 - (d1 - d0) * (i / (n - 1));                   // far first
+      m.position.copy(cp).addScaledVector(f, d); m.quaternion.copy(cam.quaternion);
+      m.scale.set(d * th * 2 * cam.aspect, d * th * 2, 1); m.renderOrder = -5 + i * 0.01;
+    });
   }
   strike() {
     const S = this.storm; if (!S) return;
@@ -235,7 +282,7 @@ export class Vista {
     }
     S.bolt.geometry.dispose(); S.bolt.geometry = new THREE.BufferGeometry(); S.bolt.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     this.boltT = 0.22 + r() * 0.15; this.flash = 1;
-    for (const c of S.clouds) { const dd = c.s.position.distanceTo(top); c.lit = Math.max(c.lit, clamp(1 - dd / (S.radius * 0.7), 0, 1)); }
+    S.U.uStrike.value.copy(top).lerp(target, 0.15); this.cloudFlash = 1.6;
     const cam = this.engine.camera.position; const dist = cam.distanceTo(top);
     if (this.onThunder) this.onThunder(clamp(1.4 - dist / 2500, 0.25, 1), clamp(dist / 900, 0.6, 3.5));
   }
@@ -249,12 +296,11 @@ export class Vista {
     this.haze.flash.value = this.flash * this.flash;
     // follow the sky as the land heals: the haze is always the colour of the horizon
     const fc = this.engine.scene.fog.color; this.haze.color.value.copy(fc); this.hazeDark.color.value.copy(fc).multiplyScalar(0.8);
-    if (this.storm) for (const c of this.storm.clouds) {
-      c.lit = Math.max(0, c.lit - dt * 3);
-      const L = c.lit * c.lit;
-      c.mat.color.setRGB(0.07 + L * 1.4, 0.065 + L * 1.4, 0.08 + L * 1.8);
-      c.mat.rotation += c.spin * dt * 60 * 0.05;
-      const a = c.a + this.time * 0.004; if (!this.storm.around) { c.s.position.x = c.base.x + Math.cos(this.time * 0.05 + c.a) * 20; } else { c.s.position.x = this.storm.centre.x + Math.cos(a) * c.d; c.s.position.z = this.storm.centre.z + Math.sin(a) * c.d; }
+    if (this.storm && this.storm.U) {
+      this.cloudFlash = Math.max(0, (this.cloudFlash || 0) - dt * 5);
+      // the flicker of a strike, lighting the cloud in pulses
+      this.storm.U.uFlash.value = this.cloudFlash * (this.boltT > 0 ? 0.75 + 0.25 * Math.sin(this.time * 70) : 1);
+      this.storm.U.uTime.value = this.time; this.placeSlices();
     }
     if (this.summitGlow) this.summitGlow.material.opacity = 0.45 + Math.sin(this.time * 0.7) * 0.1;
     if (this.smoke) for (const s of this.smoke) { s.s.position.y = s.base + Math.sin(this.time * 0.05 + s.ph) * 6; s.s.material.rotation += dt * 0.01; }

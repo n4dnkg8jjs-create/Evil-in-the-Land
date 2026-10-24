@@ -216,3 +216,18 @@ select option { background: var(--iron-solid); }
 .page p { margin: 0; font-size: 1.04rem; line-height: 1.45; font-style: italic; }
 .page .page-num { font-size: 0.7rem; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.6; }
 .compass .mk.page { color: #d8c8a0; opacity: 0.75; font-size: 0.9em; }
+
+/* silver, and the sutler's wagon */
+.self .silver { margin-top: 6px; font-size: 0.8rem; letter-spacing: 0.06em; color: #d8d0b8; text-shadow: 0 1px 3px #000; transition: color 0.4s; }
+.self .silver.flash { animation: silverFlash 0.9s ease-out; }
+@keyframes silverFlash { 0% { color: #fff4c8; text-shadow: 0 0 10px #f0d48a; } 100% { color: #d8d0b8; } }
+.shop { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, rgba(10, 6, 4, 0.55), rgba(0, 0, 0, 0.85)); }
+.shop.show { display: flex; }
+.shop-panel { width: min(760px, 94vw); max-height: 88vh; overflow-y: auto; }
+.shop-panel h4 { margin: 14px 0 6px; letter-spacing: 0.12em; text-transform: uppercase; font-size: 0.8rem; color: var(--gilt-hi, #f0d48a); }
+.shop-panel .ware { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 10px; border: 1px solid rgba(201, 162, 74, 0.18); background: rgba(0, 0, 0, 0.28); margin-bottom: 6px; }
+.shop-panel .ware.on { border-color: rgba(240, 212, 138, 0.6); }
+.shop-panel .ware p { margin: 2px 0 0; font-size: 0.85rem; opacity: 0.75; }
+.shop-panel .tag { font-size: 0.75rem; letter-spacing: 0.08em; color: #d8c48a; white-space: nowrap; }
+.btn.small { padding: 4px 12px; font-size: 0.85rem; white-space: nowrap; }
+.btn[disabled] { opacity: 0.4; cursor: not-allowed; }

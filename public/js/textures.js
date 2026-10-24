@@ -110,6 +110,8 @@ export const FINISHES = {
   blued:     { name: 'Fire-Blued',         base: [52, 66, 104],   rough: 0.30, etch: [180, 150, 80],  etchRough: 0.35, gilt: true },
   blackened: { name: 'Blackened & Gilt',   base: [34, 33, 32],    rough: 0.48, etch: [214, 168, 72],  etchRough: 0.30, gilt: true },
   russet:    { name: 'Russeted',           base: [92, 54, 38],    rough: 0.42, etch: [176, 172, 160], etchRough: 0.30, gilt: false },
+  // a year in the rain on the Emperor's field (the dead only; not offered to the living)
+  rusted:    { name: 'Rusted',             base: [104, 92, 80],   rough: 0.78, etch: [88, 62, 44],    etchRough: 0.85, gilt: false, hidden: true },
 };
 
 const cache = new Map();
@@ -168,10 +170,15 @@ export function armorTextures(finishKey, size = 1024) {
     cr = lerp(cr, cr * 0.8, dirt) + polish; cg = lerp(cg, cg * 0.78, dirt) + polish; cb = lerp(cb, cb * 0.76, dirt) + polish;
     cr = lerp(cr, F.etch[0], etch); cg = lerp(cg, F.etch[1], etch); cb = lerp(cb, F.etch[2], etch);
     // bright scratches through dark finishes
-    const scrC = finishKey === 'bright' ? 0 : sc * 0.6;
+    if (finishKey === 'rusted') {   // flaking rust eating in from the edges of the blotches
+      const rust = clamp((grime - 0.38) * 2.4, 0, 1) * 0.9, pit = clamp((temper - 0.55) * 3, 0, 1) * 0.5;
+      cr = lerp(cr, 118 - pit * 40, rust); cg = lerp(cg, 54 - pit * 20, rust); cb = lerp(cb, 26 - pit * 10, rust);
+    }
+    const scrC = finishKey === 'bright' || finishKey === 'rusted' ? 0 : sc * 0.6;
     cr = lerp(cr, 200, scrC); cg = lerp(cg, 200, scrC); cb = lerp(cb, 205, scrC);
     A[p] = clamp(cr, 0, 255); A[p + 1] = clamp(cg, 0, 255); A[p + 2] = clamp(cb, 0, 255); A[p + 3] = 255;
     let rough = F.rough + (streak - 0.5) * 0.14 + dirt * 0.4 + sc * (finishKey === 'bright' ? 0.25 : -0.05);
+    if (finishKey === 'rusted') rough = Math.max(rough, 0.6 + clamp((grime - 0.38) * 2.4, 0, 1) * 0.35);
     rough = lerp(rough, F.etchRough, etch);
     const rv = clamp(rough, 0.04, 1) * 255;
     R[p] = 255; R[p + 1] = rv; R[p + 2] = 255; R[p + 3] = 255; // three reads roughness from G, metalness from B

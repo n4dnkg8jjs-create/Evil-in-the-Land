@@ -52,8 +52,17 @@ If port 7777 is taken, start the server on another one: `PORT=7788 node server.j
 | Ctrl | Shift lock: your knight faces where the camera looks, for strafing. Settings can move it to Caps Lock or Tab |
 | E (hold) | Kneel and pray at an altar, or raise a fallen knight |
 | R | Use your relic |
+| H | Drink a healing draught |
+| F | Trade at the sutler's wagon |
 | Mouse wheel | Camera distance |
 | Esc | Pause |
+
+## On the road
+
+- **Prayer and altars.** Kneel at each blighted altar and hold your prayer while the others defend you. Each answered prayer heals the land around it.
+- **Dread.** Fear rises when you stand alone in the blight, when demons close in, when you are wounded, and when the hooded figure on the ridge is watching. As it rises you will hear whispers, the edges of the screen go dark, and you will see things that are not there. At its worst your hands shake. Praying, staying near your fellow knights and standing in the light of cleansed altars bring it down.
+- **The First Company.** Twenty knights took this road a year before you and never came back. Their graves lie beside it, each marked with a cross and a helm, and their chaplain's pages are on the graves. Walk up to one to read it.
+- **The sutler's wagon.** Every road starts at a trader's wagon. Spend the silver you earn from kills, altars, finished roads and found pages on new weapons, tempered blades, stronger armour, a blessed relic and healing draughts. Purchases are saved in your browser.
 
 ## Your own music
 

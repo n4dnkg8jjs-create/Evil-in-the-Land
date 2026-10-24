@@ -114,7 +114,7 @@ export class Story {
     const el = document.getElementById('page');
     if (el) { el.innerHTML = `<div class="page-num">Brother Anselm · page ${s.pageIdx + 1} of ${PAGES.length}</div><h3>${title}</h3><p>${text}</p>`; el.classList.add('show'); }
     this.cardT = 13 + text.length * 0.02;
-    this.game.audio.paper?.(); this.game.ui.toast('A page from the First Company', 2.5);
+    this.game.audio.paper?.(); this.game.shop?.earn(10); this.game.ui.toast('A page from the First Company · +10 silver from his purse', 3);
     // the fear is named: from here on the dread shows on the HUD
     if (s.pageIdx >= 4) this.game.dread?.reveal();
   }

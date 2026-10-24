@@ -153,6 +153,8 @@
           <tr><td>Ctrl</td><td>Shift lock: your knight faces where you look (key can be changed in Settings)</td></tr>
           <tr><td>E (hold)</td><td>Kneel and pray at an altar, or raise a fallen knight</td></tr>
           <tr><td>R</td><td>Use your relic</td></tr>
+          <tr><td>H</td><td>Drink a healing draught</td></tr>
+          <tr><td>F</td><td>Trade at the sutler's wagon (at the start of each road)</td></tr>
           <tr><td>Mouse wheel</td><td>Camera distance</td></tr>
           <tr><td>Esc</td><td>Pause</td></tr>
         </table>
@@ -163,6 +165,8 @@
         <p>When a prayer is answered, the land around the altar lives again, every knight is healed, and the fallen rise.</p>
         <h4>Dread</h4>
         <p>Fear is its own enemy. It rises when you stand alone in the blight, when demons close in, when you bleed, and when the hooded one on the ridge is watching. As it climbs you will hear things, the edges of sight go dark, and you will see things that are not there. At its worst your hands shake. Pray, keep close to your brothers, and stand in the light of cleansed altars to master it.</p>
+        <h4>The sutler's wagon</h4>
+        <p>Demons you cut down, altars you hallow, roads you win and pages you find all earn silver. Spend it at the sutler's wagon at the start of each road: new weapons, a tempered edge, proofed harness, a blessed relic, healing draughts. What you buy is kept.</p>
         <h4>The First Company</h4>
         <p>Twenty knights took this road a year before you. Their graves lie beside it, and with them the pages of their chaplain, Brother Anselm. Walk up to a cairn to read what he wrote.</p>
         <p>Seven chapters climb from the Vale of Ashes to the mountain's peak. A full pilgrimage takes an hour to an hour and a half. Your progress is saved after each chapter.</p>
@@ -209,6 +213,7 @@
     <div class="bar hp"><i id="hpBar"></i><b id="hpLag"></b></div>
     <div class="bar st"><i id="stBar"></i></div>
     <div class="relic" id="relic"><span id="relicName"></span><i id="relicCd"></i></div>
+    <div class="silver" id="silver"></div>
     <div class="dread" id="dread" hidden title="Dread: rises when you are alone in the dark, near demons, wounded, or watched. Pray, keep together, stand in the altar light."><span>Dread</span><div class="bar"><i id="dreadBar"></i></div></div>
   </div>
   <div class="page" id="page"></div>
@@ -222,6 +227,7 @@
 <!-- overlays -->
 <div id="hurt" class="hurt"></div>
 <div id="dreadVeil" class="dread-veil"></div>
+<div id="shop" class="shop"></div>
 <div id="letterTop" class="letterbox top"></div>
 <div id="letterBot" class="letterbox bot"></div>
 <div id="subtitle" class="subtitle" aria-live="polite"></div>

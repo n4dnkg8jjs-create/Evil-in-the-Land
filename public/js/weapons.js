@@ -160,12 +160,12 @@ const BUILD = {
 };
 
 export const WEAPONS = {
-  longsword: { name: 'Longsword', desc: 'Swift two-handed cuts and a lunging thrust. The knight\'s weapon.', twoHanded: true, leftGrip: -0.16, gripRange: [-0.22, -0.09], roll: [90, 90], hitFrom: 0.12, hitTo: 1.03, kind: 'cut', dmg: 1.0, speed: 1.0, stamina: 1.0, hand: 'two' },
-  zweihander: { name: 'Zweihänder', desc: 'Huge sweeping arcs that cleave whole ranks. Slow to recover.', twoHanded: true, leftGrip: -0.25, gripRange: [-0.36, -0.14], roll: [90, 90], hitFrom: 0.3, hitTo: 1.3, kind: 'cut', dmg: 1.35, speed: 0.82, stamina: 1.3, hand: 'two' },
-  mace: { name: 'Flanged Mace & Buckler', desc: 'Fast, crushing blows and a buckler for parries.', twoHanded: false, roll: [80, 90], hitFrom: 0.3, hitTo: 0.55, kind: 'blunt', dmg: 0.95, speed: 1.15, stamina: 0.85, hand: 'one', buckler: true },
-  halberd: { name: 'Halberd', desc: 'Axe, spike and hook on a long haft. Chop, thrust and sweep.', twoHanded: true, leftGrip: 0.5, gripRange: [0.18, 0.95], roll: [150, 150], hitFrom: 1.25, hitTo: 1.88, kind: 'cut', dmg: 1.15, speed: 0.9, stamina: 1.15, hand: 'pole' },
-  pike: { name: 'Pike', desc: 'Four metres of ash. Thrusts skewer several demons in a line.', twoHanded: true, leftGrip: 0.62, gripRange: [0.28, 1.15], roll: [150, 150], hitFrom: 2.0, hitTo: 3.06, kind: 'pierce', dmg: 0.95, speed: 1.05, stamina: 0.9, hand: 'pole' },
-  pollaxe: { name: 'Pollaxe', desc: 'Hammer, fluke and spike. Breaks the hide of the great ones.', twoHanded: true, leftGrip: 0.45, gripRange: [0.16, 0.8], roll: [150, 150], hitFrom: 0.95, hitTo: 1.28, kind: 'blunt', dmg: 1.2, speed: 0.92, stamina: 1.1, hand: 'pole', armorBreak: 1.6 },
+  longsword: { butt: 0.28, name: 'Longsword', desc: 'Swift two-handed cuts and a lunging thrust. The knight\'s weapon.', twoHanded: true, leftGrip: -0.16, gripRange: [-0.22, -0.09], roll: [90, 90], hitFrom: 0.12, hitTo: 1.03, kind: 'cut', dmg: 1.0, speed: 1.0, stamina: 1.0, hand: 'two' },
+  zweihander: { butt: 0.45, name: 'Zweihänder', desc: 'Huge sweeping arcs that cleave whole ranks. Slow to recover.', twoHanded: true, leftGrip: -0.25, gripRange: [-0.36, -0.14], roll: [90, 90], hitFrom: 0.3, hitTo: 1.3, kind: 'cut', dmg: 1.35, speed: 0.82, stamina: 1.3, hand: 'two' },
+  mace: { butt: 0.12, name: 'Flanged Mace & Buckler', desc: 'Fast, crushing blows and a buckler for parries.', twoHanded: false, roll: [80, 90], hitFrom: 0.3, hitTo: 0.55, kind: 'blunt', dmg: 0.95, speed: 1.15, stamina: 0.85, hand: 'one', buckler: true },
+  halberd: { butt: 0.62, name: 'Halberd', desc: 'Axe, spike and hook on a long haft. Chop, thrust and sweep.', twoHanded: true, leftGrip: 0.5, gripRange: [0.18, 0.95], roll: [150, 150], hitFrom: 1.25, hitTo: 1.88, kind: 'cut', dmg: 1.15, speed: 0.9, stamina: 1.15, hand: 'pole' },
+  pike: { butt: 0.62, name: 'Pike', desc: 'Four metres of ash. Thrusts skewer several demons in a line.', twoHanded: true, leftGrip: 0.62, gripRange: [0.28, 1.15], roll: [150, 150], hitFrom: 2.0, hitTo: 3.06, kind: 'pierce', dmg: 0.95, speed: 1.05, stamina: 0.9, hand: 'pole' },
+  pollaxe: { butt: 0.62, name: 'Pollaxe', desc: 'Hammer, fluke and spike. Breaks the hide of the great ones.', twoHanded: true, leftGrip: 0.45, gripRange: [0.16, 0.8], roll: [150, 150], hitFrom: 0.95, hitTo: 1.28, kind: 'blunt', dmg: 1.2, speed: 0.92, stamina: 1.1, hand: 'pole', armorBreak: 1.6 },
 };
 
 let _mats = null;

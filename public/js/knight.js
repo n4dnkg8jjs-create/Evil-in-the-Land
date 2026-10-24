@@ -362,7 +362,7 @@ export class Knight {
     if (!this.canAct || this.action || this.relicCd > 0) return false;
     const r = this.loadout.relic;
     this.startAction(r === 'water' ? this.common.relicThrow : this.common.relicRaise, 'relic', { relic: r });
-    this.relicCd = RELICS[r].cooldown;
+    this.relicCd = RELICS[r].cooldown * (this.relicMul || 1);
     return true;
   }
   salute() { if (!this.downed) this.startAction(this.common.salute, 'salute'); }
@@ -499,7 +499,58 @@ export class Knight {
     }
     if (this.actT >= a.dur) { this.action = null; this.queued = null; }
   }
-  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1) * (this.dreadMul || 1); }
+  // a different weapon from the sutler's wagon: new steel in the hands, and the moves that go with it
+  setWeapon(key, quality) {
+    if (!WEAPONS[key] || key === this.loadout.weapon) return;
+    this.scene.remove(this.weapon); this.weapon.traverse((o) => o.geometry?.dispose?.());
+    if (this.buckler) { this.buckler.removeFromParent(); this.buckler = null; }
+    this.loadout = { ...this.loadout, weapon: key }; this.wdef = WEAPONS[key];
+    this.weapon = buildWeapon(key, quality); this.scene.add(this.weapon);
+    if (this.wdef.buckler) { this.buckler = buildWeapon('buckler', quality); this.rig.j.handL.add(this.buckler); this.buckler.position.set(0, -0.06, 0); }
+    const ms = MOVESETS[key];
+    this.st = compileStance(ms, key);
+    this.lights = ms.light.map((c) => compileClip(c, this.st));
+    this.heavyClip = compileClip(ms.heavy, this.st);
+    this.common = {}; for (const k in COMMON) this.common[k] = compileClip(COMMON[k], this.st);
+    this.action = null; this.combo = 0; this.queued = null; this.hasLNow = !!this.st.stance.l; this.leftGripS = undefined;
+  }
+  // tempering, proofing and blessing bought from the sutler
+  applyUpgrades(u) {
+    this.edgeMul = 1 + 0.12 * (u.edge || 0);
+    const hp0 = this.maxHp; this.maxHp = 150 + 20 * (u.proof || 0); if (this.hp > 0) this.hp = Math.min(this.maxHp, this.hp + Math.max(0, this.maxHp - hp0));
+    this.relicMul = 1 - 0.15 * (u.blessing || 0);
+  }
+  deflectWeapon(wp, wd) {
+    // capsules sized to the harness, not the body: cuirass and fauld, pauldrons, helm, cuisses and greaves
+    const j = this.rig.j; this.rig.root.updateMatrixWorld(true);
+    const W = (n) => new THREE.Vector3().setFromMatrixPosition(j[n].matrixWorld);
+    const caps = this._caps || (this._caps = []); caps.length = 0;
+    const hips = W('hips'), neck = W('neck');
+    caps.push([hips.clone().lerp(neck, 0.05), neck.clone().lerp(hips, 0.12), 0.24]);
+    caps.push([W('uArmR'), W('uArmL'), 0.12]);
+    { const hd = W('head'); caps.push([hd, hd.clone().addScaledVector(hd.clone().sub(neck).normalize(), 0.18), 0.15]); }
+    for (const sd of ['R', 'L']) { const th = W('thigh' + sd), kn = W('shin' + sd), an = W('foot' + sd); caps.push([th, kn, 0.13], [kn, an, 0.09]); }
+    // how far the weapon runs back past the right hand: pommel, or the butt of a haft
+    const butt = this.wdef.butt ?? (this.wdef.hand === 'pole' ? 0.62 : this.wdef.twoHanded ? 0.3 : 0.12);
+    const tip = this.wdef.hitTo + 0.05, q = new THREE.Vector3(), c = new THREE.Vector3(), ab = new THREE.Vector3(), best = new THREE.Vector3();
+    const ts = []; for (let i = 0; i <= 3; i++) ts.push(-butt + (butt - 0.12) * (i / 3)); for (let i = 0; i <= 12; i++) ts.push(0.2 + (tip - 0.2) * (i / 12));
+    let moved = 0;
+    for (let it = 0; it < 5; it++) {
+      let pen = 0, bt = 0;
+      for (const t of ts) {
+        q.copy(wp).addScaledVector(wd, t);
+        for (const [a, b, r] of caps) {
+          ab.subVectors(b, a); const u = clamp(q.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1); c.copy(a).addScaledVector(ab, u);
+          const d = q.distanceTo(c), p = r + 0.025 - d;
+          if (p > pen) { pen = p; bt = t; best.subVectors(q, c); if (d < 1e-4) best.set(0, 1, 0); best.normalize(); }
+        }
+      }
+      if (pen < 0.006) break;
+      if (bt < 0 && moved < 0.2) { wp.addScaledVector(best, pen + 0.01); moved += pen; }        // the pommel or butt: carry the whole weapon out
+      else { q.copy(wp).addScaledVector(wd, bt).addScaledVector(best, (pen + 0.012) * (bt < 0 ? -1 : 1)); wd.subVectors(q, wp).multiplyScalar(bt < 0 ? -1 : 1).normalize(); }   // the blade: swing it clear about the grip
+    }
+  }
+  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1) * (this.dreadMul || 1) * (this.edgeMul || 1); }
 
   // Active hit windows this frame (attack authority runs collision)
   currentHits() {
@@ -706,6 +757,8 @@ export class Knight {
       // weapon lies beside the fallen knight
       const ly = new THREE.Vector3(-0.5, 0.05, 0.4); toWorld(ly.x, ly.y, ly.z, wp); dirWorld(0.2, 0, 1, wd).normalize(); dirWorld(0, 1, 0, wu);
     }
+    // the blade never passes through its own knight: swing it clear of legs and body, pivoting at the grip
+    if (!ikOff && !this.downed && planted < 0.5) this.deflectWeapon(wp, wd);
     // keep the weapon in both hands' reach; the leading hand slides along a haft
     if (!ikOff && !this.downed && planted < 0.5) {
       let lgFit = null;
@@ -717,6 +770,7 @@ export class Knight {
       }
       this.rig.fitWeapon(wp, wd, wu, lgFit);
       clearTorso(this.rig, wp, wd, this.wdef.twoHanded && !freeLeft ? lgFit : null, field('torso'));
+      this.deflectWeapon(wp, wd);   // again, after the reach and torso corrections moved it
     }
     weaponQuatFrom(wd, wu, _wq);
     if (!ikOff && !this.downed) {
@@ -748,6 +802,7 @@ export class Knight {
         const deep = Math.min(Math.max(dR, hL.depth), 0.1 - pushed); if (deep < 0.025) break;
         wp.addScaledVector(hL.depth > dR ? hL.dir : dirR, deep * 1.15); pushed += deep;
         this.rig.fitWeapon(wp, wd, wu, twoH ? (this.leftGripS ?? this.wdef.leftGrip) : null);   // never out of reach of the hands
+        this.deflectWeapon(wp, wd);
       }
     }
     // smooth arm transitions (IK <-> keyed arms)

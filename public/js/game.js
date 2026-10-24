@@ -11,6 +11,8 @@ import { Cinema, V, orbitShot } from './cinema.js';
 import { CHAPTERS, PRAYERS, HEALED } from './chapters.js';
 import { Story } from './story.js';
 import { Dread } from './dread.js';
+import { fallenKnightSpots } from './battlefield.js';
+import { Shop } from './shop.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, rng, TAU } from './util.js';
 
 const DIFF = { pilgrim: { dmg: 0.55, spawn: 0.75, prayer: 0.85 }, knight: { dmg: 1, spawn: 1, prayer: 1 }, martyr: { dmg: 1.4, spawn: 1.3, prayer: 1.15 } };
@@ -44,7 +46,7 @@ export class Game {
     this.ui.setSelf(this.me);
     let role = 0;
     for (const p of opts.players) if (p.ai) { const k = this.knights.get(p.id); this.companions.push(new Companion(k, role++)); }
-    this.story = new Story(this); this.dread = new Dread(this);
+    this.story = new Story(this); this.dread = new Dread(this); this.shop = new Shop(this); this.shop.applyToMe();
     this.bindNet();
   }
 
@@ -70,6 +72,8 @@ export class Game {
     this.crevices = null;
     this.world = new World(this.engine, this.engine.q, n);
     this.story.build(this.world, n); this.dread.clear();
+    this.layOutFallen(ch);
+    this.shop.build(this.world);
     if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
@@ -89,6 +93,20 @@ export class Game {
     setTimeout(() => this.ui.fade(false), 200);
     if (skipIntro) { this.obj.ph = 'travel'; if (this.isHost && ch.boss === 'dragon') this.spawnBoss('dragon'); return; }
     this.playIntro(n);
+  }
+
+  // the Emperor's household knights, dead in their rusted harness where they fell
+  layOutFallen(ch) {
+    for (const k of this.fallenKnights || []) k.dispose();
+    this.fallenKnights = [];
+    const n = ch.props?.fallenKnights; if (!n) return;
+    const r = rng(ch.seed + 5); const styles = ['gothic', 'maximilian', 'milanese'], weapons = ['longsword', 'pollaxe', 'halberd', 'zweihander'], her = ['sable', 'argent', 'gules', 'azure'];
+    for (const s of fallenKnightSpots(this.world, n, r)) {
+      const k = new Knight(this.scene, this.engine.q, { style: styles[Math.floor(r() * 3)], finish: 'rusted', weapon: weapons[Math.floor(r() * 4)], relic: 'water', heraldry: her[Math.floor(r() * 4)], cape: r() < 0.5, plume: false }, { id: -100 - this.fallenKnights.length, name: '', nameplate: false });
+      k.pos.set(s.x, this.world.heightAt(s.x, s.z), s.z); k.yaw = s.yaw; k.hp = 0; k.downed = true; k.downT = 5;
+      for (let i = 0; i < 40; i++) k.animate(1 / 30, this.world);
+      this.fallenKnights.push(k);
+    }
   }
 
   playIntro(n) {
@@ -128,6 +146,7 @@ export class Game {
     n.on('k:parried', (m) => { if (this.isHost) this.hostParried(m.src); });
     n.on('k:rev', (m) => { const k = this.knights.get(m.to); if (k && this.owns(k) && k.downed) { k.reviveProgress = Math.max(k.reviveProgress, m.p); if (k.reviveProgress >= 1) this.reviveKnight(k); } });
     n.on('k:relic', (m) => this.onRelic(m, false));
+    n.on('k:gear', (m) => { const k = this.knights.get(m.id); if (k && k !== this.me) { k.setWeapon(m.weapon, this.engine.q); if (m.maxHp) k.maxHp = m.maxHp; } });
     n.on('k:skip', () => { if (this.cinema.active) this.cinema.finish(); });
     n.on('left', (m) => { for (const [id, k] of this.knights) if (!k.isAI && !m.players.find((p) => p.id === id)) { k.dispose(); this.knights.delete(id); this.ui.toast(`${k.name} has left the company`); } });
   }
@@ -196,7 +215,7 @@ export class Game {
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
-    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); }
+    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); }
     // the sky answers the land beneath you: blue over living country, ember-red in the blight
     if (this.world) {
       const life = this.world.lifeAt(this.me.pos.x, this.me.pos.z);
@@ -781,8 +800,9 @@ export class Game {
     if (k.fury > 0 && R() < 0.5) this.fx.holyMotes(k.tip, 0.15, 1, [1, 0.8, 0.4]);
   }
   demonDeathFx(d) {
+    if (this.me && !this.me.downed && d.pos.distanceTo(this.me.pos) < 35) this.shop.earn(d.def.big ? 8 : 2);
     this.fx.death(d.chest, d.def.big ? 2 : 1);
-    this.audio.shriek(d.chest, d.def.big ? 0.5 : 1.2 + R() * 0.4, d.def.big ? 1.2 : 0.5, 0.3);
+    this.audio.shriek(d.chest, d.def.big ? 0.5 : 0.82 + R() * 0.2, d.def.big ? 1.2 : 0.5, 0.3);
   }
   demonSfx(a) {
     const p = V(a.x, a.y + 1.2, a.z);
@@ -813,6 +833,7 @@ export class Game {
   }
   cleanseFx(i) {
     const a = this.world.altars[i]; if (!a) return;
+    this.shop.earn(25, 'the altar is hallowed');
     this.world.cleanse(i);
     const p = V(a.x, a.y, a.z);
     this.fx.holyBurst(p, 10); this.fx.beam(p, 0xffe8b0, 6, 3, 90); this.fx.holyMotes(p, 20, 120);
@@ -836,6 +857,7 @@ export class Game {
     this.engine.setAtmosphere(mix, env); this.fx.setFog(this.scene.fog);
   }
   playOutro(n) {
+    this.shop.earn(60, 'the road is won');
     const ch = CHAPTERS[n]; const w = this.world; const last = w.altars[w.altars.length - 1];
     this.setMood('triumph', 0);
     this.blendAtmosphere(0.45);
@@ -921,6 +943,7 @@ export class Game {
       const dn = this.downedNear(me);
       if (dn) pr = `<kbd>E</kbd>Hold to raise ${esc(dn.name)}`;
       else if (this.altarFor(me) && !me.praying) pr = '<kbd>E</kbd>Hold to kneel and pray';
+      else if (this.shop.prompt()) pr = this.shop.prompt();
     }
     ui.prompt(pr);
     ui.counter(this.horde.aliveCount ? `${this.horde.aliveCount} demons` : '');
@@ -939,8 +962,8 @@ export class Game {
     for (const t of this.trails.values()) t.dispose(this.scene);
     this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
-    this.story.dispose(); this.dread.dispose();
-    for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:skip', 'left']) this.net?.off(k);
+    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); for (const k of this.fallenKnights || []) k.dispose();
+    for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'left']) this.net?.off(k);
   }
 }
 

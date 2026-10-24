@@ -460,7 +460,7 @@ export function harnessMaterials(finish, quality, colors = {}) {
   const at = armorTextures(finish, size);
   const F = FINISHES[finish];
   const plate = new THREE.MeshStandardMaterial({
-    map: at.map, normalMap: at.normalMap, roughnessMap: at.roughnessMap, metalness: 1, roughness: 1,
+    map: at.map, normalMap: at.normalMap, roughnessMap: at.roughnessMap, metalness: finish === 'rusted' ? 0.45 : 1, roughness: 1,
     normalScale: new THREE.Vector2(0.6, 0.6), side: THREE.DoubleSide, envMapIntensity: 1.0,
   });
   const gilt = F.gilt;

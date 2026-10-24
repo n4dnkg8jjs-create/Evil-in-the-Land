@@ -7,6 +7,7 @@ import { CHAPTERS, HEALED } from './chapters.js';
 import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture } from './textures.js';
 import { rng, makeNoise, pathSampler, clamp, lerp, smooth, SpatialHash, TAU } from './util.js';
 import { Vista } from './vista.js';
+import { buildFallen } from './battlefield.js';
 
 const HALF = 150, N = 257, CELL = (HALF * 2) / (N - 1);
 const PI = Math.PI;
@@ -159,7 +160,8 @@ export class World {
     const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j;
     const H = this.H;
     const a = H[j * N + i], b = H[j * N + i + 1], c = H[(j + 1) * N + i], d = H[(j + 1) * N + i + 1];
-    return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+    // the same two triangles per cell that the ground mesh is drawn with, so feet, houses and props sit exactly on what you see
+    return u + v <= 1 ? a + (b - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (b - d) * (1 - v);
   }
   // ground height anywhere, including the open land beyond the battlefield
   groundAt(x, z) {
@@ -183,7 +185,7 @@ export class World {
 
   // ---------------------------------------------------------------- terrain
   buildTerrain() {
-    const seg = this.q.terrainSeg;
+    const seg = N - 1;   // one vertex per height sample, so what is drawn is exactly the ground things stand on
     const g = new THREE.PlaneGeometry(HALF * 2, HALF * 2, seg, seg); g.rotateX(-PI / 2);
     const p = g.attributes.position;
     for (let i = 0; i < p.count; i++) p.setY(i, this.heightAt(p.getX(i), p.getZ(i)));
@@ -601,6 +603,7 @@ export class World {
     }
     // --- battlefield
     if (P.banners) this.buildBanners(P.banners, r, woodMat);
+    if (P.fallen) buildFallen(this, P.fallen, r);
     if (P.pikes) {
       const pg = new THREE.CylinderGeometry(0.02, 0.025, 3.2, 5); pg.translate(0, 1.6, 0);
       const list = []; this.scatter(P.pikes, (x, z) => this.okSpot(x, z, 3, 9), (x, z, y) => list.push({ x, y: y - 0.4, z, ry: r() * TAU, rx: r.range(-0.7, 0.7), rz: r.range(-0.7, 0.7), sy: r.range(0.4, 1.1) }));
@@ -654,9 +657,9 @@ export class World {
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     let lo = 1e9, hi = -1e9;
-    for (const [lx, lz] of [[-w / 2, -dpt / 2], [w / 2, -dpt / 2], [-w / 2, dpt / 2], [w / 2, dpt / 2], [0, 0]]) { const [px, pz] = toW(lx, lz); const h = this.heightAt(px, pz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) { const [px, pz] = toW((i / 4 - 0.5) * (w + 0.8), (j / 4 - 0.5) * (dpt + 0.8)); const h = this.heightAt(px, pz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
     const y = hi + 0.15;              // the floor sits just above the highest ground
-    const footing = y - lo + 0.6;     // and the footing reaches below the lowest
+    const footing = y - lo + 1.2;     // and the footing reaches well below the lowest
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
     const walls = [], timber = [], plaster = [], dark = [];
     walls.push(xf(new THREE.BoxGeometry(w + 0.7, footing, dpt + 0.7), [0, -footing / 2 + 0.12, 0]));
@@ -715,24 +718,70 @@ export class World {
         gb.setAttribute('position', new THREE.Float32BufferAttribute([-hw, eave, sz * dpt / 2, hw, eave, sz * dpt / 2, 0, eave + 2.6, sz * dpt / 2], 3)); gb.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0.5, 0.5], 2)); gb.setIndex([0, 1, 2]); gb.computeVertexNormals(); plaster.push(gb); }
       timber.push(xf(new THREE.BoxGeometry(0.24, 0.24, dpt + 1.2), [0, eave + 2.6, 0]));
     }
-    const rafters = intact ? 7 : 5;
+    const rafters = intact ? 7 : 5, rise = 2.6, slope = Math.atan2(rise, w / 2), rlen = Math.hypot(w / 2, rise) + 0.5;
+    const roofs = [];
     for (let k = 0; k < rafters; k++) {
-      if (r() < (intact ? 0.25 : 0.4)) continue;
       const lz = -dpt / 2 + (k + 0.5) * dpt / rafters;
-      for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, 3.6), [sx * w / 4, eave + 1.2 + r.range(-0.4, 0.1), lz], [0, PI / 2, sx * (0.62 + r.range(-0.2, 0.2))]));
+      for (const sx of [-1, 1]) {
+        if (intact) {
+          // from the wall plate up to the ridge
+          if (r() < 0.2) continue;
+          timber.push(xf(new THREE.BoxGeometry(rlen, 0.16, 0.16), [sx * w / 4, eave + rise / 2 + 0.05, lz], [0, 0, -sx * slope]));
+        } else if (r() < 0.35) {
+          // fallen in: one end on the floor, the other against the broken wall
+          const lean = r.range(0.5, 0.9); const L2 = 2.2 / Math.sin(lean);
+          timber.push(xf(new THREE.BoxGeometry(L2, 0.16, 0.16), [sx * (w / 2 - Math.cos(lean) * L2 / 2 - 0.3), 1.1 + 0.05, lz + r.range(-0.3, 0.3)], [r.range(-0.1, 0.1), r.range(-0.2, 0.2), sx * lean]));
+        }
+      }
+    }
+    // what is left of the roof: shingled panels on the rafters, with holes burnt through
+    if (intact) {
+      for (const sx of [-1, 1]) for (let k = 0; k < 6; k++) {
+        if (r() < 0.3) continue;
+        const lz = -dpt / 2 - 0.3 + (k + 0.5) * (dpt + 0.6) / 6;
+        const len = rlen * r.range(0.55, 1), off = (rlen - len) * (r() < 0.5 ? 0.5 : 0);
+        roofs.push(xf(new THREE.BoxGeometry(len, 0.08, (dpt + 0.6) / 6 + 0.02), [sx * (w / 4 + Math.cos(slope) * off * 0.5), eave + rise / 2 + 0.17 - Math.sin(slope) * off * 0.5, lz], [0, 0, -sx * slope]));
+      }
     }
     // chimney stack at one end
     if (r() < 0.7) { const cx = (r() < 0.5 ? -1 : 1) * (w / 2 - 0.5), ch = intact ? 8 : r.range(4, 7); walls.push(xf(new THREE.BoxGeometry(1.1, ch, 0.9), [cx, ch / 2, 0])); walls.push(xf(new THREE.BoxGeometry(1.3, 0.25, 1.1), [cx, ch, 0])); }
     // fallen beams and rubble about the floor
-    for (let k = 0; k < 4; k++) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)), [r.range(-w / 3, w / 3), r.range(0.2, 1.2), r.range(-dpt / 3, dpt / 3)], [r.range(-1, 1), r() * TAU, r.range(-1, 1)]));
-    for (let k = 0; k < 14; k++) { const sz = r.range(0.2, 0.55); walls.push(xf(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), [r.range(-w / 2 - 1.2, w / 2 + 1.2), sz * 0.25, r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2)], [r() * 3, r() * 3, r() * 3])); }
+    for (let k = 0; k < 4; k++) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)), [r.range(-w / 3, w / 3), 0.2, r.range(-dpt / 3, dpt / 3)], [r.range(-0.08, 0.08), r() * TAU, r.range(-0.08, 0.08)]));
+    for (let k = 0; k < 14; k++) { const sz = r.range(0.2, 0.55), lx = r.range(-w / 2 - 1.2, w / 2 + 1.2), lz = r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2); const inside = Math.abs(lx) < w / 2 + 0.35 && Math.abs(lz) < dpt / 2 + 0.35; const [px, pz] = toW(lx, lz); walls.push(xf(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), [lx, sz * 0.2 + (inside ? 0 : this.heightAt(px, pz) - y), lz], [r() * 0.4, r() * 3, r() * 0.4])); }
+    // the yard: barrels, crates, a woodpile against the wall, a cart, a fence
+    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; });
     const plasterMat = this.plasterMat || (this.plasterMat = new THREE.MeshStandardMaterial({ color: 0xa89a82, roughness: 0.95, side: THREE.DoubleSide }));
     const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
-    for (const [list, m] of [[walls, brickMat], [timber, charMat], [plaster, plasterMat], [dark, voidMat]]) {
+    const shingle = this.shingleMat || (this.shingleMat = new THREE.MeshStandardMaterial({ color: 0x2e2620, roughness: 0.9 }));
+    for (const [list, m] of [[walls, brickMat], [timber, charMat], [plaster, plasterMat], [dark, voidMat], [roofs, shingle]]) {
       if (!list.length) continue; const mesh = new THREE.Mesh(merge(list), m); mesh.castShadow = mesh.receiveShadow = true; g.add(mesh);
     }
     this.group.add(g);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
+  }
+
+  dressYard(r, w, dpt, walls, timber, intact, gy) {
+    // everything out in the yard stands on the yard's own ground (gy: local ground height), not the house floor
+    const T = { push: (g) => { g.computeBoundingBox(); const c = g.boundingBox.getCenter(new THREE.Vector3()); g.translate(0, gy(c.x, c.z), 0); timber.push(g); } };
+    const along = (side) => { const ox = side % 2 ? (side === 1 ? 1 : -1) * (w / 2 + 0.75) : r.range(-w / 2 + 1, w / 2 - 1); const oz = side % 2 ? r.range(-dpt / 2 + 1, dpt / 2 - 1) : (side === 0 ? 1 : -1) * (dpt / 2 + 0.75); return [ox, oz]; };
+    for (let k = 0; k < 3; k++) {   // barrels, standing or rolled over
+      const [ox, oz] = along(Math.floor(r() * 4)); const over = r() < 0.4;
+      const b = new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10); const hoop = new THREE.CylinderGeometry(0.335, 0.335, 0.62, 10, 1, true);
+      const bg = merge([b, hoop]);
+      T.push(xf(bg, [ox, over ? 0.3 : 0.43, oz], over ? [PI / 2, r() * TAU, 0] : [0, r() * TAU, 0]));
+    }
+    for (let k = 0; k < 2; k++) { const [ox, oz] = along(Math.floor(r() * 4)); const sz = r.range(0.5, 0.8); T.push(xf(new THREE.BoxGeometry(sz, sz * 0.8, sz), [ox, sz * 0.4, oz], [0, r() * TAU, 0])); if (r() < 0.5) T.push(xf(new THREE.BoxGeometry(sz * 0.8, sz * 0.6, sz * 0.8), [ox + 0.05, sz * 0.8 + sz * 0.3, oz], [0, r() * TAU, 0])); }
+    // a woodpile under the eaves of one wall
+    { const sx = r() < 0.5 ? -1 : 1; for (let row = 0; row < 3; row++) for (let k = 0; k < 6 - row; k++) T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), [sx * (w / 2 + 0.45), 0.09 + row * 0.16, -dpt / 4 + (k + row * 0.5) * 0.19], [PI / 2, 0, PI / 2])); }
+    // a cart, tipped, its wheel off
+    if (r() < 0.45) {
+      const cx = r.range(-w / 2, w / 2), cz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 2.6), tilt = r.range(0.1, 0.3);
+      T.push(xf(new THREE.BoxGeometry(1.4, 0.12, 2.4), [cx, 0.55, cz], [0, 0.3, tilt])); for (const sx of [-1, 1]) T.push(xf(new THREE.BoxGeometry(0.06, 0.4, 2.4), [cx + sx * 0.68, 0.78 + sx * tilt * 0.6, cz], [0, 0.3, tilt]));
+      T.push(xf(new THREE.TorusGeometry(0.5, 0.06, 5, 12), [cx + 0.8, 0.5, cz + 0.9], [0, 0.3 + PI / 2, 0])); T.push(xf(new THREE.TorusGeometry(0.5, 0.06, 5, 12), [cx - 1.6, 0.07, cz - 0.6], [PI / 2, 0, 0]));
+      T.push(xf(new THREE.BoxGeometry(0.08, 0.08, 2.0), [cx, 0.3, cz + 2.0], [0.25, 0.3, 0]));
+    }
+    // a wattle fence round part of the yard
+    if (r() < 0.6) { const sz = r() < 0.5 ? 1 : -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)])); } }
   }
 
   placeChurch(r, brickMat, charMat) {
@@ -745,12 +794,12 @@ export class World {
     const W = 9, L = 20, Hh = 7;
     const C0 = Math.cos(yaw), S0 = Math.sin(yaw);
     let lo = 1e9, hi = -1e9;
-    for (const [lx, lz] of [[-W / 2, -L / 2], [W / 2, -L / 2], [-W / 2, L / 2 + 4.4], [W / 2, L / 2 + 4.4], [0, 0]]) { const h = this.heightAt(x + lx * C0 + lz * S0, z - lx * S0 + lz * C0); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    for (let i = 0; i <= 5; i++) for (let j = 0; j <= 8; j++) { const lx = (i / 5 - 0.5) * (W + 1.6), lz = -L / 2 - 0.8 + (j / 8) * (L + 6); const h = this.heightAt(x + lx * C0 + lz * S0, z - lx * S0 + lz * C0); lo = Math.min(lo, h); hi = Math.max(hi, h); }
     const y = hi + 0.2;
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
     const parts = [];
     const add = (geo) => parts.push(geo);
-    const foot = y - lo + 0.8;
+    const foot = y - lo + 1.4;
     add(xf(new THREE.BoxGeometry(W + 1.4, foot, L + 1.4), [0, -foot / 2 + 0.15, 0]));
     add(xf(new THREE.BoxGeometry(5.4, foot, 5.4), [0, -foot / 2 + 0.15, L / 2 + 2.2]));
     for (const s2 of [-1, 1]) for (let k = 0; k < 6; k++) { add(xf(new THREE.BoxGeometry(0.9, Hh * 0.8, 1.2), [s2 * (W / 2 + 0.6), Hh * 0.4, -L / 2 + 1.5 + k * 3.4])); add(xf(new THREE.BoxGeometry(0.9, 1.4, 1.2), [s2 * (W / 2 + 0.35), Hh * 0.8 + 0.3, -L / 2 + 1.5 + k * 3.4], [0, 0, s2 * 0.5])); }
@@ -759,9 +808,37 @@ export class World {
     // west front with doorway, and the bell tower
     add(xf(new THREE.BoxGeometry(3, Hh, 0.7), [-3, Hh / 2, L / 2])); add(xf(new THREE.BoxGeometry(3, Hh, 0.7), [3, Hh / 2, L / 2])); add(xf(new THREE.BoxGeometry(3, 2.5, 0.7), [0, Hh - 1.25, L / 2]));
     add(xf(new THREE.BoxGeometry(4, 15, 4), [0, 7.5, L / 2 + 2.2])); add(xf(new THREE.ConeGeometry(3.1, 5, 4), [0, 17.5, L / 2 + 2.2], [0, PI / 4, 0]));
+    // before the west door: the village well under its little roof, and a preaching cross on its steps
+    const gyC = (lx, lz) => this.heightAt(x + lx * C0 + lz * S0, z - lx * S0 + lz * C0) - y;
+    { const wx = -6, wz = L / 2 + 9, wy = gyC(wx, wz);
+      parts.push(xf(new THREE.CylinderGeometry(1.0, 1.1, 0.9, 14, 1, true), [wx, wy + 0.45, wz]), xf(new THREE.TorusGeometry(1.02, 0.12, 6, 16), [wx, wy + 0.9, wz], [PI / 2, 0, 0]));
+      parts.push(xf(new THREE.CylinderGeometry(1.15, 1.2, 0.3, 14), [wx, wy - 0.1, wz]));
+      const cx = 6, cz = L / 2 + 10, cy = gyC(cx, cz);
+      for (let k = 0; k < 3; k++) parts.push(xf(new THREE.BoxGeometry(2.4 - k * 0.6, 0.3, 2.4 - k * 0.6), [cx, cy + 0.15 + k * 0.3 - 0.15, cz]));
+      parts.push(xf(new THREE.BoxGeometry(0.3, 3.2, 0.3), [cx, cy + 2.35, cz]), xf(new THREE.BoxGeometry(1.3, 0.28, 0.28), [cx, cy + 3.2, cz]));
+      this.addCollider(x + wx * C0 + wz * S0, z - wx * S0 + wz * C0, 1.2); this.addCollider(x + cx * C0 + cz * S0, z - cx * S0 + cz * C0, 1.0);
+      this.wellTop = [wx, wy, wz]; }
     const m = new THREE.Mesh(merge(parts), brickMat); m.castShadow = m.receiveShadow = true; g.add(m);
     const trusses = [];
-    for (let k = 0; k < 8; k++) { if (r() < 0.35) continue; const b = new THREE.BoxGeometry(W + 1, 0.25, 0.25); xf(b, [0, Hh + 0.3, -L / 2 + 1.5 + k * 2.4], [0, 0, r.range(-0.15, 0.15)]); trusses.push(b); const rf = new THREE.BoxGeometry(0.2, 0.2, 6); xf(rf, [r.range(-3, 3), Hh + 1.6, -L / 2 + 1.5 + k * 2.4], [0.6, 0, 0]); trusses.push(rf); }
+    { const [wx, wy, wz] = this.wellTop;   // the well's roof on two posts, the windlass and a bucket
+      for (const sx of [-1, 1]) trusses.push(xf(new THREE.BoxGeometry(0.14, 2.3, 0.14), [wx + sx * 0.95, wy + 1.15, wz]));
+      trusses.push(xf(new THREE.CylinderGeometry(0.08, 0.08, 2.0, 6), [wx, wy + 1.6, wz], [0, 0, PI / 2]));
+      for (const sz of [-1, 1]) trusses.push(xf(new THREE.BoxGeometry(2.4, 0.06, 1.0), [wx, wy + 2.55, wz + sz * 0.42], [sz * 0.55, 0, 0]));
+      trusses.push(xf(new THREE.CylinderGeometry(0.16, 0.13, 0.3, 8), [wx + 0.3, wy + 1.0, wz])); }
+    const rise = 3.4, slope = Math.atan2(rise, W / 2), rl = Math.hypot(W / 2, rise) + 0.4;
+    trusses.push(xf(new THREE.BoxGeometry(0.3, 0.3, L * 0.55), [0, Hh + rise, -L / 2 + L * 0.3]));                  // what is left of the ridge
+    for (let k = 0; k < 8; k++) {
+      const lz = -L / 2 + 1.5 + k * 2.4;
+      if (r() > 0.35) trusses.push(xf(new THREE.BoxGeometry(W + 1, 0.25, 0.25), [0, Hh + 0.12, lz]));               // tie beam, on the wall tops
+      if (lz < -L / 2 + L * 0.58) for (const sx of [-1, 1]) if (r() > 0.25) trusses.push(xf(new THREE.BoxGeometry(rl, 0.2, 0.2), [sx * W / 4, Hh + rise / 2 + 0.1, lz], [0, 0, -sx * slope]));
+    }
+    // pews in rows, some thrown over; the altar table at the east end
+    for (let k = 0; k < 7; k++) for (const sx of [-1, 1]) {
+      const pz = -L / 2 + 4 + k * 1.9; const over = r() < 0.3;
+      const pew = merge([xf(new THREE.BoxGeometry(3, 0.08, 0.45), [0, 0.45, 0]), xf(new THREE.BoxGeometry(3, 0.55, 0.06), [0, 0.75, -0.22]), xf(new THREE.BoxGeometry(0.08, 0.45, 0.45), [-1.45, 0.22, 0]), xf(new THREE.BoxGeometry(0.08, 0.45, 0.45), [1.45, 0.22, 0])]);
+      trusses.push(xf(pew, [sx * 2.1 + (over ? r.range(-0.4, 0.4) : 0), over ? 0.23 : 0, pz], over ? [-PI / 2 + 0.1, r.range(-0.4, 0.4), 0] : [0, r.range(-0.05, 0.05), 0]));
+    }
+    parts.push(xf(new THREE.BoxGeometry(2.4, 1.05, 1.0), [0, 0.52, -L / 2 + 1.6]));
     const tm = new THREE.Mesh(merge(trusses), charMat); tm.castShadow = true; g.add(tm);
     this.group.add(g);
     const C = Math.cos(yaw), S = Math.sin(yaw);

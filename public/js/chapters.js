@@ -69,7 +69,7 @@ export const CHAPTERS = [
     outro: ['The banners stand over a green field.', 'He did not run. He walked away, toward the mountain.'],
     terrain: { kind: 'field', amp: 7, hill: 34, edge: 40 },
     atmos: A({ skyTop: 0x100608, skyMid: 0x4a1a12, skyBottom: 0x1a0804, sunColor: 0xff3a10, cloud: 0x1a0c0c, cloudLit: 0x8a2810, glow: 0x7a1a08, cover: 0.62, sunDir: [0.2, 0.06, -0.98], sunLight: 0xff7040, sunIntensity: 2.4, hemiSky: 0x6a4a48, hemiGround: 0x1a0c08, hemiIntensity: 0.55, fog: 0x2e1612, fogDensity: 0.011, exposure: 1.05, fillColor: 0x6a5a90, fillIntensity: 0.3 }),
-    props: { deadTrees: 40, rocks: 70, banners: 60, pikes: 140, graves: 40, cannons: 6, wagons: 8 },
+    props: { deadTrees: 40, rocks: 70, banners: 60, pikes: 140, graves: 40, cannons: 6, wagons: 8, fallen: 240, fallenKnights: 8 },
     pool: { shade: 1.0, crawler: 0.6, wretch: 0.4, husk: 0.3, brute: 0.12, wraith: 0.12, herald: 0.04 }, density: 1.15,
     ambient: 'embers', wind: [1.4, 0.2],
     devil: { watch: 6, army: true },

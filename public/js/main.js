@@ -12,6 +12,7 @@ import { Knight, RELICS, HERALDRY } from './knight.js';
 import { STYLES } from './armor.js';
 import { WEAPONS } from './weapons.js';
 import { FINISHES, armorTextures } from './textures.js';
+import { loadArmoury, saveArmoury } from './shop.js';
 import { prewarmDemons } from './demons.js';
 import { Watcher } from './devil.js';
 import { CHAPTERS } from './chapters.js';
@@ -59,11 +60,11 @@ async function boot() {
   app.audio = new AudioEngine(); app.audio.vol = { master: app.settings.vol, music: app.settings.music, sfx: app.settings.sfx };
   app.net = new Net();
   app.input = new Input(canvas);
-  app.input.onLockChange = (l) => { if (app.game && !l && !app.paused && !app.game.cinema.active) $('clickToPlay').hidden = false; if (l) $('clickToPlay').hidden = true; };
+  app.input.onLockChange = (l) => { if (app.game && !l && !app.paused && !app.game.cinema.active && !app.game.shop?.open) $('clickToPlay').hidden = false; if (l) $('clickToPlay').hidden = true; };
   const step = async (frac, msg, fn) => { ui.boot(frac, msg); window.__bootProgress = frac; await new Promise((r) => setTimeout(r, 30)); fn && fn(); };
   ui.boot(0.08, 'Measuring the knight…'); window.__bootProgress = 0.08;
   await Promise.all([loadBody(), loadDemonBodies()]);
-  await step(0.15, 'Hammering the plate…', () => { for (const f of Object.keys(FINISHES)) armorTextures(f, app.engine.q.tex); });
+  await step(0.15, 'Hammering the plate…', () => { for (const f of Object.keys(FINISHES)) if (!FINISHES[f].hidden) armorTextures(f, app.engine.q.tex); });
   await step(0.45, 'Calling up the shadows…', () => prewarmDemons());
   await step(0.6, 'The land dies…', () => buildMenuScene());
   await step(0.95, 'Saying the morning office…');
@@ -190,8 +191,8 @@ function setupMenus() {
   for (const id of ['setVol', 'setMusic', 'setSfx']) $(id).addEventListener('input', () => { app.audio.setVolumes({ master: +$('setVol').value, music: +$('setMusic').value, sfx: +$('setSfx').value }); });
   // loadout options
   fillSelect('loStyle', Object.entries(STYLES).map(([k, s]) => [k, s.name]), app.loadout.style);
-  fillSelect('loFinish', Object.entries(FINISHES).map(([k, f]) => [k, f.name]), app.loadout.finish);
-  fillSelect('loWeapon', Object.entries(WEAPONS).map(([k, w]) => [k, w.name]), app.loadout.weapon);
+  fillSelect('loFinish', Object.entries(FINISHES).filter(([, f]) => !f.hidden).map(([k, f]) => [k, f.name]), app.loadout.finish);
+  fillWeapons();
   fillSelect('loRelic', Object.entries(RELICS).map(([k, r]) => [k, r.name]), app.loadout.relic);
   fillSelect('loHeraldry', Object.entries(HERALDRY).map(([k, h]) => [k, h.name]), app.loadout.heraldry);
   $('loCape').checked = app.loadout.cape; $('loPlume').checked = app.loadout.plume;
@@ -211,7 +212,7 @@ function setupMenus() {
   $('clickToPlay').onclick = () => { app.input.lock(); };
   $('view').addEventListener('click', () => { if (app.game && !app.paused) app.input.lock(); });
   addEventListener('keydown', (e) => {
-    if (e.code === 'Escape' && app.game) { if (app.paused) resume(); else pause(); }
+    if (e.code === 'Escape' && app.game) { if (app.game.shop?.open) { app.game.shop.close(); return; } if (app.paused) resume(); else pause(); }
   });
   // networking: lobby + lifecycle
   app.net.on('k:lobbySelf', (m) => { if (app.lobby?.host) { const p = app.lobby.players.get(m.from); if (p) { p.loadout = m.loadout; p.ready = m.ready; broadcastLobby(); } } });
@@ -259,7 +260,13 @@ function describeLoadout() {
 }
 
 // ---------------------------------------------------------------- lobby
+// only the weapons this knight owns can be taken on the road; more are bought from the sutler
+function fillWeapons() {
+  const a = loadArmoury(); if (!a.owned.includes(app.loadout.weapon)) { a.owned.push(app.loadout.weapon); saveArmoury(a); }
+  fillSelect('loWeapon', Object.entries(WEAPONS).filter(([k]) => a.owned.includes(k)).map(([k, w]) => [k, w.name + (a.up['edge:' + k] ? ' ' + '✦'.repeat(a.up['edge:' + k]) : '')]), app.loadout.weapon);
+}
 function enterLobby(solo = false) {
+  fillWeapons();
   const host = solo || app.net.isHost;
   app.lobby = { solo, host, ready: false, players: new Map(), state: null };
   app.lobby.players.set(solo ? 1 : app.net.id, { id: solo ? 1 : app.net.id, name: app.name, loadout: { ...app.loadout }, ready: true });
