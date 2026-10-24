@@ -256,7 +256,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 // light through the sights. The body model stops at the neck (the helmet replaces it), but every helmet has
 // openings, and without this there was nothing behind them.
 let _headParts = null;
-function knightHead() {
+export function knightHead({ cap = true, skin: skinHex = null } = {}) {
   if (!_headParts) {
     const skin = new THREE.MeshStandardMaterial({ color: 0x6e564a, roughness: 0.66 });   // weathered, and in the helmet's shadow
     const beard = new THREE.MeshStandardMaterial({ color: 0x2e241e, roughness: 0.95 });
@@ -280,9 +280,12 @@ function knightHead() {
       _headParts.push([geo(new THREE.SphereGeometry(0.006, 8, 6), [s2 * 0.03, 0.088, 0.1015]), iris]);
     }
   }
-  const g = new THREE.Group(); for (const [geo, m] of _headParts) { const o = new THREE.Mesh(geo, m); o.castShadow = false; g.add(o); }
+  const lit = skinHex ? new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.6 }) : null;   // out in the open, not in a helmet's shadow
+  const g = new THREE.Group(); _headParts.forEach(([geo, m], i) => { if (!cap && i === 3) return; const o = new THREE.Mesh(geo, lit && i < 3 ? lit : m); o.castShadow = false; g.add(o); });
   return g;
 }
+
+const standY = (w, x, z) => (w.standAt ? w.standAt(x, z) : w.heightAt(x, z));   // altar steps included
 
 export class Knight {
   constructor(scene, quality, loadout, opts = {}) {
@@ -448,7 +451,7 @@ export class Knight {
     this.flinch = Math.max(0, this.flinch - dt * 3);
     if (this.downed) {
       this.downT += dt; this.vel.multiplyScalar(0.8); this.speed = 0;
-      this.pos.y = world.heightAt(this.pos.x, this.pos.z);
+      this.pos.y = standY(world, this.pos.x, this.pos.z);
       return;
     }
     // stamina
@@ -511,7 +514,7 @@ export class Knight {
     }
     this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
     world.collide(this, 0.42);
-    this.pos.y = world.heightAt(this.pos.x, this.pos.z);
+    this.pos.y = standY(world, this.pos.x, this.pos.z);
     this.speed = Math.hypot(this.vel.x, this.vel.z);
     this.sprintW = damp(this.sprintW, input.sprint && this.speed > 5 && !this.action ? 1 : 0, 6, dt);
   }
@@ -606,7 +609,7 @@ export class Knight {
     const want = [], def = [];
     for (let i = 0; i < 2; i++) {
       const lift = Math.max(0, ank[i].y - this.pos.y - 0.06 * s);
-      want[i] = world.heightAt(ank[i].x, ank[i].z) + 0.068 * s + lift;
+      want[i] = standY(world, ank[i].x, ank[i].z) + 0.068 * s + lift;
       def[i] = want[i] - ank[i].y;
     }
     const drop = clamp(Math.min(0, def[0], def[1]), -0.3, 0);
@@ -976,7 +979,7 @@ export class Knight {
     // smooth correction toward the reported position, extrapolated by velocity
     const k = 1 - Math.exp(-12 * dt);
     this.pos.x += (x - this.pos.x) * k + vx * dt * 0.5; this.pos.z += (z - this.pos.z) * k + vz * dt * 0.5;
-    this.pos.y = world ? world.heightAt(this.pos.x, this.pos.z) : y;
+    this.pos.y = world ? standY(world, this.pos.x, this.pos.z) : y;
     if (Math.hypot(x - this.pos.x, z - this.pos.z) > 4) { this.pos.x = x; this.pos.z = z; }
     this.yaw = dampAngle(this.yaw, yaw, 16, dt);
     this.vel.set(vx, 0, vz); this.speed = Math.hypot(vx, vz);

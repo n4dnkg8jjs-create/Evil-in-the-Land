@@ -223,6 +223,22 @@ const RENDER = {
       b.frequency.setValueAtTime(fA[i][0] * sc * 0.9, T0); b.frequency.linearRampToValueAtTime(fA[i][0] * sc * 1.06, T0 + 0.4); b.frequency.linearRampToValueAtTime(fO[i][0] * sc, end);
       const g = ctx.createGain(); g.gain.value = [1.7, 1.0, 0.5, 0.22][i]; ws.connect(b).connect(g).connect(out);
     }
+    // what makes it wrong: a second throat a tritone below, torn by distortion; the whole voice ring-modulated
+    // into something metallic; a thin glassy shriek riding over the top at the peak; a wet gurgle at the end
+    {
+      const v2 = ctx.createOscillator(); v2.type = 'sawtooth'; v2.frequency.setValueAtTime(f0 * 0.707 * 0.8, T0); v2.frequency.exponentialRampToValueAtTime(f0 * 0.707 * peak, T0 + 0.45); v2.frequency.exponentialRampToValueAtTime(f0 * 0.707 * 0.6, end);
+      const j2 = ctx.createOscillator(); j2.type = 'square'; j2.frequency.value = 13 + R() * 9; const jg2 = ctx.createGain(); jg2.gain.value = f0 * 0.06; j2.connect(jg2).connect(v2.frequency); j2.start();
+      const ws2 = ctx.createWaveShaper(); const c2 = new Float32Array(1024); for (let i = 0; i < 1024; i++) { const x = i * 2 / 1024 - 1; c2[i] = Math.tanh(x * 9) * 0.8 + Math.sign(x) * 0.2; } ws2.curve = c2;
+      const lp2 = filt(ctx, 'lowpass', 1100); const g2 = gainEnv(ctx, [[0, 0], [T0 + 0.05, 0], [T0 + 0.25, 0.42], [end - 0.2, 0.35], [end, 0.0001, 'e']]);
+      v2.connect(ws2).connect(lp2).connect(g2).connect(out); v2.start(T0);
+      const ring = ctx.createGain(); ring.gain.value = 0; const rm = ctx.createOscillator(); rm.frequency.value = 55 + R() * 40; rm.connect(ring.gain); rm.start();
+      const rg = ctx.createGain(); rg.gain.value = 0.55; ws.connect(ring).connect(bp(ctx, 1400, 1.2)).connect(rg).connect(out);
+      const gl = ctx.createOscillator(); gl.type = 'triangle'; gl.frequency.setValueAtTime(f0 * 7, T0 + 0.2); gl.frequency.exponentialRampToValueAtTime(f0 * peak * 7.4, T0 + 0.6); gl.frequency.exponentialRampToValueAtTime(f0 * 5.5, end);
+      const gv = ctx.createOscillator(); gv.frequency.value = 7 + R() * 3; const gvg = ctx.createGain(); gvg.gain.value = f0 * 0.25; gv.connect(gvg).connect(gl.frequency); gv.start();
+      const glg = gainEnv(ctx, [[0, 0], [T0 + 0.25, 0], [T0 + 0.55, low ? 0.03 : 0.07], [end - 0.3, 0.04], [end, 0.0001, 'e']]); gl.connect(bp(ctx, f0 * peak * 7, 6)).connect(glg).connect(out); gl.start(T0 + 0.2);
+      const gn = src(ctx, noiseBuf(ctx, end + 0.2, 'pink')); const gam = ctx.createGain(); gam.gain.value = 0; const gsq = ctx.createOscillator(); gsq.type = 'square'; gsq.frequency.value = 21 + R() * 10; const gsg = ctx.createGain(); gsg.gain.value = 0.5; gsq.connect(gsg).connect(gam.gain); gsq.start();
+      const gge = gainEnv(ctx, [[0, 0], [end - dur * 0.35, 0], [end - dur * 0.15, 0.6], [end + 0.1, 0.0001, 'e']]); gn.connect(bp(ctx, 380, 2)).connect(gam).connect(gge).connect(out); gn.start();
+    }
     // breath through the scream, and the ragged gasp before it
     const n = src(ctx, noiseBuf(ctx, end + 0.2, 'pink')); const nb = bp(ctx, low ? 800 : 1300, 0.8); const ng = gainEnv(ctx, [[0, 0], [T0 * 0.5, 0.5], [T0, 0.08], [T0 + 0.1, 0.28], [end, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(trem); n.start();
     return normalize(await ctx.startRendering(), 0.85);

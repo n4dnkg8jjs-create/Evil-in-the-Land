@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { demonTextures, clothTextures } from './textures.js';
 import { clamp, lerp, smooth, TAU } from './util.js';
+import { realHand } from './people.js';
 
 const D2R = Math.PI / 180, PI = Math.PI;
 let DB = null;
@@ -47,14 +48,22 @@ const BUMP = `
 export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eyes = null } = {}) {
   const dt = demonTextures();
   const u = { uDissolve: { value: 0 }, uRim: { value: new THREE.Color(rimHex) }, uGlow: { value: glow }, uHit: { value: 0 }, uTime: { value: 0 }, uSeed: { value: Math.random() * 10 },
+    uWristR: { value: new THREE.Vector3() }, uWristL: { value: new THREE.Vector3() }, uHandR: { value: -9 }, uHandL: { value: -9 },
     uEyeL: { value: new THREE.Vector3(...(eyes ? eyes[0] : [0, -9, 0])) }, uEyeR: { value: new THREE.Vector3(...(eyes ? eyes[1] : [0, -9, 0])) }, uHeadY: { value: eyes ? eyes[2] : 99 } };
   const mat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.5, metalness: 0.0, side: THREE.DoubleSide });
   mat.userData.u = u;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u, { tA: { value: dt.map }, tE: { value: dt.emissiveMap } });
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float region;\nvarying vec3 vDPos; varying vec3 vDN; varying float vReg;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDPos = position; vDN = normal; vReg = region;');
+      .replace('#include <common>', '#include <common>\nattribute float region;\nvarying vec3 vDPos; varying vec3 vDN; varying float vReg;\nuniform vec3 uWristR, uWristL; uniform float uHandR, uHandL;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vDPos = position; vDN = normal; vReg = region;
+        #ifdef DEAD_SKIN
+        // His own hands are folded away into the wrists; real hands are fixed on there instead
+        { float bi = skinIndex.x, bw = skinWeight.x;
+          if (skinWeight.y > bw) { bi = skinIndex.y; bw = skinWeight.y; } if (skinWeight.z > bw) { bi = skinIndex.z; bw = skinWeight.z; } if (skinWeight.w > bw) { bi = skinIndex.w; }
+          if (abs(bi - uHandR) < 0.5) transformed = uWristR; else if (abs(bi - uHandL) < 0.5) transformed = uWristL; }
+        #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vDPos; varying vec3 vDN; varying float vReg;
@@ -78,6 +87,7 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         #endif`)
       .replace('#include <map_fragment>', `
         #ifdef DEAD_SKIN
+          float bleed = 0.0;
           // a corpse's face: waxy grey-white, the blood settled blue-grey under it, veins showing through,
           // bruised hollows round the eyes, the lips dry and dark (no teeth showing, nothing shining)
           float ash = smoothstep(0.3, 0.95, hgt);
@@ -91,14 +101,28 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         // ash-grey where the skin is stretched over bone, near black in the folds
         float ash = smoothstep(0.35, 0.9, hgt);
         diffuseColor.rgb = mix(diffuseColor.rgb * 0.55, diffuseColor.rgb * 2.4 + vec3(0.03, 0.025, 0.02), ash);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.55, 0.42), teeth);
+        // deep black sockets round the burning eyes, and black blood run from them down the face in streaks
+        float dl = length(vDPos - uEyeL), dr2 = length(vDPos - uEyeR);
+        diffuseColor.rgb *= mix(0.12, 1.0, smoothstep(0.03, 0.075, min(dl, dr2)));
+        float bleed = 0.0;
+        for (int e = 0; e < 2; e++) {
+          vec3 E = e == 0 ? uEyeL : uEyeR; vec3 q = vDPos - E;
+          float wob = (dn(vec3(vDPos.y * 18.0, E.x * 9.0, 1.0)) - 0.5) * 0.02;
+          float runLen = 0.16 + 0.12 * dh(E * 3.1);
+          bleed = max(bleed, smoothstep(0.012, 0.0, abs(q.x + wob)) * step(q.y, 0.0) * smoothstep(-runLen, -runLen * 0.5, q.y) * step(-0.06, q.z));
+        }
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.004, 0.004), bleed * 0.92);
+        // teeth: yellowed, broken, each one separate, black gaps between and rotten gums
+        float tooth = smoothstep(0.08, 0.3, abs(fract(vDPos.x * 75.0 + dn(vDPos * 40.0) * 0.6) - 0.5) * 2.0);
+        vec3 tc = mix(vec3(0.03, 0.01, 0.01), vec3(0.34, 0.27, 0.16) * (0.6 + 0.6 * dn(vDPos * 90.0)), 1.0 - tooth);
+        diffuseColor.rgb = mix(diffuseColor.rgb, tc, teeth);
         #endif
         #ifdef DEAD_SKIN
         if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.035, 0.03, 0.032);
         #else
         if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.03, 0.0, 0.0);   // throat and sockets
         #endif`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(clamp(roughness + (0.5 - hgt) * 0.45, 0.25, 0.9), 0.28, teeth);')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(clamp(roughness + (0.5 - hgt) * 0.45, 0.25, 0.9), 0.28, teeth);\n#ifndef DEAD_SKIN\nroughnessFactor = mix(roughnessFactor, 0.12, bleed);\n#endif')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         vec2 dHdxy = vec2(dFdx(hgt), dFdy(hgt)) * 0.007 * (1.0 - teeth) * (gl_FrontFacing ? 1.0 : 0.0);
         normal = bumpN(-vViewPosition, normal, dHdxy, faceDirection);`)
@@ -114,7 +138,7 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);
   };
   if (dead) { mat.defines = { DEAD_SKIN: '' }; mat.roughness = 0.62; }
-  mat.customProgramCacheKey = () => dead ? 'demonSkin-dead-v1' : 'demonSkin-v3';
+  mat.customProgramCacheKey = () => dead ? 'demonSkin-dead-v2' : 'demonSkin-v4';
   return mat;
 }
 // Eyes: blank, white, burning. Shared by every demon.
@@ -249,7 +273,12 @@ export function buildHorror(kind, def) {
     if (real) m.rotation.y = e[0] * 1.5;   // a slight outward turn: eyes that look past you as much as at you
     m.userData.eye = true; B.head.add(m);
   }
-  if (def.dead) {   // where the eyes sit in the mesh's own space, for the bruised sockets in the skin shader
+  if (def.dead) {   // the wrists, in the mesh's bind space, for folding the old hands away
+    mesh.updateMatrixWorld(true); const u = mat.userData.u;
+    u.uWristR.value.copy(B.handR.getWorldPosition(new THREE.Vector3())); u.uWristL.value.copy(B.handL.getWorldPosition(new THREE.Vector3()));
+    u.uHandR.value = K.joints.findIndex((j) => j.name === 'handR'); u.uHandL.value = K.joints.findIndex((j) => j.name === 'handL');
+  }
+  {   // where the eyes sit in the mesh's own space: sockets, and what runs down from them
     mesh.updateMatrixWorld(true); const ey = B.head.children.filter((m) => m.userData.eye).map((m) => m.getWorldPosition(new THREE.Vector3()));
     if (ey.length === 2) { mat.userData.u.uEyeL.value.copy(ey[0]); mat.userData.u.uEyeR.value.copy(ey[1]); }
   }
@@ -318,6 +347,10 @@ export function buildHorror(kind, def) {
   // back to rest: limbs straight, the animation works from here
   for (const b of bones) { b.quaternion.identity(); b.userData.rest = b.position.clone(); }
   if (def.hooded) dressDevil(B, K, def);
+  if (def.dead) {   // long, bony, real hands: pale skin over the knuckles, yellowed nails
+    const skin = new THREE.MeshStandardMaterial({ color: def.skin ?? 0x8e9592, roughness: 0.6 }), nail = new THREE.MeshStandardMaterial({ color: 0x6a6252, roughness: 0.4 });
+    for (const [k, side] of [['R', -1], ['L', 1]]) { const h = realHand(side, { skin, nail, scale: K.height / 1.78 * 0.95, long: 1.55, thin: 0.85, curl: 0.45 }); B['hand' + k].add(h); }
+  }
   mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
   return { mesh, B, mat, wings, height: K.height };
 }

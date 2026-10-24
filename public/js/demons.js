@@ -174,7 +174,7 @@ export class Demon {
     this.buff = Math.max(0, this.buff - dt);
     const def = this.def;
     if (this.state === ST.dead) { this.vel.multiplyScalar(0.9); return; }
-    if (this.state === ST.spawn) { if (this.stateT > 1.3) this.setState(ST.chase); this.pos.y = C.world.heightAt(this.pos.x, this.pos.z); return; }
+    if (this.state === ST.spawn) { if (this.stateT > 1.3) this.setState(ST.chase); this.pos.y = C.world.standAt(this.pos.x, this.pos.z); return; }
     // targeting: prefer knights at prayer, then the nearest
     this.retarget -= dt;
     if (this.retarget <= 0 || !this.target || this.target.downed) {
@@ -206,7 +206,7 @@ export class Demon {
     this.vel.x = damp(this.vel.x, want.x, this.state === ST.stagger ? 2 : 8, dt); this.vel.z = damp(this.vel.z, want.z, this.state === ST.stagger ? 2 : 8, dt);
     this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
     C.world.collide(this, this.radius * 0.8);
-    const gy = C.world.heightAt(this.pos.x, this.pos.z);
+    const gy = C.world.standAt(this.pos.x, this.pos.z);
     if (this.state === ST.leap) this.pos.y = gy + Math.sin(clamp(this.stateT / this.leapT, 0, 1) * Math.PI) * (this.leapH || 1.4);
     else this.pos.y = gy;
   }
@@ -421,7 +421,7 @@ export class Horde {
   spawn(type, x, z, world, id) {
     const d = new Demon(type, id ?? this.nextId++, this.scene);
     d.onDeath = (x) => this.onDeath && this.onDeath(x);
-    d.pos.set(x, world.heightAt(x, z), z); d.yaw = R() * TAU;
+    d.pos.set(x, world.standAt(x, z), z); d.yaw = R() * TAU;
     this.list.push(d); this.byId.set(d.id, d);
     return d;
   }
@@ -445,7 +445,7 @@ export class Horde {
       if (!d) { d = this.spawn(TYPE_LIST[ti], s[2], s[3], world, id); }
       if (d.alive) d.applySnap(s, dt);
       if (d.state === ST.dead && d.alive) d.die(null);
-      d.pos.y = world.heightAt(d.pos.x, d.pos.z);
+      d.pos.y = world.standAt(d.pos.x, d.pos.z);
     }
     for (const d of this.list) if (!seen.has(d.id) && d.alive && d.snapInit) { d.die(null); }
   }

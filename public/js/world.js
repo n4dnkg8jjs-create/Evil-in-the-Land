@@ -163,6 +163,18 @@ export class World {
     // the same two triangles per cell that the ground mesh is drawn with, so feet, houses and props sit exactly on what you see
     return u + v <= 1 ? a + (b - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (b - d) * (1 - v);
   }
+  // where feet stand: the ground, or the steps of an altar (three octagonal steps of 26 cm) on top of it
+  standAt(x, z) {
+    const h = this.heightAt(x, z);
+    if (!this.altars) return h;
+    for (const a of this.altars) {
+      const dx = x - a.x, dz = z - a.z, d2 = dx * dx + dz * dz; if (d2 > 11) continue;
+      const d = Math.sqrt(d2) * (1 - 0.04 * Math.abs(Math.cos(Math.atan2(dz, dx) * 4)));   // near enough an octagon
+      const top = d < 2.05 ? 0.78 : d < 2.65 ? 0.52 : d < 3.27 ? 0.26 : 0;
+      if (top) return Math.max(h, a.y + top);
+    }
+    return h;
+  }
   // ground height anywhere, including the open land beyond the battlefield
   groundAt(x, z) {
     const ax = Math.abs(x), az = Math.abs(z);

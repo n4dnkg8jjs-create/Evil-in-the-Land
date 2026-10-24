@@ -183,6 +183,8 @@ function setupMenus() {
     try { await app.net.connect(); await app.net.join(code, app.name); enterLobby(); } catch (e) { $('joinErr').textContent = e.message; }
   };
   $('btnSolo').onclick = () => { nameNow(); enterLobby(true); };
+  // testing: straight into the battle on the Peak, alone with two companions
+  $('btnTestPeak').onclick = () => { nameNow(); enterLobby(true); $('optAI').value = '2'; $('optChapter').value = String(CHAPTERS.length - 1); $('btnStart').click(); };
   $('btnSettings').onclick = () => openSettings('title');
   $('btnHow').onclick = () => { app.howReturn = 'title'; ui.show('how'); };
   $('howBack').onclick = () => ui.show(app.howReturn || 'title');
@@ -261,6 +263,10 @@ function describeLoadout() {
 
 // ---------------------------------------------------------------- lobby
 // only the weapons this knight owns can be taken on the road; more are bought from the sutler
+function chapterOptions() {
+  const unlocked = Math.max(0, store.get('evil.progress', 0));
+  return CHAPTERS.map((c, i) => [i, `${i + 1}. ${c.title}${c.id === 'peak' ? ' — the battle with the Dragon' : ''}${i > unlocked ? ' (test)' : ''}`]);
+}
 function fillWeapons() {
   const a = loadArmoury(); if (!a.owned.includes(app.loadout.weapon)) { a.owned.push(app.loadout.weapon); saveArmoury(a); }
   fillSelect('loWeapon', Object.entries(WEAPONS).filter(([k]) => a.owned.includes(k)).map(([k, w]) => [k, w.name + (a.up['edge:' + k] ? ' ' + '✦'.repeat(a.up['edge:' + k]) : '')]), app.loadout.weapon);
@@ -271,8 +277,8 @@ function enterLobby(solo = false) {
   app.lobby = { solo, host, ready: false, players: new Map(), state: null };
   app.lobby.players.set(solo ? 1 : app.net.id, { id: solo ? 1 : app.net.id, name: app.name, loadout: { ...app.loadout }, ready: true });
   // chapter select (unlocked chapters)
-  const unlocked = Math.max(0, store.get('evil.progress', 0));
-  fillSelect('optChapter', CHAPTERS.slice(0, unlocked + 1).map((c, i) => [i, `${i + 1}. ${c.title}`]), 0);
+  // testing: every chapter can be chosen, up to the battle on the Peak (the Dragon), whatever has been unlocked
+  fillSelect('optChapter', chapterOptions(), 0);
   $('hostOpts').hidden = !host;
   $('btnStart').hidden = !host; $('btnReady').hidden = host;
   $('lobbyCode').textContent = solo ? '—' : app.net.code;
@@ -357,7 +363,7 @@ app.endGame = (victory, toTitle = false) => {
   app.ui.setHud(false); app.ui.letterbox(false); app.ui.subtitle(''); app.ui.downed(false); app.ui.fade(false); $('clickToPlay').hidden = true;
   buildMenuScene();
   if (toTitle || !app.lobby) { if (app.lobby && !app.lobby.solo) app.net.leave(); app.lobby = null; app.ui.show('title'); }
-  else { app.lobby.ready = false; app.ui.show('lobby'); if (app.lobby.host) { const unlocked = store.get('evil.progress', 0); fillSelect('optChapter', CHAPTERS.slice(0, unlocked + 1).map((c, i) => [i, `${i + 1}. ${c.title}`]), Math.min(unlocked, CHAPTERS.length - 1)); broadcastLobby(); } else pushLobbySelf(); }
+  else { app.lobby.ready = false; app.ui.show('lobby'); if (app.lobby.host) { const unlocked = store.get('evil.progress', 0); fillSelect('optChapter', chapterOptions(), Math.min(unlocked, CHAPTERS.length - 1)); broadcastLobby(); } else pushLobbySelf(); }
 };
 function pause() {
   app.paused = true; app.input.unlock();

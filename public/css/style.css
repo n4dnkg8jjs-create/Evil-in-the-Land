@@ -231,3 +231,4 @@ select option { background: var(--iron-solid); }
 .shop-panel .tag { font-size: 0.75rem; letter-spacing: 0.08em; color: #d8c48a; white-space: nowrap; }
 .btn.small { padding: 4px 12px; font-size: 0.85rem; white-space: nowrap; }
 .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.mbtn.small-test { font-size: 0.8em; opacity: 0.6; }

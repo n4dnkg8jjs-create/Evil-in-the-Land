@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { WEAPONS } from './weapons.js';
 import { clothTextures } from './textures.js';
+import { makePerson } from './people.js';
+import { bodyReady } from './body.js';
 import { TAU } from './util.js';
 
 const KEY = 'evil.armoury';
@@ -51,12 +53,12 @@ function wagonModel() {
     const hn = (x, y) => { const t = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return t - Math.floor(t); };
     const vn = (x, y) => { const i = Math.floor(x), j = Math.floor(y), f = x - i, e = y - j, u = f * f * (3 - 2 * f), v = e * e * (3 - 2 * e); return (hn(i, j) * (1 - u) + hn(i + 1, j) * u) * (1 - v) + (hn(i, j + 1) * (1 - u) + hn(i + 1, j + 1) * u) * v; };
     for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
-      const a = (i / NU - 0.5) * Math.PI * 1.04, zf = j / NV, z = (zf - 0.5) * 3.5;
-      const bow = Math.abs(Math.sin(zf * Math.PI * 4));
-      let r = 0.99 - 0.07 * bow * (0.4 + 0.6 * Math.cos(a) ** 2);
-      const ends = Math.max(0, 1 - Math.min(zf, 1 - zf) * 14);
+      const a = (i / NU - 0.5) * Math.PI * 1.04, zf = j / NV, z = (zf - 0.5) * 3.9;
+      const bz = (z + 1.6) / 0.8, bow = Math.abs(Math.sin(bz * Math.PI)) * (z > -1.6 && z < 1.6 ? 1 : 0);   // 0 over each of the five bows (z = -1.6 … 1.6)
+      let r = 1.0 - 0.05 * bow * (0.4 + 0.6 * Math.cos(a) ** 2);
+      const ends = Math.max(0, (Math.abs(z) - 1.66) / 0.29);   // drawn in only beyond the end bows
       r *= 1 - ends * 0.22;
-      r += (vn(a * 5, zf * 18) - 0.5) * 0.035 + Math.sin(a * 18 + zf * 9) * 0.008 * bow;
+      r += vn(a * 5, zf * 18) * 0.03 + Math.sin(a * 18 + zf * 9) * 0.006 * bow;   // creases only ever push outward, never through a bow
       r += ends * Math.sin(a * 22) * 0.025;
       pos.push(Math.sin(a) * r, 1.05 + Math.cos(a) * r * 1.25, z);
       uv.push(i / NU * 2, zf * 4);
@@ -64,16 +66,17 @@ function wagonModel() {
     for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) { const p0 = j * (NU + 1) + i, p1 = p0 + 1, p2 = p0 + NU + 1, p3 = p2 + 1; idx.push(p0, p2, p1, p1, p2, p3); }
     const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); tg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); tg.setIndex(idx); tg.computeVertexNormals();
     const tilt = new THREE.Mesh(tg, canvasM); tilt.castShadow = tilt.receiveShadow = true; g.add(tilt);
-    for (let k = 0; k <= 4; k++) { const b = add(new THREE.TorusGeometry(0.94, 0.025, 5, 20, Math.PI * 1.04), wood, [0, 1.05, -1.68 + k * 0.84], [0, 0, -Math.PI * 0.02]); b.scale.y = 1.25; }
+    for (let k = 0; k <= 4; k++) { const b = add(new THREE.TorusGeometry(0.92, 0.025, 5, 20, Math.PI * 1.04), wood, [0, 1.05, -1.6 + k * 0.8], [0, 0, -Math.PI * 0.02]); b.scale.y = 1.25; }
   }
+  add(new THREE.BoxGeometry(1.5, 0.1, 0.45), wood, [0, 1.42, 1.62]); add(new THREE.BoxGeometry(1.5, 0.08, 0.3), wood, [0, 1.0, 2.05]);   // the box seat and footboard
   add(new THREE.BoxGeometry(0.1, 0.1, 2.6), wood, [0, 0.62, 2.9], [0.2, 0, 0]);         // the shafts
   // a rack of arms and a hanging lantern at the tailboard
-  add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.0]);
-  for (let i = 0; i < 4; i++) { add(new THREE.BoxGeometry(0.04, 1.0 + i * 0.1, 0.01), steel, [-0.5 + i * 0.33, 1.4 + i * 0.05, -2.02]); add(new THREE.BoxGeometry(0.18, 0.025, 0.03), iron, [-0.5 + i * 0.33, 1.9 + i * 0.05 - 0.05, -2.02]); }
+  add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.18]);
+  for (let i = 0; i < 4; i++) { add(new THREE.BoxGeometry(0.04, 1.0 + i * 0.1, 0.01), steel, [-0.5 + i * 0.33, 1.4 + i * 0.05, -2.2]); add(new THREE.BoxGeometry(0.18, 0.025, 0.03), iron, [-0.5 + i * 0.33, 1.9 + i * 0.05 - 0.05, -2.2]); }
   for (let i = 0; i < 2; i++) add(new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10), wood, [1.4, 0.43, -1.2 + i * 0.7]);
   add(new THREE.BoxGeometry(0.7, 0.55, 0.6), wood, [-1.4, 0.28, -1.5]);
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(4), toneMapped: false }));
-  lamp.position.set(0.75, 2.15, -2.05); g.add(lamp);
+  lamp.position.set(0.75, 2.15, -2.22); g.add(lamp);
   const light = new THREE.PointLight(0xffb060, 6, 9, 2); light.position.copy(lamp.position); g.add(light);
   return g;
 }
@@ -101,20 +104,51 @@ export class Shop {
     const n = world.normalAt(x, z); w.rotation.x = Math.atan2(n.z, n.y) * 0.5; w.rotation.z = -Math.atan2(n.x, n.y) * 0.5;
     this.g.scene.add(w); world.addCollider(x, z, 2.0);
     this.spot = { x, z };
+    // the sutler on his box seat, and Father Bertram standing by the wagon, inside a ring of candles: sanctuary
+    if (bodyReady()) {
+      const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 1.55); w.add(su.root);
+      const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
+      pr.root.position.set(px, world.heightAt(px, pz), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; world.addCollider(px, pz, 0.6);
+      this.people = [su, pr];
+    }
+    this.sanctuary = { x, z, r: 13 };
+    const ring = this.ring = new THREE.Group(); const flame = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(3), toneMapped: false });
+    const wax = new THREE.MeshStandardMaterial({ color: 0xd8ccb0, roughness: 0.6 });
+    for (let k = 0; k < 28; k++) {
+      const a = (k / 28) * Math.PI * 2, cx = x + Math.cos(a) * 13, cz = z + Math.sin(a) * 13; if (!world.inBounds(cx, cz)) continue;
+      const cy = world.heightAt(cx, cz), h = 0.25 + (k % 3) * 0.08;
+      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, h, 8), wax); c.position.set(cx, cy + h / 2, cz); ring.add(c);
+      const f = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), flame); f.scale.y = 1.8; f.position.set(cx, cy + h + 0.04, cz); ring.add(f);
+    }
+    this.g.scene.add(ring);
+    this.g.ui.toast('Sanctuary: inside the ring of candles you are safe. Trade with the sutler, speak to Father Bertram, then ride on.', 6);
+    this.blessed = false;
   }
+  inSanctuary(p, pad = 0) { const S = this.sanctuary; return !!S && Math.hypot(p.x - S.x, p.z - S.z) < S.r + pad; }
+  nearPriest() { if (!this.priest) return false; const m = this.g.me.pos, p = this.priest.root.position; return Math.hypot(m.x - p.x, m.z - p.z) < 3; }
   near() { if (!this.spot) return false; const m = this.g.me.pos; return Math.hypot(m.x - this.spot.x, m.z - this.spot.z) < 4.2; }
 
   update(dt) {
     const g = this.g, I = g.input, me = g.me;
+    // nothing unholy crosses the candles: demons that reach the ring are thrown back from it
+    if (g.isHost && this.sanctuary) for (const d of g.horde.list) {
+      if (!d.alive) continue; const S = this.sanctuary; const dx = d.pos.x - S.x, dz = d.pos.z - S.z, l = Math.hypot(dx, dz);
+      if (l < S.r + 0.5) { const k = (S.r + 0.6) / (l || 1); d.pos.x = S.x + dx * k; d.pos.z = S.z + dz * k; d.flinch = 1; if (Math.random() < dt * 2) g.fx.holyMotes(d.chest, 0.6, 3); }
+    }
+    if (!this.open && this.nearPriest() && I.pressed('KeyF')) {
+      if (!this.blessed) { this.blessed = true; me.hp = me.maxHp; g.dread.level = 0; g.audio.holy?.(me.pos, 0.6); g.fx.holyBurst(me.pos, 2); g.ui.subtitle(['Benedicat te omnipotens Deus. Go with God, my son, and keep close to your brothers.', ''], 5); }
+      else g.ui.subtitle(['I have blessed you already. Go. They are waiting for you out there.', ''], 3.5);
+      return;
+    }
     // the healing draught
     if (this.heal > 0) { const h = Math.min(this.heal, dt * 70 / 3); this.heal -= h; if (!me.downed) me.hp = Math.min(me.maxHp, me.hp + h); }
     if (!this.open && I.pressed('KeyH') && this.a.draughts > 0 && !me.downed && me.hp < me.maxHp && this.heal <= 0) {
       this.a.draughts--; saveArmoury(this.a); this.heal = 70; g.audio.holy?.(me.pos, 0.3); g.fx.holyMotes(me.pos.clone().setY(me.pos.y + 1.2), 0.6, 6); this.showWallet(true);
     }
     if (this.open && (I.pressed('Escape') || I.pressed('KeyF') || (this.spot && !this.near()))) { this.close(); return; }
-    if (!this.open && this.near() && I.pressed('KeyF') && !g.cinema.active) this.show();
+    if (!this.open && this.near() && !this.nearPriest() && I.pressed('KeyF') && !g.cinema.active) this.show();
   }
-  prompt() { return this.near() && !this.open ? '<kbd>F</kbd>Trade with the sutler' : ''; }
+  prompt() { if (this.open) return ''; if (this.nearPriest()) return '<kbd>F</kbd>Ask Father Bertram for his blessing'; return this.near() ? '<kbd>F</kbd>Trade with the sutler' : ''; }
 
   show() {
     this.open = true; this.render(); this.el?.classList.add('show');
@@ -160,5 +194,5 @@ export class Shop {
     g.app.loadout.weapon = key; try { localStorage.setItem('evil.loadout', JSON.stringify(g.app.loadout)); } catch {}
     if (!g.opts.solo) g.net.send('gear', { id: g.meId, weapon: key, maxHp: g.me.maxHp });
   }
-  dispose() { if (this.wagon) { this.wagon.removeFromParent(); this.wagon.traverse((o) => o.geometry?.dispose?.()); this.wagon = null; } this.spot = null; if (this.open) this.close(); }
+  dispose() { if (this.ring) { this.ring.removeFromParent(); this.ring = null; } if (this.priest) { this.priest.root.removeFromParent(); this.priest = null; } this.sanctuary = null; if (this.wagon) { this.wagon.removeFromParent(); this.wagon.traverse((o) => o.geometry?.dispose?.()); this.wagon = null; } this.spot = null; if (this.open) this.close(); }
 }

@@ -23,6 +23,7 @@ export class Terror {
   quiet() {
     const g = this.g, o = g.obj, me = g.me;
     if (!o || o.ph !== 'travel' || g.cinema.active || me.downed || g.boss) return false;
+    if (g.shop?.inSanctuary(me.pos, 15)) return false;
     for (const d of g.horde.list) if (d.alive && d.pos.distanceTo(me.pos) < 22) return false;
     return true;
   }

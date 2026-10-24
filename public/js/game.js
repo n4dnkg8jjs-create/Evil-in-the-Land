@@ -280,7 +280,7 @@ export class Game {
   worldCtx() {
     const w = this.world, self = this;
     return {
-      heightAt: (x, z) => w.heightAt(x, z), collide: (e, r) => w.collide(e, r), wind: w.wind,
+      heightAt: (x, z) => w.standAt(x, z), collide: (e, r) => w.collide(e, r), wind: w.wind,
       canPrayAt(k) { return self.altarFor(k) !== null || self.downedNear(k) !== null; },
     };
   }
@@ -439,6 +439,7 @@ export class Game {
   spawnRoamers() {
     const lead = this.leader(); const ch = CHAPTERS[this.chapterIdx];
     if (!lead || ch.boss) return;
+    if (this.shop?.inSanctuary(lead.pos, 25)) return;   // the road is quiet near the sanctuary
     const nr = this.world.path.nearest(lead.pos.x, lead.pos.z); const p = this.world.path.at(Math.min(1, nr.t + 0.12));
     const n = Math.round((3 + this.chapterIdx * 0.6) * this.partyMul() * this.diff.spawn);
     const types = this.spawnTypes(ch.pool, n);
