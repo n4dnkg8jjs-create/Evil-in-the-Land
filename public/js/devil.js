@@ -68,6 +68,7 @@ export class Watcher {
   // host decides where he appears; clients mirror the state
   hostUpdate(dt, world, knights, phase) {
     this.t += dt;
+    if (this.state === 'stare') return;   // held by a cutscene
     const spots = world.devilSpots; if (!spots.length) return;
     if (this.state === 'hidden') {
       this.cool -= dt; if (this.cool > 0 || phase === 'cinematic') return;
@@ -118,6 +119,7 @@ export class Watcher {
       this.tilt = R() < 0.3 ? (R() < 0.5 ? -1 : 1) * (0.75 + R() * 0.35) : (R() - 0.5) * 0.35;
       this.snap = R() < 0.6;   // most moves are a single sudden snap; the rest a slow, deliberate creep
     }
+    if (this.state === 'stare') { this.headTarget = 0; this.tilt = 0.12; this.snap = false; this.retarget = 1; }
     let hy = this.headTarget, roll = this.tilt || 0;
     if (this.state === 'turn') {
       // the owl-turn: all the way round, in small jerking steps, the head tipping over as it goes

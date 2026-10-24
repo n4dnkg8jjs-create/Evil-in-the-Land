@@ -68,7 +68,8 @@ function wagonModel() {
     const tilt = new THREE.Mesh(tg, canvasM); tilt.castShadow = tilt.receiveShadow = true; g.add(tilt);
     for (let k = 0; k <= 4; k++) { const b = add(new THREE.TorusGeometry(0.92, 0.025, 5, 20, Math.PI * 1.04), wood, [0, 1.05, -1.6 + k * 0.8], [0, 0, -Math.PI * 0.02]); b.scale.y = 1.25; }
   }
-  add(new THREE.BoxGeometry(1.5, 0.1, 0.45), wood, [0, 1.42, 1.62]); add(new THREE.BoxGeometry(1.5, 0.08, 0.3), wood, [0, 1.0, 2.05]);   // the box seat and footboard
+  add(new THREE.BoxGeometry(1.5, 0.1, 0.42), wood, [0, 1.42, 2.12]); add(new THREE.BoxGeometry(1.5, 0.08, 0.34), wood, [0, 0.98, 2.62]);   // the box seat out in front of the tilt, and the footboard
+  for (const s of [-1, 1]) { add(new THREE.BoxGeometry(0.07, 0.42, 0.07), wood, [s * 0.68, 1.18, 2.12]); add(new THREE.BoxGeometry(0.06, 0.06, 0.9), wood, [s * 0.68, 1.0, 2.25]); }
   add(new THREE.BoxGeometry(0.1, 0.1, 2.6), wood, [0, 0.62, 2.9], [0.2, 0, 0]);         // the shafts
   // a rack of arms and a hanging lantern at the tailboard
   add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.18]);
@@ -106,7 +107,7 @@ export class Shop {
     this.spot = { x, z };
     // the sutler on his box seat, and Father Bertram standing by the wagon, inside a ring of candles: sanctuary
     if (bodyReady()) {
-      const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 1.55); w.add(su.root);
+      const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 2.08); w.add(su.root);
       const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
       pr.root.position.set(px, world.heightAt(px, pz), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; world.addCollider(px, pz, 0.6);
       this.people = [su, pr];

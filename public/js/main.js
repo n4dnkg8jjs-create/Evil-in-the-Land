@@ -1,5 +1,6 @@
 // Boot, menus, lobby and the main loop.
 import { loadBody } from './body.js';
+import { loadPeople } from './people.js';
 import { loadDemonBodies } from './horror.js';
 import * as THREE from 'three';
 import { Engine } from './engine.js';
@@ -63,7 +64,7 @@ async function boot() {
   app.input.onLockChange = (l) => { if (app.game && !l && !app.paused && !app.game.cinema.active && !app.game.shop?.open) $('clickToPlay').hidden = false; if (l) $('clickToPlay').hidden = true; };
   const step = async (frac, msg, fn) => { ui.boot(frac, msg); window.__bootProgress = frac; await new Promise((r) => setTimeout(r, 30)); fn && fn(); };
   ui.boot(0.08, 'Measuring the knight…'); window.__bootProgress = 0.08;
-  await Promise.all([loadBody(), loadDemonBodies()]);
+  await Promise.all([loadBody(), loadDemonBodies(), loadPeople()]);
   await step(0.15, 'Hammering the plate…', () => { for (const f of Object.keys(FINISHES)) if (!FINISHES[f].hidden) armorTextures(f, app.engine.q.tex); });
   await step(0.45, 'Calling up the shadows…', () => prewarmDemons());
   await step(0.6, 'The land dies…', () => buildMenuScene());

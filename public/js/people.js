@@ -2,9 +2,8 @@
 // MakeHuman body the knights do (under their clothes), a face (the knights' own head model), real hands, and
 // robes of cloth; and a realistic hand for anyone who needs one, the Devil included.
 import * as THREE from 'three';
-import { Rig } from './rig.js';
+import { Rig, JOINTS } from './rig.js';
 import { dressBody } from './body.js';
-import { knightHead } from './knight.js';
 import { clothTextures } from './textures.js';
 import { lerp } from './util.js';
 
@@ -89,44 +88,115 @@ function robe(rig, mat, { length = 1.25, flare = 0.36, seated = false } = {}) {
 }
 
 // ---------------------------------------------------------------- a person
-// kind: 'sutler' (sits, reins in hand, felt hat and russet cloak) or 'priest' (stands, black cassock, tonsure)
+// The whole body is MakeHuman's (CC0, tools/build_person.py): the face, the hands with every finger, the feet,
+// MakeHuman's eyes with their iris texture. Regions in the mesh say what is skin, hair, brow, shoe, eye, and what
+// the robe covers (a linen shirt and hose).
+let PEOPLE = null;
+const dec = (b64, Type) => { const s = atob(b64); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Type(u.buffer); };
+export async function loadPeople(url = 'models/people.json') {
+  if (PEOPLE) return PEOPLE;
+  try {
+    const j = await (await fetch(url)).json(); const out = {};
+    const map = j.joints.map((n) => JOINTS.indexOf(n));
+    for (const [name, v] of Object.entries(j.variants)) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(dec(v.position, Float32Array), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(dec(v.normal, Int8Array), 3, true));
+      geo.setAttribute('uv', new THREE.BufferAttribute(dec(v.uv, Float32Array), 2));
+      geo.setAttribute('skinIndex', new THREE.BufferAttribute(dec(v.skinIndex, Uint8Array).map((x) => Math.max(0, map[x])), 4));
+      geo.setAttribute('skinWeight', new THREE.BufferAttribute(dec(v.skinWeight, Uint8Array), 4, true));
+      geo.setAttribute('region', new THREE.BufferAttribute(Float32Array.from(dec(v.region, Uint8Array)), 1));
+      geo.setAttribute('hairAmt', new THREE.BufferAttribute(dec(v.hair, Uint8Array), 1, true));
+      geo.setIndex(new THREE.BufferAttribute(dec(v.index, Uint32Array), 1));
+      geo.computeBoundingSphere();
+      out[name] = { geo, bind: v.bind };
+    }
+    PEOPLE = out;
+  } catch (e) { console.warn('people model', e); }
+  return PEOPLE;
+}
+let EYE_TEX = null;
+function personMat(look) {
+  if (!EYE_TEX) { EYE_TEX = new THREE.TextureLoader().load('models/eye.png'); EYE_TEX.colorSpace = THREE.SRGBColorSpace; }
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 });
+  const U = { uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float region;\nattribute float hairAmt;\nflat varying float vReg;\nvarying float vHair;\nvarying vec2 vUv0;\nvarying vec3 vObj;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvReg = region; vHair = hairAmt; vUv0 = uv; vObj = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        flat varying float vReg; varying float vHair; varying vec2 vUv0; varying vec3 vObj;
+        uniform vec3 uSkin, uHair, uCloth, uShoe; uniform sampler2D uEye;
+        float ph(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+        float pn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+          return mix(mix(mix(ph(i), ph(i+vec3(1,0,0)), f.x), mix(ph(i+vec3(0,1,0)), ph(i+vec3(1,1,0)), f.x), f.y),
+                     mix(mix(ph(i+vec3(0,0,1)), ph(i+vec3(1,0,1)), f.x), mix(ph(i+vec3(0,1,1)), ph(i+vec3(1,1,1)), f.x), f.y), f.z); }
+        float isR(float k){ return step(abs(vReg - k), 0.4); }`)
+      .replace('#include <map_fragment>', `
+        float rS0 = isR(0.0), rShoe = isR(3.0), rE = isR(4.0), rC = isR(6.0);
+        // skin: blotchy, ruddier on the cheeks, nose and knuckles, pores
+        float blot = pn(vObj * 38.0) * 0.6 + pn(vObj * 110.0) * 0.4;
+        vec3 skin = uSkin * (0.86 + 0.24 * blot);
+        skin = mix(skin, skin * vec3(1.12, 0.86, 0.82), smoothstep(0.55, 0.85, pn(vObj * 14.0 + 3.0)) * 0.6);
+        // hair: fine strands running down the head
+        float strand = pn(vec3(vObj.x * 420.0, vObj.y * 30.0, vObj.z * 420.0));
+        vec3 hair = uHair * (0.6 + 0.7 * strand);
+        float rH = rS0 * smoothstep(0.15, 0.6, vHair * (0.75 + 0.5 * strand)); float rS = rS0 - rH;
+        vec3 cloth = uCloth * (0.75 + 0.35 * pn(vObj * vec3(160.0, 40.0, 160.0)));
+        vec3 shoe = uShoe * (0.8 + 0.4 * pn(vObj * 60.0));
+        vec3 eye = texture2D(uEye, vUv0).rgb;
+        diffuseColor.rgb = skin * rS + hair * rH + shoe * rShoe + eye * rE + cloth * rC;`)
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = 0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS;')
+      // light through the skin: a warm wrap where it turns from the light
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02);`);
+  };
+  mat.customProgramCacheKey = () => 'personSkin';
+  return mat;
+}
+function personMesh(rig, P, look) {
+  const saved = JOINTS.map((n) => rig.j[n].quaternion.clone()), savedHip = rig.j.hips.position.clone();
+  for (const n of JOINTS) { const q = P.bind[n]; rig.j[n].quaternion.set(q[0], q[1], q[2], q[3]); }
+  rig.j.hips.position.copy(rig.basePos);
+  const root = rig.root; root.position.set(0, 0, 0); root.quaternion.identity(); root.scale.setScalar(1); root.updateMatrixWorld(true);
+  const mesh = new THREE.SkinnedMesh(P.geo, personMat(look));
+  mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false; root.add(mesh); mesh.updateMatrixWorld(true);
+  mesh.bind(new THREE.Skeleton(JOINTS.map((n) => rig.j[n])), mesh.matrixWorld);
+  JOINTS.forEach((n, i) => rig.j[n].quaternion.copy(saved[i])); rig.j.hips.position.copy(savedHip); root.updateMatrixWorld(true);
+  return mesh;
+}
+
+// kind: 'sutler' (sits on the box seat, felt hat and russet cloak) or 'priest' (stands, black cassock, tonsure)
 export function makePerson(kind, quality) {
   const rig = new Rig(1);
   const sutler = kind === 'sutler';
-  dressBody(rig, sutler ? [84, 62, 40] : [30, 26, 26], quality);
-  rig.j.head.add(knightHead({ cap: false, skin: sutler ? 0xb48a70 : 0xc49a82 }));
-  const skin = new THREE.MeshStandardMaterial({ color: sutler ? 0xb48a70 : 0xc49a82, roughness: 0.62 });
+  const P = PEOPLE?.[kind];
+  if (P) personMesh(rig, P, sutler ? { skin: 0xb88a6c, hair: 0x3a2618, cloth: 0x6a5a44 } : { skin: 0xb8968a, hair: 0x8a8580, cloth: 0x1c1a18 });
+  else dressBody(rig, sutler ? [84, 62, 40] : [30, 26, 26], quality);
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a221c, roughness: 0.9 });
-  // hair, hat
-  if (sutler) {
-    const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.105, 0.09, 16), dark); hat.position.set(0, 0.2, 0.0); rig.j.head.add(hat);
-    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.012, 20), dark); brim.position.set(0, 0.16, 0.01); brim.rotation.x = -0.12; rig.j.head.add(brim);
-  } else {
-    // the tonsure: a fringe of grey hair round a bare crown
-    const hair = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.016, 6, 20), new THREE.MeshStandardMaterial({ color: 0x6a6460, roughness: 0.95 }));
-    hair.rotation.x = Math.PI / 2; hair.position.set(0, 0.15, 0.0); rig.j.head.add(hair);
+  if (sutler) {   // a felt hat
+    const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.108, 0.085, 18), dark); hat.position.set(0, 0.15, -0.04); rig.j.head.add(hat);
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.165, 0.01, 22), dark); brim.position.set(0, 0.112, -0.035); brim.rotation.x = -0.12; rig.j.head.add(brim);
   }
   const mat = sutler ? clothMat([110, 70, 44], 'sutlercloak') : clothMat([20, 18, 18], 'cassock');
   robe(rig, mat, { length: sutler ? 0.95 : 1.42, flare: sutler ? 0.3 : 0.4, seated: sutler });
-  // sleeves over the arms
-  for (const k of ['R', 'L']) {
-    const s1 = new THREE.Mesh(lathe([[0.065, 0.02], [0.07, -0.15], [0.068, -0.3]], 14, () => {}), mat); rig.j['uArm' + k].add(s1);
-    const s2 = new THREE.Mesh(lathe([[0.066, 0.02], [0.08, -0.15], [0.095, -0.26]], 14, () => {}), mat); rig.j['fArm' + k].add(s2);
-    rig.j['hand' + k].add(realHand(k === 'L' ? 1 : -1, { skin, curl: sutler ? 0.9 : 0.3 }));
+  for (const k of ['R', 'L']) {   // sleeves over the arms, open at the wrist
+    const s1 = new THREE.Mesh(lathe([[0.07, 0.03], [0.075, -0.15], [0.072, -0.3]], 14, () => {}), mat); rig.j['uArm' + k].add(s1);
+    const s2 = new THREE.Mesh(lathe([[0.07, 0.02], [0.08, -0.12], [0.092, -0.22]], 14, () => {}), mat); rig.j['fArm' + k].add(s2);
   }
   if (!sutler) {   // a wooden cross on a cord
     const cr = new THREE.Group(); const wd = new THREE.MeshStandardMaterial({ color: 0x5a4028, roughness: 0.8 });
     cr.add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.1, 0.01), wd)); const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.018, 0.01), wd); arm.position.y = 0.02; cr.add(arm);
     cr.position.set(0, 0.0, 0.17); rig.j.chest.add(cr);
   }
-  // the pose
   const e = (j, x, y, z) => rig.j[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
-  if (sutler) {   // sitting on the box, elbows on knees, reins in his hands, head a little bowed
-    e('spine', 12, 0, 0); e('chest', 10, 0, 0); e('neck', 6, 0, 0); e('head', 8, -15, 0);
+  if (sutler) {   // sitting on the box, forearms on his knees, head a little bowed
+    e('spine', 12, 0, 0); e('chest', 8, 0, 0); e('neck', 6, 0, 0); e('head', 6, -15, 0);
     for (const [k, s] of [['R', -1], ['L', 1]]) { e('thigh' + k, -88, 0, s * 6); e('shin' + k, 82, 0, 0); e('foot' + k, 6, 0, 0); e('uArm' + k, -38, 0, s * 8); e('fArm' + k, -62, 0, 0); e('hand' + k, 10, 0, 0); }
-  } else {        // standing at prayer, hands together before him
+  } else {        // standing, hands folded before him
     e('head', 6, 0, 0);
-    for (const [k, s] of [['R', -1], ['L', 1]]) { e('uArm' + k, -18, 0, s * 4); e('fArm' + k, -95, s * 30, 0); e('hand' + k, -10, -s * 20, s * 70); }
+    for (const [k, s] of [['R', -1], ['L', 1]]) { e('uArm' + k, -14, 0, s * 4); e('fArm' + k, -85, -s * 32, 0); e('hand' + k, 0, -s * 15, 0); }
   }
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
   return { rig, root: rig.root, hipsY: rig.j.hips.position.y, kind };

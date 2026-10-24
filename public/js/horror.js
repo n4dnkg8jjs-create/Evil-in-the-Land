@@ -362,23 +362,32 @@ export function buildHorror(kind, def) {
 // heavy black wool: a coarse weave in the normal map, a faint sheen at grazing angles, and a slow stir of wind
 // that grows toward the hem (y below the garment's top, in its own space, scaled by uSway)
 let _robeMat = null;
-const ROBE_U = { uTime: { value: 0 } };
+const ROBE_U = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0, 0) } };
 function robeMat(sway, top) {
   const ct = clothTextures([26, 22, 24], false, 256, 'devilwool');
   const m = new THREE.MeshPhysicalMaterial({ color: 0x0d0b0c, map: ct.map, normalMap: ct.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.92, sheen: 0.5, sheenRoughness: 0.75, sheenColor: new THREE.Color(0x2a2630), side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
-    sh.uniforms.uTime = ROBE_U.uTime; sh.uniforms.uSway = { value: sway }; sh.uniforms.uTop = { value: top };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop;')
+    sh.uniforms.uTime = ROBE_U.uTime; sh.uniforms.uWind = ROBE_U.uWind; sh.uniforms.uSway = { value: sway }; sh.uniforms.uTop = { value: top };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop;\nuniform vec2 uWind;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         float hang = max(0.0, uTop - position.y); float w = hang * hang * uSway;
         float ang = atan(position.x, position.z);
         transformed.x += w * (sin(uTime * 0.9 + ang * 2.0 + position.y * 1.3) * 0.6 + sin(uTime * 2.3 + ang * 5.0) * 0.25);
-        transformed.z += w * (cos(uTime * 0.7 + ang * 3.0 + position.y * 1.1) * 0.5);`);
+        transformed.z += w * (cos(uTime * 0.7 + ang * 3.0 + position.y * 1.1) * 0.5);
+        // a hard wind from one side: the cloth streams out, gusting, rippling along its length
+        float gust = 0.75 + 0.25 * sin(uTime * 1.7) + 0.15 * sin(uTime * 4.3 + 1.0);
+        float flap = sin(uTime * 7.0 - hang * 9.0 + ang * 2.0) * 0.18 + sin(uTime * 11.0 - hang * 14.0) * 0.08;
+        float lee = 0.6 + 0.4 * dot(normalize(vec2(position.x, position.z) + 1e-4), normalize(uWind + 1e-4));
+        vec2 wd = uWind * hang * (0.6 + hang * 0.5) * gust * lee;
+        transformed.x += wd.x + flap * uWind.y * hang; transformed.z += wd.y + flap * uWind.x * hang;
+        transformed.y += length(wd) * 0.35 * hang;`);
   };
   m.customProgramCacheKey = () => 'robe' + sway + '_' + top.toFixed(2);
   return m;
 }
 export function tickRobes(time) { ROBE_U.uTime.value = time; }
+// wind on the Devil's robes, in his own frame (+x his left)
+export function robeWind(x, z) { ROBE_U.uWind.value.set(x, z); }
 function lathe(profile, segs, shape) {
   const g = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), segs);
   const p = g.attributes.position, v = new THREE.Vector3();

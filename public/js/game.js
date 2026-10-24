@@ -5,6 +5,7 @@ import { Knight, RELICS } from './knight.js';
 import { World } from './world.js';
 import { Horde, TYPES, ST } from './demons.js';
 import { Watcher, Crevices, Hound, Serpent, Cryptid, Dragon } from './devil.js';
+import { robeWind } from './horror.js';
 import { FX } from './fx.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
@@ -869,11 +870,46 @@ export class Game {
       orbitShot(p, 16, 6, 0.5, 1.4, 6, 2, { text: ch.outro[0] || '' }),
       { dur: 6, from: { pos: V(p.x + 10, p.y + 30, p.z - 30), look: p }, to: { pos: V(p.x + 25, p.y + 55, p.z - 50), look: p }, fov: 48, text: ch.outro[1] || '' },
     ];
-    if (ch.devil?.watch && this.world.devilSpots[0]) {
-      const s = this.world.devilSpots[this.world.devilSpots.length - 1];
-      shots.push({ dur: 4.5, from: { pos: V(s.x + 6, s.y + 3, s.z + 6), look: V(s.x, s.y + 3, s.z) }, to: { pos: V(s.x + 4, s.y + 3.2, s.z + 4.5), look: V(s.x, s.y + 3.3, s.z) }, fov: 30, at: () => { if (this.watcher) { this.watcher.pos.set(s.x, s.y, s.z); this.watcher.state = 'turn'; this.watcher.t = 0; this.watcher.yaw = Math.atan2(4, 4.5); this.audio.whisper(V(s.x, s.y + 3, s.z), 3, 0.6); } } });
+    let undo = null;
+    if (ch.devil?.watch && this.watcher) {
+      // He stares out of the dark at you: on open ground away from the crags, nothing behind him but black, the wind
+      // dragging his robes out sideways
+      let best = null, bs = -1e9;
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2, r = 26 + (k % 3) * 8, x = last.x + Math.cos(a) * r, z = last.z + Math.sin(a) * r;
+        if (!w.inBounds(x, z)) continue;
+        const n = w.normalAt(x, z); let crag = 1e9; for (const d of w.devilSpots) crag = Math.min(crag, Math.hypot(d.x - x, d.z - z));
+        const sc = n.y * 40 + Math.min(crag, 40) + (w.okSpot(x, z, 3, 6) ? 30 : 0);
+        if (sc > bs) { bs = sc; best = { x, z, a }; }
+      }
+      if (best) {
+        const gy = w.heightAt(best.x, best.z), yaw = best.a + Math.PI;   // he faces back toward the altar, and the camera between
+        const fx = Math.sin(yaw), fz = Math.cos(yaw);
+        const cx = best.x + fx * 4.4, cz = best.z + fz * 4.4, cy = Math.max(gy, w.heightAt(cx, cz)) + 2.1;
+        const D = this.watcher, e = this.engine, sc = this.scene;
+        shots.push({ dur: 6.5, from: { pos: V(cx, cy, cz), look: V(best.x, gy + 2.75, best.z) }, to: { pos: V(best.x + fx * 3.2, cy + 0.25, best.z + fz * 3.2), look: V(best.x, gy + 2.6, best.z) }, fov: 34,
+          at: () => {
+            D.pos.set(best.x, gy, best.z); D.yaw = yaw; D.state = 'stare'; D.t = 0; D.fade = 1; D.mesh.visible = true;
+            robeWind(0.45, 0.08);
+            // the dark: black all round, the world lit only by a cold glimmer on his face
+            const saved = { fc: sc.fog.color.clone(), fd: sc.fog.density, sun: e.sun.intensity, hemi: e.hemi.intensity, fill: e.fill.intensity, exp: e.renderer.toneMappingExposure };
+            sc.fog.color.setHex(0x010102); sc.fog.density = 0.1; e.sun.intensity *= 0.15; e.hemi.intensity *= 0.35; e.fill.intensity = 0;
+            const dark = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 10), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, fog: false }));
+            dark.position.set(best.x, gy, best.z); sc.add(dark);
+            const key = new THREE.PointLight(0x9fb0c8, 14, 7, 2);
+            const rim = new THREE.PointLight(0x5a6890, 30, 9, 2); rim.position.set(best.x - fx * 2.5 - fz * 2.2, gy + 4, best.z - fz * 2.5 + fx * 2.2); sc.add(rim); key.position.set(best.x + fx * 2.2 + fz * 1.4, gy + 3.6, best.z + fz * 2.2 - fx * 1.4); sc.add(key);
+            this.audio.whisper(V(best.x, gy + 3, best.z), 3, 0.6); this.audio.setAmbience?.(1.1, 0.2);
+            undo = () => {
+              sc.fog.color.copy(saved.fc); sc.fog.density = saved.fd; e.sun.intensity = saved.sun; e.hemi.intensity = saved.hemi; e.fill.intensity = saved.fill; e.renderer.toneMappingExposure = saved.exp;
+              dark.removeFromParent(); dark.geometry.dispose(); dark.material.dispose(); key.removeFromParent(); rim.removeFromParent();
+              robeWind(0, 0); D.state = 'hidden'; D.mesh.visible = false; D.cool = 20;
+            };
+          } });
+        // compile his shaders now, so the shot does not hitch when he first appears
+        D.mesh.visible = true; D.mesh.position.set(best.x, gy, best.z); try { this.engine.renderer.compile(this.scene, this.engine.camera); } catch {} D.mesh.visible = false;
+      }
     }
-    this.cinema.play(shots, () => { this.ui.fade(true); }, { skippable: false });
+    this.cinema.play(shots, () => { undo?.(); this.ui.fade(true); }, { skippable: false });
   }
   victory() {
     const b = this.boss; this.setMood('triumph', 0);
