@@ -1,0 +1,10 @@
+{
+  "name": "evil-in-the-land",
+  "version": "1.0.0",
+  "description": "Cooperative 16th-century knight action game. Run `node server.js` and open http://localhost:7777",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED",
+  "private": true
+}

@@ -1,0 +1,4 @@
+Put your own music here to replace the built-in score.
+File names: music_explore, music_battle, music_prayer, music_boss, music_victory
+Formats: .ogg .mp3 .wav .m4a .flac
+See README.md for details.

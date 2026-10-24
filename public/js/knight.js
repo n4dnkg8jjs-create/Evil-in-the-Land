@@ -1,0 +1,779 @@
+// The knight: rig + harness + weapon, a procedural locomotion system, the
+// combat state machine, two-bone IK for hands, the kneeling prayer with the
+// sign of the cross, and a verlet-simulated cape.
+import * as THREE from 'three';
+import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER } from './rig.js';
+import { dressRig, STYLES } from './armor.js';
+import { buildWeapon, WEAPONS } from './weapons.js';
+import { MOVESETS, COMMON } from './moves.js';
+import { clothTextures } from './textures.js';
+import { clamp, lerp, damp, dampAngle, angleDiff, smooth, TAU } from './util.js';
+
+const D2R = Math.PI / 180;
+const HIP_O = JOINTS.length * 3;
+const UPPER_IDX = ['spine', 'chest', 'neck', 'head', 'clavR', 'uArmR', 'fArmR', 'handR', 'clavL', 'uArmL', 'fArmL', 'handL'].map((j) => JI[j]);
+const LOWER_IDX = ['hips', ...LOWER].map((j) => JI[j]);
+const ARM_JOINTS = ['uArmR', 'fArmR', 'handR', 'uArmL', 'fArmL', 'handL'];
+
+export const RELICS = {
+  water: { name: 'Holy Water', desc: 'Hurl a blessed vial. Scalds demons and hallows the ground.', cooldown: 16 },
+  reliquary: { name: 'Reliquary of St. Giles', desc: 'Raise the relic: heals nearby knights and drives demons back.', cooldown: 28 },
+  medal: { name: 'Medal of St. Michael', desc: 'For eight seconds your blows burn with holy fire.', cooldown: 26 },
+};
+export const HERALDRY = {
+  gules: { name: 'Gules', cloth: [128, 22, 26], plume: [0.75, 0.1, 0.1] },
+  azure: { name: 'Azure', cloth: [24, 46, 112], plume: [0.15, 0.25, 0.7] },
+  sable: { name: 'Sable', cloth: [22, 20, 22], plume: [0.08, 0.08, 0.08] },
+  vert: { name: 'Vert', cloth: [26, 82, 40], plume: [0.15, 0.5, 0.2] },
+  purpure: { name: 'Purpure', cloth: [78, 26, 92], plume: [0.45, 0.15, 0.55] },
+  argent: { name: 'Argent', cloth: [200, 196, 186], plume: [0.9, 0.88, 0.84] },
+};
+
+// ---------------------------------------------------------------- clip compilation
+const V3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+function compileStance(ms, wkey) {
+  const neutral = { thighR: [4, 0, -4], shinR: [10, 0, 0], footR: [-8, 0, 0], thighL: [-6, 0, 4], shinL: [10, 0, 0], footL: [-4, 0, 0] };
+  const s = ms.stance;
+  const mk = (spec) => ({
+    pose: poseFromDeg(Object.assign({}, neutral, s.body, spec?.body || {})),
+    w: spec?.w || s.w, l: spec?.l || s.l || null,
+    pr: spec?.pr || s.pr || [-0.7, -0.6, -0.4], pl: spec?.pl || s.pl || [0.7, -0.6, -0.4],
+  });
+  return { stance: mk(null), carry: mk(ms.carry), block: mk(ms.block) };
+}
+function compileClip(clip, st) {
+  const base = st.stance;
+  const keys = [{ t: 0 }, ...clip.keys];
+  if (keys[keys.length - 1].t < clip.dur - 1e-4) keys.push({ t: clip.dur });
+  const n = keys.length;
+  const times = new Float32Array(n);
+  const pose = new Float32Array(n * POSE_SIZE), wch = new Float32Array(n * 9), lch = new Float32Array(n * 9), poles = new Float32Array(n * 6);
+  let hasL = !!base.l;
+  let prevW = base.w, prevL = base.l;
+  for (let i = 0; i < n; i++) {
+    const k = keys[i]; times[i] = k.t;
+    const p = Float32Array.from(base.pose);
+    if (k.body) { const o = poseFromDeg(k.body, p); p.set(o); }
+    const h = k.hip || [0, 0, 0]; p[HIP_O] = h[0]; p[HIP_O + 1] = h[1]; p[HIP_O + 2] = h[2];
+    pose.set(p, i * POSE_SIZE);
+    const w = k.w || (i === 0 || i === n - 1 ? base.w : (clip.keepWeapon ? base.w : prevW)); prevW = w;
+    wch.set([...w.p, ...w.d, ...w.u], i * 9);
+    const l = k.l || (i === 0 || i === n - 1 ? base.l : prevL); prevL = l;
+    if (k.l) hasL = true;
+    if (l) lch.set([...l.p, ...l.d, ...l.u], i * 9);
+    else lch.set([0.22, 0.95, 0.05, 0, 1, 0, 0, 0, 1], i * 9);
+    poles.set([...(k.pr || base.pr), ...(k.pl || base.pl)], i * 6);
+  }
+  return { ...clip, n, times, pose, wch, lch, poles, hasL };
+}
+// Cubic Hermite (Catmull-Rom tangents, non-uniform) sampling of a keyed track
+function sampleTrack(times, vals, stride, t, out, off = 0, count = stride) {
+  const n = times.length;
+  if (t <= times[0]) { for (let c = 0; c < count; c++) out[c] = vals[off + c]; return out; }
+  if (t >= times[n - 1]) { for (let c = 0; c < count; c++) out[c] = vals[(n - 1) * stride + off + c]; return out; }
+  let i = 0; while (i < n - 2 && t > times[i + 1]) i++;
+  const t0 = times[i], t1 = times[i + 1], dt = t1 - t0, s = (t - t0) / dt;
+  const s2 = s * s, s3 = s2 * s;
+  const h00 = 2 * s3 - 3 * s2 + 1, h10 = s3 - 2 * s2 + s, h01 = -2 * s3 + 3 * s2, h11 = s3 - s2;
+  for (let c = 0; c < count; c++) {
+    const v0 = vals[i * stride + off + c], v1 = vals[(i + 1) * stride + off + c];
+    const m0 = i > 0 ? (v1 - vals[(i - 1) * stride + off + c]) / (t1 - times[i - 1]) : 0;
+    const m1 = i + 2 < n ? (vals[(i + 2) * stride + off + c] - v0) / (times[i + 2] - t0) : 0;
+    out[c] = h00 * v0 + h10 * dt * m0 + h01 * v1 + h11 * dt * m1;
+  }
+  return out;
+}
+function sampleRange(arr, t0, t1, t) { // root motion speed lookup
+  for (const m of arr || []) if (t >= m[t0] && t < m[t1]) return m;
+  return null;
+}
+
+export { compileStance, compileClip, sampleTrack };
+
+// ---------------------------------------------------------------- cape (verlet cloth)
+class Cape {
+  constructor(color) {
+    this.W = 7; this.H = 11; this.width = 0.46; this.len = 1.12;
+    const N = this.W * this.H;
+    this.p = new Float32Array(N * 3); this.o = new Float32Array(N * 3); this.init = false;
+    this.rest = this.len / (this.H - 1); this.restW = this.width / (this.W - 1);
+    const geo = new THREE.PlaneGeometry(this.width, this.len, this.W - 1, this.H - 1);
+    this.geo = geo;
+    const ct = clothTextures(color, false, 256, 'cape');
+    this.mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: ct.map, normalMap: ct.normalMap, roughness: 0.92, side: THREE.DoubleSide }));
+    this.mesh.castShadow = true; this.mesh.frustumCulled = false;
+    this.anchors = [];
+  }
+  update(dt, rig, wind, groundY) {
+    const chest = rig.j.chest, hips = rig.j.hips;
+    chest.updateWorldMatrix(true, false);
+    const W = this.W, H = this.H, p = this.p, o = this.o;
+    const tmp = new THREE.Vector3();
+    // anchors along the top, tucked under the pauldrons at the back
+    for (let i = 0; i < W; i++) {
+      const u = i / (W - 1) - 0.5;
+      tmp.set(u * this.width * 0.95, 0.15 - Math.abs(u) * 0.04, -0.13 - (0.25 - u * u) * 0.08).applyMatrix4(chest.matrixWorld);
+      if (!this.init) for (let j = 0; j < H; j++) { const k = (j * W + i) * 3; p[k] = tmp.x; p[k + 1] = tmp.y - j * this.rest; p[k + 2] = tmp.z; o[k] = p[k]; o[k + 1] = p[k + 1]; o[k + 2] = p[k + 2]; }
+      const k = i * 3; p[k] = o[k] = tmp.x; p[k + 1] = o[k + 1] = tmp.y; p[k + 2] = o[k + 2] = tmp.z;
+    }
+    this.init = true;
+    dt = Math.min(dt, 1 / 30);
+    const g = -9.8 * dt * dt, damping = 0.985;
+    for (let j = 1; j < H; j++) for (let i = 0; i < W; i++) {
+      const k = (j * W + i) * 3;
+      const vx = (p[k] - o[k]) * damping, vy = (p[k + 1] - o[k + 1]) * damping, vz = (p[k + 2] - o[k + 2]) * damping;
+      o[k] = p[k]; o[k + 1] = p[k + 1]; o[k + 2] = p[k + 2];
+      const flutter = Math.sin(performance.now() * 0.004 + i + j * 0.7) * 0.4 + 0.6;
+      p[k] += vx + wind.x * dt * dt * flutter; p[k + 1] += vy + g; p[k + 2] += vz + wind.z * dt * dt * flutter;
+    }
+    // body collider: a capsule from hips to chest, plus a slab behind the back
+    hips.updateWorldMatrix(true, false);
+    const a = new THREE.Vector3().setFromMatrixPosition(hips.matrixWorld), b = new THREE.Vector3().setFromMatrixPosition(chest.matrixWorld);
+    a.y -= 0.35;
+    const back = new THREE.Vector3(0, 0, -1).applyQuaternion(chest.getWorldQuaternion(new THREE.Quaternion()));
+    const ab = b.clone().sub(a); const abl = ab.lengthSq();
+    for (let it = 0; it < 4; it++) {
+      for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+        const k = (j * W + i) * 3;
+        if (i < W - 1) this.link(k, k + 3, this.restW);
+        if (j < H - 1) this.link(k, k + W * 3, this.rest);
+        if (i < W - 1 && j < H - 1) this.link(k, k + W * 3 + 3, Math.hypot(this.rest, this.restW));
+      }
+      for (let j = 1; j < H; j++) for (let i = 0; i < W; i++) {
+        const k = (j * W + i) * 3;
+        tmp.set(p[k], p[k + 1], p[k + 2]);
+        let t = abl ? clamp(tmp.clone().sub(a).dot(ab) / abl, 0, 1) : 0;
+        const c = a.clone().addScaledVector(ab, t);
+        const d = tmp.clone().sub(c); const r = 0.22; const dl = d.length();
+        if (dl < r && dl > 1e-5) { d.multiplyScalar(r / dl); p[k] = c.x + d.x; p[k + 1] = c.y + d.y; p[k + 2] = c.z + d.z; }
+        if (p[k + 1] < groundY + 0.02) p[k + 1] = groundY + 0.02;
+      }
+      for (let i = 0; i < W; i++) { const k = i * 3; tmp.set(0.0, 0, 0); } // anchors fixed
+    }
+    const pos = this.geo.attributes.position;
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) { const k = (j * W + i) * 3; pos.setXYZ(j * W + i, p[k], p[k + 1], p[k + 2]); }
+    pos.needsUpdate = true; this.geo.computeVertexNormals(); this.geo.computeBoundingSphere();
+  }
+  link(a, b, rest) {
+    const p = this.p;
+    const dx = p[b] - p[a], dy = p[b + 1] - p[a + 1], dz = p[b + 2] - p[a + 2];
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6; const diff = (d - rest) / d;
+    const W3 = this.W * 3;
+    const fa = a < W3 ? 0 : 0.5, fb = b < W3 ? 0 : 0.5; const tot = fa + fb || 1;
+    const ka = fa / tot, kb = fb / tot;
+    p[a] += dx * diff * ka; p[a + 1] += dy * diff * ka; p[a + 2] += dz * diff * ka;
+    p[b] -= dx * diff * kb; p[b + 1] -= dy * diff * kb; p[b + 2] -= dz * diff * kb;
+  }
+}
+
+// ---------------------------------------------------------------- knight
+const _wq = new THREE.Quaternion(), _hq = new THREE.Quaternion(), _rq = new THREE.Quaternion();
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3(), _u = new THREE.Vector3();
+
+export class Knight {
+  constructor(scene, quality, loadout, opts = {}) {
+    this.scene = scene; this.loadout = loadout;
+    this.id = opts.id ?? 0; this.name = opts.name || 'Knight'; this.kind = 'knight';
+    this.style = STYLES[loadout.style]; this.wdef = WEAPONS[loadout.weapon];
+    const her = HERALDRY[loadout.heraldry] || HERALDRY.gules;
+    this.rig = new Rig(opts.scale || 1);
+    this.dress = dressRig(this.rig, loadout.style, loadout.finish, quality, { cloth: her.cloth, plume: loadout.plume === false ? null : her.plume });
+    this.group = this.rig.root;
+    scene.add(this.group);
+    this.weapon = buildWeapon(loadout.weapon, quality);
+    scene.add(this.weapon);
+    if (this.wdef.buckler) { this.buckler = buildWeapon('buckler', quality); this.rig.j.handL.add(this.buckler); this.buckler.position.set(0, -0.06, 0); }
+    if (loadout.cape) { this.cape = new Cape(her.cloth); scene.add(this.cape.mesh); }
+    // compiled animation
+    const ms = MOVESETS[loadout.weapon];
+    this.st = compileStance(ms, loadout.weapon);
+    this.lights = ms.light.map((c) => compileClip(c, this.st));
+    this.heavyClip = compileClip(ms.heavy, this.st);
+    this.common = {}; for (const k in COMMON) this.common[k] = compileClip(COMMON[k], this.st);
+    // state
+    this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.yaw = 0; this.spinYaw = 0;
+    this.maxHp = 150; this.hp = 150; this.stamina = 100; this.maxStamina = 100;
+    this.action = null; this.actT = 0; this.combo = 0; this.queued = null; this.comboReset = 0;
+    this.blocking = false; this.blockT = 0; this.blockW = 0; this.sprintW = 0;
+    this.praying = false; this.kneel = 0; this.prayT = 0;
+    this.downed = false; this.downT = 0; this.reviveProgress = 0; this.dead = false;
+    this.iframes = 0; this.staggerResist = 0;
+    this.relicCd = 0; this.fury = 0;
+    this.phase = 0; this.lastStepPhase = 0; this.speed = 0; this.moveYaw = 0; this.time = Math.random() * 10;
+    this.flinch = 0; this.flinchDir = 0;
+    this.pose = newPose(); this.loco = newPose(); this.from = newPose(); this.tmpPose = newPose();
+    this.wNow = new Float32Array(9); this.lNow = new Float32Array(9); this.polesNow = new Float32Array(6);
+    this.wFrom = new Float32Array(9); this.lFrom = new Float32Array(9); this.hasLNow = !!this.st.stance.l;
+    this.armQ = ARM_JOINTS.map(() => new THREE.Quaternion()); this.armBlend = 0; this.lastIkOff = false;
+    this.events = [];
+    this.hitSet = new Set(); this.activeHits = [];
+    this.headLook = 0; this.lookTarget = null;
+    this.lastHitBy = 0; this.netAct = null;
+    this.tip = new THREE.Vector3(); this.base = new THREE.Vector3(); this.prevTip = new THREE.Vector3(); this.prevBase = new THREE.Vector3();
+    this.group.traverse((o) => { o.userData.knight = this; });
+    if (opts.nameplate) this.makeNameplate(this.name);
+  }
+
+  makeNameplate(name) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 64; const x = c.getContext('2d');
+    x.font = '600 30px "EB Garamond", Georgia, serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.shadowColor = 'rgba(0,0,0,0.9)'; x.shadowBlur = 6; x.fillStyle = '#efe4c8'; x.fillText(name, 128, 32);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false, transparent: true, fog: false }));
+    s.scale.set(1.1, 0.28, 1); s.position.set(0, 2.35, 0); s.renderOrder = 5;
+    this.group.add(s); this.nameplate = s;
+  }
+
+  dispose() {
+    this.scene.remove(this.group); this.scene.remove(this.weapon);
+    if (this.cape) this.scene.remove(this.cape.mesh);
+  }
+
+  get forward() { return _a.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)); }
+  get busy() { return !!this.action; }
+  get canAct() { return !this.downed && !this.praying && this.kneel < 0.05; }
+  get chestPos() { return new THREE.Vector3(this.pos.x, this.pos.y + 1.3, this.pos.z); }
+
+  // ------------------------------------------------ actions
+  startAction(clip, kind, extra = {}) {
+    this.action = clip; this.actKind = kind; this.actT = 0; this.actExtra = extra;
+    this.from.set(this.pose); this.wFrom.set(this.wNow); this.lFrom.set(this.lNow);
+    this.hitSet.clear(); this.sfxIdx = 0; this.aoeDone = new Set(); this.released = false;
+    this.events.push({ type: 'act', kind, clip: clip.name || kind, combo: this.combo });
+  }
+  actionSpeed() {
+    let s = this.wdef.speed * (1 + (this.style.speed - 1) * 0.6);
+    if (this.fury > 0) s *= 1.12;
+    return s;
+  }
+  tryAttack(heavy) {
+    if (!this.canAct || this.downed) return false;
+    if (this.action) {
+      const a = this.action; const t = this.actT;
+      if ((this.actKind === 'light' || this.actKind === 'heavy') && t >= a.chain * 0.85 && t < a.dur) { this.queued = heavy ? 'heavy' : 'light'; return true; }
+      if (this.actKind === 'light' || this.actKind === 'heavy') { if (t > a.chain * 0.5) this.queued = heavy ? 'heavy' : 'light'; }
+      return false;
+    }
+    return this.beginAttack(heavy);
+  }
+  beginAttack(heavy) {
+    const clip = heavy ? this.heavyClip : this.lights[this.combo % this.lights.length];
+    const cost = clip.stamina * this.wdef.stamina;
+    if (this.stamina < cost * 0.5) { this.events.push({ type: 'tired' }); return false; }
+    this.stamina -= cost; this.staminaDelay = 0.9;
+    this.startAction(clip, heavy ? 'heavy' : 'light');
+    if (!heavy) this.combo = (this.combo + 1) % this.lights.length; else this.combo = 0;
+    this.comboReset = 1.2;
+    return true;
+  }
+  tryDodge(dirYaw) {
+    if (!this.canAct) return false;
+    if (this.action && !(this.actT >= (this.action.cancel ?? 99)) && this.actKind !== 'stagger') return false;
+    const c = this.common.roll; if (this.stamina < 10) return false;
+    this.stamina -= c.stamina; this.staminaDelay = 0.8;
+    if (dirYaw !== undefined) this.yaw = dirYaw;
+    this.startAction(c, 'roll'); this.combo = 0;
+    return true;
+  }
+  tryRelic() {
+    if (!this.canAct || this.action || this.relicCd > 0) return false;
+    const r = this.loadout.relic;
+    this.startAction(r === 'water' ? this.common.relicThrow : this.common.relicRaise, 'relic', { relic: r });
+    this.relicCd = RELICS[r].cooldown;
+    return true;
+  }
+  salute() { if (!this.downed) this.startAction(this.common.salute, 'salute'); }
+
+  // Incoming damage. Returns {blocked, parried, dmg}
+  receiveHit(dmg, fromPos, opts = {}) {
+    if (this.downed || this.dead) return { ignored: true };
+    if (this.iframes > 0 || (this.action && this.action.iframes && this.actT > this.action.iframes[0] && this.actT < this.action.iframes[1])) return { dodged: true };
+    const toAttacker = Math.atan2(fromPos.x - this.pos.x, fromPos.z - this.pos.z);
+    const facing = Math.abs(angleDiff(this.yaw, toAttacker)) < 1.2;
+    if (this.blocking && facing && !opts.unblockable) {
+      const parry = this.blockT < 0.22;
+      if (parry) { this.events.push({ type: 'parry' }); return { blocked: true, parried: true, dmg: 0 }; }
+      const cost = dmg * 0.9;
+      if (this.stamina >= cost) { this.stamina -= cost; this.staminaDelay = 1; this.flinch = 0.4; this.events.push({ type: 'block' }); return { blocked: true, dmg: 0 }; }
+      this.stamina = 0; dmg *= 0.6; // guard broken
+      this.events.push({ type: 'guardBreak' });
+    }
+    if (this.praying) dmg *= 0.85;
+    const real = dmg / this.style.armor;
+    this.hp -= real;
+    this.flinch = 1; this.flinchDir = angleDiff(this.yaw, toAttacker);
+    this.events.push({ type: 'hurt', dmg: real });
+    if (this.hp <= 0) { this.goDown(); return { dmg: real, downed: true }; }
+    const big = opts.knockdown || (opts.stagger && dmg > 20);
+    if (opts.knockdown && !this.praying) { this.praying = false; this.startAction(this.common.knockdown, 'knockdown'); }
+    else if (big && !this.praying && (!this.action || this.actKind === 'light')) this.startAction(this.common.stagger, 'stagger');
+    if (opts.knockback) { const dx = this.pos.x - fromPos.x, dz = this.pos.z - fromPos.z; const l = Math.hypot(dx, dz) || 1; this.vel.x += dx / l * opts.knockback; this.vel.z += dz / l * opts.knockback; }
+    return { dmg: real };
+  }
+  goDown() {
+    this.hp = 0; this.downed = true; this.downT = 0; this.reviveProgress = 0; this.praying = false; this.action = null; this.blocking = false;
+    this.events.push({ type: 'downed' });
+  }
+  revive(hpFrac = 0.4) {
+    if (!this.downed) return;
+    this.downed = false; this.hp = this.maxHp * hpFrac; this.iframes = 2; this.reviveProgress = 0;
+    this.startAction(this.common.knockdown, 'getup'); this.actT = 1.1;
+    this.events.push({ type: 'revived' });
+  }
+
+  // ------------------------------------------------ simulation (authority side)
+  // input: { mx, mz (world move vector, length<=1), aimYaw, sprint, block, pray, attack, heavy, dodge, relic }
+  simulate(dt, input, world) {
+    this.time += dt;
+    this.iframes = Math.max(0, this.iframes - dt);
+    this.relicCd = Math.max(0, this.relicCd - dt);
+    this.fury = Math.max(0, this.fury - dt);
+    this.comboReset -= dt; if (this.comboReset < 0 && !this.action) this.combo = 0;
+    this.flinch = Math.max(0, this.flinch - dt * 3);
+    if (this.downed) {
+      this.downT += dt; this.vel.multiplyScalar(0.8); this.speed = 0;
+      this.pos.y = world.heightAt(this.pos.x, this.pos.z);
+      return;
+    }
+    // stamina
+    this.staminaDelay = Math.max(0, (this.staminaDelay || 0) - dt);
+    if (this.staminaDelay <= 0 && !(input.sprint && this.speed > 4)) this.stamina = Math.min(this.maxStamina, this.stamina + dt * 30 * this.style.stamina * (this.blocking ? 0.4 : 1));
+
+    // prayer
+    const wantPray = input.pray && !this.action && world.canPrayAt(this);
+    if (wantPray && !this.praying) { this.praying = true; this.prayT = 0; this.events.push({ type: 'prayStart' }); }
+    if (!input.pray && this.praying) { this.praying = false; this.events.push({ type: 'prayEnd' }); }
+    if (this.praying) this.prayT += dt;
+    this.kneel = clamp(this.kneel + (this.praying ? dt / 0.75 : -dt / 0.5), 0, 1);
+
+    // blocking
+    const wantBlock = input.block && this.canAct && (!this.action || this.actKind === 'stagger');
+    if (wantBlock) { if (!this.blocking) this.blockT = 0; this.blocking = true; this.blockT += dt; }
+    else this.blocking = false;
+
+    // actions
+    if (this.canAct) {
+      if (input.dodge) { const my = Math.hypot(input.mx, input.mz) > 0.2 ? Math.atan2(input.mx, input.mz) : this.yaw; this.tryDodge(my); }
+      if (input.attack) this.tryAttack(false);
+      if (input.heavy) this.tryAttack(true);
+      if (input.relic) this.tryRelic();
+    }
+    if (this.action) this.advanceAction(dt, input, world);
+
+    // locomotion
+    const moving = Math.hypot(input.mx, input.mz);
+    let target = 0; const sp = this.style.speed;
+    if (this.praying || this.kneel > 0.05) target = 0;
+    else if (this.blocking) target = 2.1 * sp;
+    else if (input.sprint && this.stamina > 2) { target = 6.8 * sp; this.stamina -= dt * 9; this.staminaDelay = 0.4; }
+    else target = 4.3 * sp;
+    let ax = input.mx * target, az = input.mz * target;
+    if (moving < 0.05) { ax = 0; az = 0; }
+    if (this.action) {
+      const a = this.action;
+      const m = sampleRange(a.moves, 't0', 't1', this.actT);
+      let rm = m ? m.v : 0;
+      if (this.actKind === 'roll') { ax = 0; az = 0; }
+      else { ax *= 0.15; az *= 0.15; }
+      if (a.legs === 'run') { /* charge */ }
+      const f = this.forward; ax += f.x * rm; az += f.z * rm;
+      this.vel.x = damp(this.vel.x, ax, 20, dt); this.vel.z = damp(this.vel.z, az, 20, dt);
+    } else {
+      const accel = moving > 0.05 ? 10 : 12;
+      this.vel.x = damp(this.vel.x, ax, accel, dt); this.vel.z = damp(this.vel.z, az, accel, dt);
+    }
+    // facing
+    if (!this.action || this.actT < 0.08) {
+      if (this.blocking || (this.action && (this.actKind === 'light' || this.actKind === 'heavy'))) {
+        this.yaw = dampAngle(this.yaw, input.aimYaw ?? this.yaw, this.action ? 30 : 14, dt);
+      } else if (moving > 0.1 && !this.praying) {
+        this.yaw = dampAngle(this.yaw, Math.atan2(input.mx, input.mz), input.sprint ? 7 : 11, dt);
+      }
+    }
+    this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
+    world.collide(this, 0.42);
+    this.pos.y = world.heightAt(this.pos.x, this.pos.z);
+    this.speed = Math.hypot(this.vel.x, this.vel.z);
+    this.sprintW = damp(this.sprintW, input.sprint && this.speed > 5 && !this.action ? 1 : 0, 6, dt);
+  }
+
+  advanceAction(dt, input, world) {
+    const a = this.action;
+    this.actT += dt * (this.actKind === 'roll' || this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
+    // sound cues
+    if (a.sfx) while (this.sfxIdx < a.sfx.length && this.actT >= a.sfx[this.sfxIdx].t) { this.events.push({ type: 'sfx', k: a.sfx[this.sfxIdx].k }); this.sfxIdx++; }
+    if (a.release !== undefined && !this.released && this.actT >= a.release) { this.released = true; this.events.push({ type: 'relic', relic: this.actExtra.relic }); }
+    // ground slams
+    if (a.hits) for (const h of a.hits) if (h.aoe && !this.aoeDone.has(h) && this.actT >= h.aoe.t) { this.aoeDone.add(h); this.events.push({ type: 'slam', r: h.aoe.r, dmg: h.aoe.dmg * this.dmgMul() }); }
+    // combo chaining
+    if (this.queued && this.actT >= a.chain) {
+      const q = this.queued; this.queued = null; this.action = null;
+      if (!this.beginAttack(q === 'heavy')) this.action = null;
+      return;
+    }
+    if (this.actT >= a.dur) { this.action = null; this.queued = null; }
+  }
+  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1); }
+
+  // Active hit windows this frame (attack authority runs collision)
+  currentHits() {
+    const a = this.action; if (!a || !a.hits || this.downed) return null;
+    const out = this.activeHits; out.length = 0;
+    for (const h of a.hits) if (this.actT >= h.t0 && this.actT <= h.t1) out.push(h);
+    return out.length ? out : null;
+  }
+
+  // ------------------------------------------------ remote / AI-driven state from network
+  applyNet(s, dt) {
+    // s: {x,y,z,yaw,vx,vz,a:[kind,clipIdx,t],hp,st,f}
+    this.netTarget = s;
+  }
+
+  // ------------------------------------------------ animation
+  locomotion(dt) {
+    const P = this.loco; P.set(this.st.stance.pose);
+    // blend in carry (sprint) / block stance bodies
+    const sp = this.speed;
+    const run = clamp((sp - 3.0) / 3.5, 0, 1);
+    // movement direction relative to facing
+    let mAng = 0;
+    if (sp > 0.3) mAng = angleDiff(this.yaw, Math.atan2(this.vel.x, this.vel.z));
+    let back = Math.abs(mAng) > 1.9;
+    let legYaw = back ? angleDiff(0, mAng + Math.PI) : mAng;
+    legYaw = clamp(legYaw, -1.25, 1.25);
+    this.moveYaw = damp(this.moveYaw, sp > 0.3 ? legYaw : 0, 8, dt);
+    const stride = lerp(1.35, 2.3, run);
+    const dir = back ? -1 : 1;
+    this.phase = (this.phase + dir * dt * sp / stride + 10) % 1;
+    const amp = clamp(sp / 4.3, 0, 1);
+    const ph = this.phase * TAU;
+    const s = Math.sin(ph), c = Math.cos(ph);
+    const s2 = Math.sin(ph + Math.PI), c2 = Math.cos(ph + Math.PI);
+    const A = lerp(26, 42, run) * amp, B = lerp(38, 85, run) * amp;
+    const leg = (side, ss, cc) => {
+      const t = JI['thigh' + side] * 3, k = JI['shin' + side] * 3, f = JI['foot' + side] * 3;
+      const thigh = -A * ss - run * 8 * amp;
+      const knee = 6 + B * Math.max(0, cc) * (0.4 + 0.6 * Math.max(0, cc)) + 8 * amp * Math.max(0, -ss);
+      P[t] = lerp(P[t], thigh * D2R, amp); P[k] = lerp(P[k], knee * D2R, amp);
+      P[f] = lerp(P[f], (-(thigh + knee) * 0.55 + 12 * Math.max(0, -cc) * run) * D2R, amp);
+    };
+    leg('R', s, c); leg('L', s2, c2);
+    const hips = JI.hips * 3;
+    P[hips + 1] = (this.moveYaw * 0.85 + 5 * s * amp * D2R);
+    P[hips + 2] = 3 * c * amp * D2R;
+    const sp_i = JI.spine * 3, ch = JI.chest * 3;
+    P[sp_i + 1] += -this.moveYaw * 0.5 - 3 * s * amp * D2R;
+    P[ch + 1] += -this.moveYaw * 0.35 - 2 * s * amp * D2R;
+    P[sp_i] += (4 * amp + 8 * run) * D2R;
+    // breathing + idle sway
+    const br = Math.sin(this.time * 1.7);
+    P[ch] += br * 1.2 * D2R; P[JI.head * 3] -= br * 0.6 * D2R;
+    P[HIP_O + 1] = -0.035 * (0.4 + run) * amp * (0.5 + 0.5 * Math.cos(2 * (ph - Math.PI / 2))) - 0.012 * (1 - amp) + br * 0.004 * (1 - amp);
+    P[HIP_O] = Math.sin(this.time * 0.6) * 0.008 * (1 - amp);
+    // footstep events at contact
+    const cyc = this.phase;
+    const crossed = (x) => (this.lastStepPhase < x && cyc >= x) || (this.lastStepPhase > cyc && (x > this.lastStepPhase || x <= cyc) && dir > 0);
+    if (sp > 0.8 && (crossed(0.25) || crossed(0.75))) this.events.push({ type: 'step', run });
+    this.lastStepPhase = cyc;
+    // flinch (additive)
+    if (this.flinch > 0) {
+      const f = this.flinch * this.flinch;
+      P[sp_i] -= 10 * f * D2R; P[ch] -= 8 * f * D2R; P[JI.head * 3] -= 16 * f * D2R;
+      P[ch + 2] += Math.sign(this.flinchDir) * 6 * f * D2R;
+    }
+    // look at
+    P[JI.head * 3 + 1] += this.headLook * 0.6; P[JI.neck * 3 + 1] += this.headLook * 0.4;
+    return P;
+  }
+
+  animate(dt, world) {
+    const P = this.pose;
+    const L = this.locomotion(dt);
+    // stance weapon channels: stance <-> carry (sprint) <-> block
+    const bw = this.blockW = damp(this.blockW, this.blocking ? 1 : 0, 18, dt);
+    const sw = this.sprintW;
+    const S0 = this.st.stance, S1 = this.st.carry, S2 = this.st.block;
+    const W = this.wNow, Lh = this.lNow, PO = this.polesNow;
+    const mixV = (out, off, a, b, c) => { for (let i = 0; i < 3; i++) out[off + i] = a[i] * (1 - sw - bw * (1 - sw)) + b[i] * sw + c[i] * bw * (1 - sw); };
+    const m0 = Math.max(0, 1 - sw - bw * (1 - sw));
+    for (let i = 0; i < 3; i++) {
+      W[i] = S0.w.p[i] * m0 + S1.w.p[i] * sw + S2.w.p[i] * bw * (1 - sw);
+      W[3 + i] = S0.w.d[i] * m0 + S1.w.d[i] * sw + S2.w.d[i] * bw * (1 - sw);
+      W[6 + i] = S0.w.u[i] * m0 + S1.w.u[i] * sw + S2.w.u[i] * bw * (1 - sw);
+      PO[i] = S0.pr[i] * (1 - bw) + S2.pr[i] * bw; PO[3 + i] = S0.pl[i] * (1 - bw) + S2.pl[i] * bw;
+    }
+    let hasL = !!S0.l;
+    if (S0.l) for (let i = 0; i < 3; i++) {
+      Lh[i] = S0.l.p[i] * m0 + (S1.l || S0.l).p[i] * sw + (S2.l || S0.l).p[i] * bw * (1 - sw);
+      Lh[3 + i] = S0.l.d[i] * m0 + (S1.l || S0.l).d[i] * sw + (S2.l || S0.l).d[i] * bw * (1 - sw);
+      Lh[6 + i] = S0.l.u[i] * m0 + (S1.l || S0.l).u[i] * sw + (S2.l || S0.l).u[i] * bw * (1 - sw);
+    }
+    // blend upper body toward carry/block body poses
+    P.set(L);
+    if (sw > 0 || bw > 0) for (const idx of UPPER_IDX) for (let k = 0; k < 3; k++) {
+      const i = idx * 3 + k; P[i] += (S1.pose[i] - S0.pose[i]) * sw + (S2.pose[i] - S0.pose[i]) * bw * (1 - sw);
+    }
+    // weapon-bob with the stride
+    W[1] += P[HIP_O + 1] * 0.6;
+
+    // action
+    let ikOff = false, freeLeft = false, spin = 0;
+    const a = this.action;
+    if (a) {
+      const t = Math.min(this.actT, a.dur);
+      const A = sampleTrack(a.times, a.pose, POSE_SIZE, t, this.tmpPose);
+      const wa = sampleTrack(a.times, a.wch, 9, t, new Float32Array(9));
+      const la = sampleTrack(a.times, a.lch, 9, t, new Float32Array(9));
+      const pa = sampleTrack(a.times, a.poles, 6, t, new Float32Array(6));
+      const bin = 0.1, bout = 0.18;
+      const wIn = smooth(clamp(t / bin, 0, 1)), wOut = 1 - smooth(clamp((t - (a.dur - bout)) / bout, 0, 1));
+      const inBlend = t < bin;
+      const wgt = inBlend ? wIn : wOut;
+      const full = a.fullBody;
+      for (let j = 0; j < JOINTS.length; j++) {
+        const isLower = LOWER_IDX.includes(j);
+        if (isLower && !full) continue;
+        for (let k = 0; k < 3; k++) {
+          const i = j * 3 + k;
+          const baseV = inBlend ? this.from[i] : P[i];
+          let d = A[i] - baseV; if (!inBlend && Math.abs(d) > Math.PI * 1.5) d = angleDiff(baseV, A[i]);
+          P[i] = baseV + d * wgt;
+        }
+      }
+      if (full) for (let k = 0; k < 3; k++) { const i = HIP_O + k; const bv = inBlend ? this.from[i] : P[i]; P[i] = bv + (A[i] - bv) * wgt; }
+      else for (let k = 0; k < 3; k++) P[HIP_O + k] += A[HIP_O + k] * wgt;
+      if (a.legs === 'run') { // charge: keep running legs, override speed visuals
+        this.speed = Math.max(this.speed, 6);
+      }
+      for (let i = 0; i < 9; i++) { const bv = inBlend ? this.wFrom[i] : W[i]; W[i] = bv + (wa[i] - bv) * wgt; }
+      if (a.hasL) { for (let i = 0; i < 9; i++) { const bv = inBlend ? (hasL ? this.lFrom[i] : la[i]) : (hasL ? Lh[i] : la[i]); Lh[i] = bv + (la[i] - bv) * wgt; } hasL = true; }
+      for (let i = 0; i < 6; i++) PO[i] = PO[i] + (pa[i] - PO[i]) * wgt;
+      ikOff = !!a.ikOff; freeLeft = !!a.freeLeft && (!a.release || t > a.release * 0.6);
+      // full turns (±2π) leave the knight facing where he started
+      if (a.spin) for (const s of a.spin) { if (t >= s.t0) spin += s.a * smooth(clamp((t - s.t0) / (s.t1 - s.t0), 0, 1)); }
+    }
+
+    // prayer / kneeling overrides
+    if (this.kneel > 0) this.applyKneel(P, this.kneel);
+    // downed
+    if (this.downed) this.applyDowned(P);
+
+    this.lastIkOff = ikOff;
+    // ---- apply
+    this.rig.applyPose(P);
+    this.group.position.copy(this.pos);
+    this.group.rotation.set(0, this.yaw + spin, 0);
+    this.group.updateMatrixWorld(true);
+    this.renderYaw = this.yaw + spin;
+    const rootQ = _rq.setFromAxisAngle(_a.set(0, 1, 0), this.yaw + spin);
+    const toWorld = (x, y, z, out) => out.set(x, y, z).applyQuaternion(rootQ).add(this.pos);
+    const dirWorld = (x, y, z, out) => out.set(x, y, z).applyQuaternion(rootQ);
+
+    // weapon placement
+    const planted = this.kneel > 0 ? smooth(clamp(this.kneel * 1.6 - 0.3, 0, 1)) : 0;
+    const wp = toWorld(W[0], W[1], W[2], new THREE.Vector3());
+    const wd = dirWorld(W[3], W[4], W[5], new THREE.Vector3()).normalize();
+    const wu = dirWorld(W[6], W[7], W[8], new THREE.Vector3());
+    if (planted > 0) {
+      const pl = this.plantedSpec();
+      const pp = toWorld(...pl.p, new THREE.Vector3()), pd = dirWorld(...pl.d, new THREE.Vector3()).normalize(), pu = dirWorld(...pl.u, new THREE.Vector3());
+      wp.lerp(pp, planted); wd.lerp(pd, planted).normalize(); wu.lerp(pu, planted);
+    }
+    if (this.downed) {
+      // weapon lies beside the fallen knight
+      const ly = new THREE.Vector3(-0.5, 0.05, 0.4); toWorld(ly.x, ly.y, ly.z, wp); dirWorld(0.2, 0, 1, wd).normalize(); dirWorld(0, 1, 0, wu);
+    }
+    // keep the weapon in both hands' reach; the leading hand slides along a haft
+    if (!ikOff && !this.downed && planted < 0.5) {
+      let lgFit = null;
+      if (this.wdef.twoHanded && !freeLeft) {
+        const r = this.wdef.gripRange || [this.wdef.leftGrip, this.wdef.leftGrip];
+        const want = this.rig.chooseGrip('L', wp, wd, this.wdef.leftGrip, r[0], r[1]);
+        this.leftGripS = this.leftGripS === undefined ? want : damp(this.leftGripS, want, 14, dt);
+        lgFit = this.leftGripS;
+      }
+      this.rig.fitWeapon(wp, wd, wu, lgFit);
+    }
+    weaponQuatFrom(wd, wu, _wq);
+    if (!ikOff && !this.downed) {
+      // right hand to the grip (unless the sign of the cross has it)
+      const crossR = this.kneel > 0.6 ? this.crossTarget() : null;
+      const roll = this.wdef.roll || [0, 0];
+      if (crossR) {
+        this.rig.solveArm('R', crossR.wrist, crossR.pole, crossR.q);
+      } else {
+        this.rig.gripArm('R', wp, wd, wu, dirWorld(PO[0], PO[1], PO[2], _c), roll[0] * D2R);
+      }
+      // left hand: on the haft / hilt, or free (buckler, relic)
+      if (this.wdef.twoHanded && !freeLeft) {
+        const lg = this.kneel > 0.3 ? this.plantedSpec().lg : (this.leftGripS ?? this.wdef.leftGrip);
+        const g = _b.copy(wp).addScaledVector(wd, lg);
+        this.rig.gripArm('L', g, wd, wu, dirWorld(PO[3], PO[4], PO[5], _c), roll[1] * D2R);
+      } else if (hasL || freeLeft) {
+        const lp = toWorld(Lh[0], Lh[1], Lh[2], new THREE.Vector3());
+        const ld = dirWorld(Lh[3], Lh[4], Lh[5], new THREE.Vector3()).normalize(); const lu = dirWorld(Lh[6], Lh[7], Lh[8], new THREE.Vector3());
+        if (this.kneel > 0.3 && !this.wdef.twoHanded) { const ps = this.plantedSpec(); toWorld(...ps.lp, lp); }
+        this.rig.gripArm('L', lp, ld, lu, dirWorld(PO[3], PO[4], PO[5], _c), (freeLeft ? 60 : roll[1]) * D2R);
+      }
+    }
+    // smooth arm transitions (IK <-> keyed arms)
+    if (ikOff !== this.prevIkOff) this.armBlend = 0.16;
+    this.prevIkOff = ikOff;
+    if (this.armBlend > 0) {
+      this.armBlend -= dt; const k = 1 - clamp(this.armBlend / 0.16, 0, 1);
+      ARM_JOINTS.forEach((j, i) => { const q = this.rig.j[j].quaternion; q.slerpQuaternions(this.armQ[i], q.clone(), k); });
+    }
+    ARM_JOINTS.forEach((j, i) => this.armQ[i].copy(this.rig.j[j].quaternion));
+    this.dress.updateFollowers();
+    this.group.updateMatrixWorld(true);
+
+    // weapon world transform
+    if (ikOff && !this.downed) {
+      // weapon rides in the right hand
+      const h = this.rig.j.handR; h.updateWorldMatrix(true, false);
+      const hq = h.getWorldQuaternion(new THREE.Quaternion());
+      const hz = new THREE.Vector3(0, 0, 1).applyQuaternion(hq), hy = new THREE.Vector3(0, 1, 0).applyQuaternion(hq);
+      weaponQuatFrom(hz, hy.clone().negate(), _wq);
+      h.localToWorld(wp.set(0, -0.08, 0));
+    }
+    this.weapon.position.copy(wp); this.weapon.quaternion.copy(_wq);
+    this.weapon.updateMatrixWorld(true);
+    // hit segment
+    this.prevTip.copy(this.tip); this.prevBase.copy(this.base);
+    const seg = (a && a.hits && a.hits[0] && a.hits[0].seg) || [this.wdef.hitFrom, this.wdef.hitTo];
+    this.base.copy(wp).addScaledVector(wd, seg[0]); this.tip.copy(wp).addScaledVector(wd, seg[1]);
+    this.weaponDir = wd;
+
+    // cape
+    if (this.cape) this.cape.update(dt, this.rig, world ? world.wind : { x: 1, z: 0 }, this.pos.y);
+  }
+
+  // where the weapon goes while kneeling in prayer
+  plantedSpec() {
+    if (this._planted) return this._planted;
+    const k = this.loadout.weapon;
+    const w = this.wdef;
+    let spec;
+    if (k === 'longsword' || k === 'zweihander') {
+      const len = w.hitTo; const d = [0, -0.95, 0.3]; const dn = Math.hypot(...d); const dd = d.map((x) => x / dn);
+      const tip = [0.0, 0.0, 0.66]; const p = tip.map((x, i) => x - dd[i] * len);
+      spec = { p, d: dd, u: [0, 0, -1], lg: k === 'zweihander' ? 0.16 : -0.06 };
+      spec.rest = p.map((x, i) => x + dd[i] * (k === 'zweihander' ? 0.06 : -0.12));
+    } else if (k === 'mace') {
+      spec = { p: [-0.02, 0.5, 0.5], d: [0, -1, 0.02], u: [0, 0, 1], lg: 0, lp: [0.0, 0.62, 0.48] };
+      spec.rest = [0.0, 0.66, 0.46];
+    } else {
+      const butt = k === 'pike' ? 1.32 : k === 'halberd' ? 0.62 : 0.5;
+      const d = [0.04, 1, 0.02];
+      const base = [0.3, 0.0, 0.32];
+      const p = [base[0] + d[0] * butt, butt, base[2] + d[2] * butt];
+      spec = { p, d, u: [0, 0, 1], lg: 1.0 - butt };
+      spec.rest = null;
+    }
+    this._planted = spec; return spec;
+  }
+
+  // the sign of the cross: forehead, breast, left shoulder, right shoulder
+  crossTarget() {
+    const T = 6.0; const t = this.prayT % T;
+    const head = this.rig.j.head, chest = this.rig.j.chest;
+    const pts = [
+      head.localToWorld(new THREE.Vector3(0, 0.13, 0.19)),
+      chest.localToWorld(new THREE.Vector3(0, -0.02, 0.22)),
+      chest.localToWorld(new THREE.Vector3(0.12, 0.11, 0.17)),
+      chest.localToWorld(new THREE.Vector3(-0.12, 0.11, 0.17)),
+    ];
+    const ps = this.plantedSpec();
+    const rq = _rq.setFromAxisAngle(_a.set(0, 1, 0), this.renderYaw ?? this.yaw);
+    let rest;
+    if (ps.rest) rest = new THREE.Vector3(...ps.rest).applyQuaternion(rq).add(this.pos);
+    else rest = chest.localToWorld(new THREE.Vector3(0.02, -0.06, 0.24)); // hands together at the breast
+    const seq = [[0.0, rest], [0.7, pts[0]], [0.95, pts[0]], [1.45, pts[1]], [1.6, pts[1]], [2.1, pts[2]], [2.25, pts[2]], [2.75, pts[3]], [2.9, pts[3]], [3.5, rest], [T, rest]];
+    if (this.prayT < 0.75) return { wrist: rest, pole: new THREE.Vector3(-0.8, -0.6, -0.2).applyQuaternion(rq), q: null };
+    let i = 0; while (i < seq.length - 2 && t > seq[i + 1][0]) i++;
+    const [t0, p0] = seq[i], [t1, p1] = seq[i + 1];
+    const s = smooth(clamp((t - t0) / (t1 - t0), 0, 1));
+    const p = p0.clone().lerp(p1, s);
+    if (i === 8 && !this._crossed) { this._crossed = true; this.events.push({ type: 'cross' }); }
+    if (i < 3) this._crossed = false;
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(chest.getWorldQuaternion(new THREE.Quaternion()));
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(chest.getWorldQuaternion(new THREE.Quaternion()));
+    const touching = !(t < 0.3 || t > 3.3);
+    const q = touching ? handQuatFrom(up, fwd.clone().negate(), new THREE.Quaternion()) : null;
+    return { wrist: p, pole: new THREE.Vector3(-0.9, -0.5, 0).applyQuaternion(rq), q };
+  }
+
+  applyKneel(P, k) {
+    const K = smooth(k);
+    const target = {
+      hips: [0, 0, 0], spine: [12, 0, 0], chest: [8, 0, 0], neck: [10, 0, 0], head: [24, 0, 0],
+      thighR: [6, 0, -4], shinR: [86, 0, 0], footR: [55, 0, 0],
+      thighL: [-84, 0, 6], shinL: [84, 0, 0], footL: [0, 0, 0],
+    };
+    for (const j in target) { const i = JI[j] * 3; for (let c = 0; c < 3; c++) P[i + c] = lerp(P[i + c], target[j][c] * D2R, K); }
+    // breathing / prayer motion: slight bow on each "Amen"
+    const bow = Math.sin(this.prayT * 1.05) * 0.5 + 0.5;
+    P[JI.head * 3] += bow * 6 * D2R * K; P[JI.chest * 3] += bow * 2 * D2R * K;
+    P[HIP_O] = lerp(P[HIP_O], 0, K); P[HIP_O + 1] = lerp(P[HIP_O + 1], -0.47, K); P[HIP_O + 2] = lerp(P[HIP_O + 2], -0.03, K);
+  }
+
+  applyDowned(P) {
+    const t = this.downT;
+    const target = {
+      hips: [-84, 0, 0], spine: [-4, 0, 6], chest: [-2, 0, 0], neck: [10, 0, 0], head: [16 + Math.sin(t * 0.8) * 6, 20, 0],
+      uArmR: [-14, 0, -46], fArmR: [-30, 0, 0], uArmL: [-30 + Math.sin(t * 0.7) * 20, 0, 50], fArmL: [-50, 0, 0],
+      thighR: [-20, 0, -10], shinR: [30, 0, 0], thighL: [-40, 0, 10], shinL: [60, 0, 0],
+    };
+    const K = smooth(clamp(t / 0.6, 0, 1));
+    for (const j in target) { const i = JI[j] * 3; for (let c = 0; c < 3; c++) P[i + c] = lerp(P[i + c], target[j][c] * D2R, K); }
+    P[HIP_O + 1] = lerp(P[HIP_O + 1], -0.85, K); P[HIP_O + 2] = lerp(P[HIP_O + 2], -0.3, K);
+  }
+
+  // ------------------------------------------------ net
+  netState() {
+    const a = this.action;
+    let aIdx = -1;
+    if (a) aIdx = a === this.heavyClip ? 100 : this.lights.indexOf(a) >= 0 ? this.lights.indexOf(a) : (Object.values(this.common).indexOf(a) + 200);
+    return [
+      +this.pos.x.toFixed(3), +this.pos.y.toFixed(3), +this.pos.z.toFixed(3), +this.yaw.toFixed(3),
+      +this.vel.x.toFixed(2), +this.vel.z.toFixed(2), aIdx, +this.actT.toFixed(3),
+      Math.round(this.hp), Math.round(this.stamina),
+      (this.blocking ? 1 : 0) | (this.praying ? 2 : 0) | (this.downed ? 4 : 0) | (this.sprintW > 0.5 ? 8 : 0) | (this.fury > 0 ? 16 : 0),
+      +this.prayT.toFixed(2), Math.round(this.reviveProgress * 100),
+    ];
+  }
+  clipByIdx(i) {
+    if (i < 0) return null; if (i === 100) return this.heavyClip; if (i < 100) return this.lights[i];
+    return Object.values(this.common)[i - 200] || null;
+  }
+  // Drive a puppet knight from snapshots (remote player / host AI seen by a client)
+  puppet(dt, s, world) {
+    this.time += dt;
+    if (!s) return;
+    const [x, y, z, yaw, vx, vz, aIdx, actT, hp, st, f, prayT, rev] = s;
+    // smooth correction toward the reported position, extrapolated by velocity
+    const k = 1 - Math.exp(-12 * dt);
+    this.pos.x += (x - this.pos.x) * k + vx * dt * 0.5; this.pos.z += (z - this.pos.z) * k + vz * dt * 0.5;
+    this.pos.y = world ? world.heightAt(this.pos.x, this.pos.z) : y;
+    if (Math.hypot(x - this.pos.x, z - this.pos.z) > 4) { this.pos.x = x; this.pos.z = z; }
+    this.yaw = dampAngle(this.yaw, yaw, 16, dt);
+    this.vel.set(vx, 0, vz); this.speed = Math.hypot(vx, vz);
+    this.hp = hp; this.stamina = st;
+    this.blocking = !!(f & 1); this.praying = !!(f & 2); const down = !!(f & 4);
+    if (down && !this.downed) { this.downed = true; this.downT = 0; }
+    if (!down && this.downed) { this.downed = false; }
+    if (this.downed) this.downT += dt;
+    this.sprintW = damp(this.sprintW, f & 8 ? 1 : 0, 6, dt);
+    this.fury = f & 16 ? 1 : 0;
+    if (this.praying) this.prayT = prayT;
+    this.kneel = clamp(this.kneel + (this.praying ? dt / 0.75 : -dt / 0.5), 0, 1);
+    this.reviveProgress = rev / 100;
+    const clip = this.clipByIdx(aIdx);
+    if (clip) {
+      if (this.action !== clip || actT + 0.15 < this.actT) { this.startAction(clip, 'net'); this.events.length = 0; }
+      this.actT = Math.max(this.actT + dt * this.actionSpeed(), actT);
+      if (this.actT > clip.dur) this.action = null;
+      if (clip.sfx) while (this.sfxIdx < clip.sfx.length && this.actT >= clip.sfx[this.sfxIdx].t) { this.events.push({ type: 'sfx', k: clip.sfx[this.sfxIdx].k }); this.sfxIdx++; }
+    } else if (this.action) this.action = null;
+  }
+}
