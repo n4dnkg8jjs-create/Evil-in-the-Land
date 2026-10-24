@@ -193,3 +193,7 @@ select option { background: var(--iron-solid); }
   .cols { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.steps { margin: 0.6rem 0 0.8rem 1.2rem; padding: 0; line-height: 1.55; }
+.steps li { margin: 0.25rem 0; }
+.panel a { color: var(--gold, #c9a45a); }

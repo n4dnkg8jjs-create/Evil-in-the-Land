@@ -68,8 +68,16 @@ async function boot() {
   $('playerName').value = app.name || randomName();
   // without the local server (e.g. opened as a hosted page) only solo play is possible
   app.offline = !(await fetch('health').then((r) => r.ok && r.text()).then((t) => t === 'ok').catch(() => false));
-  if (app.offline) { $('btnHost').hidden = true; $('btnJoin').hidden = true; $('titleErr').textContent = ''; $('offlineNote').hidden = false; }
+  if (app.offline) { $('titleErr').textContent = ''; $('offlineNote').hidden = false; $('joinAddrField').hidden = false; }
   ui.show('title');
+  // links from the start script (?host) or from the web page's Join (?join=CODE) go straight in
+  const q = new URLSearchParams(location.search);
+  if (!app.offline && (q.has('host') || q.has('join'))) {
+    if (q.get('name')) { app.name = q.get('name').slice(0, 18); $('playerName').value = app.name; store.set('evil.name', app.name); }
+    history.replaceState(null, '', location.pathname);
+    if (q.has('join')) { $('joinCode').value = q.get('join').toUpperCase().slice(0, 4); $('btnJoin').click(); $('joinGo').click(); }
+    else $('btnHost').click();
+  }
   requestAnimationFrame(loop);
   // audio may only start after the first gesture
   const wake = () => { app.audio.init(); app.audio.setVolumes(app.audio.vol); if (app.audio.music) { app.audio.music.start(); app.audio.music.setMood('dread'); app.audio.music.setIntensity(0); } removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); };
@@ -140,13 +148,25 @@ function setupMenus() {
   for (const b of document.querySelectorAll('button')) b.addEventListener('click', click);
   $('playerName').addEventListener('change', () => { app.name = $('playerName').value.trim().slice(0, 18) || randomName(); store.set('evil.name', app.name); });
   const nameNow = () => { app.name = $('playerName').value.trim().slice(0, 18) || randomName(); store.set('evil.name', app.name); return app.name; };
-  $('btnHost').onclick = async () => { $('titleErr').textContent = ''; try { await app.net.connect(); await app.net.host(nameNow()); enterLobby(); } catch (e) { $('titleErr').textContent = e.message; } };
+  $('btnHost').onclick = async () => { $('titleErr').textContent = ''; if (app.offline) { nameNow(); ui.show('hostHelp'); return; } try { await app.net.connect(); await app.net.host(nameNow()); enterLobby(); } catch (e) { $('titleErr').textContent = e.message; } };
   $('btnJoin').onclick = () => { nameNow(); $('joinErr').textContent = ''; ui.show('join'); $('joinCode').focus(); };
   $('joinBack').onclick = () => ui.show('title');
+  $('hostBack').onclick = () => ui.show('title');
+  $('hostOpenLocal').onclick = () => { location.href = `http://localhost:7777/?host&name=${encodeURIComponent(app.name)}`; };
+  $('joinAddr').value = store.get('evil.lastHost', '');
+  $('joinAddr').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinCode').focus(); });
   $('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinGo').click(); });
   $('joinGo').onclick = async () => {
     const code = $('joinCode').value.trim().toUpperCase();
     if (code.length !== 4) { $('joinErr').textContent = 'Lobby codes are four letters or numbers.'; return; }
+    if (app.offline) {
+      // the web page can't hold the lobby itself: open the game from the host's PC with the code filled in
+      const m = $('joinAddr').value.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '').match(/^([\w.-]+|\[[0-9a-f:]+\])(?::(\d{1,5}))?$/i);
+      if (!m) { $('joinErr').textContent = 'Type the address shown in the host\'s lobby, like 192.168.1.20:7777.'; $('joinAddr').focus(); return; }
+      store.set('evil.lastHost', $('joinAddr').value.trim());
+      location.href = `http://${m[1]}:${m[2] || 7777}/?join=${code}&name=${encodeURIComponent(app.name)}`;
+      return;
+    }
     try { await app.net.connect(); await app.net.join(code, app.name); enterLobby(); } catch (e) { $('joinErr').textContent = e.message; }
   };
   $('btnSolo').onclick = () => { nameNow(); enterLobby(true); };
@@ -238,7 +258,7 @@ function enterLobby(solo = false) {
   $('btnStart').hidden = !host; $('btnReady').hidden = host;
   $('lobbyCode').textContent = solo ? '—' : app.net.code;
   $('lobbyAddr').textContent = '';
-  if (!solo) fetch('api/info').then((r) => r.json()).then((info) => { $('lobbyAddr').textContent = info.lan.length ? `Friends on your network open http://${info.lan[0]}:${info.port}` : ''; }).catch(() => {});
+  if (!solo) fetch('api/info').then((r) => r.json()).then((info) => { $('lobbyAddr').textContent = info.lan.length ? `Friends join with address ${info.lan[0]}:${info.port} (on the game's web page, or open http://${info.lan[0]}:${info.port})` : ''; }).catch(() => {});
   if (solo) { $('optAI').value = store.get('evil.soloAI', '3'); }
   app.ui.show('lobby');
   if (host) broadcastLobby(); else pushLobbySelf();

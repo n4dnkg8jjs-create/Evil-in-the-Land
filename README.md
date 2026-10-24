@@ -24,14 +24,17 @@ The very first time, the host computer needs internet so the server can download
 
 ## Play with friends
 
-1. One player starts the server and chooses **Host a Lobby**. A four-letter code appears.
-2. Friends on the same Wi-Fi or network open the address shown in the server window and in the lobby, for example `http://192.168.1.20:7777`.
-3. They choose **Join with a Code** and type the code.
-4. Everyone picks a harness and marks themselves ready; the host chooses difficulty and companions, then **Ride Out**.
+The lobby runs on the host's PC. Nobody else installs anything.
+
+1. **The host** downloads this game, installs Node.js, and double-clicks the start script for their system. The game opens in their browser with a lobby already made and shows a four-letter code and an address such as `192.168.1.20:7777`.
+2. **Friends** open the game's web page (or the address itself), choose **Join with a Code**, and type the host's address and the code.
+3. Everyone picks a harness and marks themselves ready; the host chooses difficulty and companions, then **Ride Out**.
+
+On the web page, **Host a Lobby** walks you through the same steps.
 
 Empty places can be filled with companion knights who fight, pray and raise the fallen.
 
-Friends somewhere else need a way to reach your computer. The simplest is a free private network such as Tailscale on every computer, then join using the host's Tailscale address. Forwarding port 7777 on your router also works.
+Friends must be on the same Wi-Fi or network as the host. For friends somewhere else, install a free private network such as Tailscale on every computer and use the host's Tailscale address, or forward port 7777 on the host's router.
 
 If port 7777 is taken, start the server on another one: `PORT=7788 node server.js`. On Windows, use `set PORT=7788` then `node server.js`.
 
