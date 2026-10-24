@@ -12,7 +12,7 @@
 // Hair is many strands: a mane falling to the off side, a forelock, a full tail, feathering at the fetlocks; the
 // coat is a short-haired, faintly dappled sheen with dark points, a white blaze on one horse. The tack is fitted
 // to the body by projecting each strap onto the surface: collar and hames with brass, bridle (crown piece,
-// browband, cheek pieces, noseband), blinkers, the bit and its rings, reins back to the driver, back pad, girth,
+// browband, cheek pieces, noseband), the bit and its rings, reins back to the driver, back pad, girth,
 // breeching and hip strap, traces back to the swingletree.
 //
 // It stands, breathes, shifts its weight, rests a hind hoof, tosses its head, flicks its ears, blinks and swishes
@@ -465,18 +465,18 @@ function buildTack() {
       add(new THREE.TorusGeometry(0.028, 0.007, 6, 14).rotateY(Math.PI / 2).translate(ter.x, ter.y, ter.z), 'brass', 'neck1');
     }
   }
-  // the bridle: crown piece and throatlatch, browband, cheek pieces, noseband, bit and rings, blinkers
+  // the bridle: crown piece and throatlatch, browband, cheek pieces, noseband, bit and rings
   {
     const cr = []; for (let i = 0; i <= 20; i++) { const a = lerp(-1.9, 1.9, i / 20); cr.push(H(0.02 + 0.0 * a, 0.0 + Math.cos(a) * 0.14 - 0.02, Math.sin(a) * 0.1)); }
     add(strapGeo(cr, 0.022, 0.004, 0.005), 'leather', 'head');
-    const tl = []; for (let i = 0; i <= 16; i++) { const a = lerp(-1.5, 1.5, i / 16); tl.push(H(0.1, -0.06 - Math.cos(a) * 0.08, Math.sin(a) * 0.1)); }
+    const tl = []; for (let i = 0; i <= 16; i++) { const a = lerp(-1.5, 1.5, i / 16); tl.push(H(0.04 - Math.cos(a) * 0.02, -0.03 - Math.cos(a) * 0.12, Math.sin(a) * 0.118)); }
     add(strapGeo(tl, 0.016, 0.004, 0.005), 'leather', 'head');
     const bb = []; for (let i = 0; i <= 12; i++) bb.push(H(0.07, 0.1, lerp(-0.08, 0.08, i / 12))); add(strapGeo(bb, 0.02, 0.004), 'leather', 'head');
     add(strapGeo(ring((a) => H(0.42, -0.03 + Math.cos(a) * 0.08, Math.sin(a) * 0.09), 28), 0.024, 0.004, 0.005, true), 'leather', 'head');
     for (const s of [-1, 1]) {
       const ch = []; for (let i = 0; i <= 12; i++) { const t = i / 12; ch.push(H(lerp(0.02, 0.53, t), lerp(0.04, -0.07, t), s * lerp(0.1, 0.07, t))); } add(strapGeo(ch, 0.02, 0.005), 'leather', 'head');
       const bit = H(0.55, -0.075, s * 0.074); add(new THREE.TorusGeometry(0.032, 0.006, 8, 20).rotateY(Math.PI / 2).translate(bit[0] + s * 0.004, bit[1], bit[2]), 'steel', 'head');
-      const bl = H(0.15, 0.06, s * 0.14); const bg = new THREE.SphereGeometry(0.075, 14, 8, -Math.PI * 0.3, Math.PI * 0.6, Math.PI * 0.32, Math.PI * 0.36); bg.rotateY(s > 0 ? Math.PI / 2 : -Math.PI / 2); bg.translate(bl[0] - s * 0.06, bl[1], bl[2]); add(bg, 'leather', 'head');
+      // (no blinkers: from the side they read as a black patch beside the eye)
       add(new THREE.SphereGeometry(0.012, 8, 6).translate(...H(0.07, 0.1, s * 0.085)), 'brass', 'head');   // rosettes on the browband
     }
     const mo = H(0.55, -0.075, 0); add(new THREE.CylinderGeometry(0.0065, 0.0065, 0.15, 8).rotateZ(Math.PI / 2).translate(mo[0], mo[1], mo[2]), 'steel', 'head');
