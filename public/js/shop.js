@@ -108,7 +108,15 @@ export class Shop {
     // beside the road, just ahead of where the company starts
     const sp = world.startPos, p = world.path.at(0.04), q = world.path.at(0.05);
     let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
-    let x = p.x + nx * 7, z = p.z + nz * 7; if (!world.inBounds(x, z)) { x = p.x - nx * 7; z = p.z - nz * 7; }
+    // on level ground beside the road (in a gorge that may be right at the track's edge), never up a slope
+    const py = world.heightAt(p.x, p.z); let x = p.x + nx * 3, z = p.z + nz * 3;
+    search: for (const off of [7, 6, 5, 4, 3]) for (const sd of [1, -1]) {
+      const cx = p.x + nx * off * sd, cz = p.z + nz * off * sd; if (!world.inBounds(cx, cz)) continue;
+      let ok = Math.abs(world.heightAt(cx, cz) - py) < 0.8;
+      const fl = Math.hypot(q.x - p.x, q.z - p.z) || 1, fx = (q.x - p.x) / fl, fz = (q.z - p.z) / fl;
+      for (const [a, b] of [[2, 0], [-2, 0], [0, 2.5], [0, -2.5], [0, 5]]) { const qx = cx + nx * a + fx * b, qz = cz + nz * a + fz * b; if (Math.abs(world.heightAt(qx, qz) - py) > 0.9) ok = false; }
+      if (ok) { x = cx; z = cz; break search; }
+    }
     const w = this.wagon = wagonModel(); w.position.set(x, world.heightAt(x, z), z); w.rotation.y = Math.atan2(q.x - p.x, q.z - p.z) + 0.3;
     const n = world.normalAt(x, z); w.rotation.x = Math.atan2(n.z, n.y) * 0.5; w.rotation.z = -Math.atan2(n.x, n.y) * 0.5;
     this.g.scene.add(w); this.cols = [world.addCollider(x, z, 2.0), world.addCollider(x + Math.sin(w.rotation.y) * 4.2, z + Math.cos(w.rotation.y) * 4.2, 1.1)];

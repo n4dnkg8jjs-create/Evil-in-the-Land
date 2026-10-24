@@ -122,8 +122,8 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         float dl = length(vDPos - uEyeL), dr2 = length(vDPos - uEyeR);
         diffuseColor.rgb *= mix(0.12, 1.0, smoothstep(0.03, 0.075, min(dl, dr2)));
         // the lids raw and red round the staring eyes, wet with it
-        float sockRing = smoothstep(0.026, 0.036, min(dl, dr2)) * (1.0 - smoothstep(0.04, 0.07, min(dl, dr2)));
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.015, 0.012), sockRing * 0.8);
+        float sockRing = smoothstep(0.026, 0.032, min(dl, dr2)) * (1.0 - smoothstep(0.036, 0.05, min(dl, dr2)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.14, 0.008, 0.008), sockRing * 0.55);
         float bleed = 0.0;
         for (int e = 0; e < 2; e++) {
           vec3 E = e == 0 ? uEyeL : uEyeR; vec3 q = vDPos - E;

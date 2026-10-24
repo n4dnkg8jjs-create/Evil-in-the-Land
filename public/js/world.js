@@ -1231,23 +1231,6 @@ export class World {
       const s = r.range(2.5, 6.5); put({ x, y: this.heightAt(x, z) - s * 0.2, z, s, sy: s * r.range(1.1, 2.4), ry: r() * TAU, rx: r.range(-0.15, 0.15), rz: r.range(-0.15, 0.15) });
     }
     geos.forEach((g, i) => this.instanced(g, rockM, lists[i]));
-    // the cliff faces themselves: fractured slabs of the beds, set into the walls row above row, so the gorge is
-    // walled in broken rock rather than smooth ground
-    { const clad = []; for (let v = 0; v < 5; v++) clad.push(jaggedRock(800 + v, 0, 1)); const cl = clad.map(() => []);
-      for (let t = 0.0; t < 1; t += 0.006) {
-        const F = frame(t); const ls = ledgeSide(t);
-        for (const side of [-1, 1]) {
-          for (let row = 0; row < 4; row++) {
-            if (r() < 0.25) continue;
-            const d = half(t) + 0.6 + row * 2.6 + r.range(-0.4, 0.6) + (ls === side ? 3 : 0);
-            const x = F.p.x + F.nx * side * d + F.tx * r.range(-1.5, 1.5), z = F.p.z + F.nz * side * d + F.tz * r.range(-1.5, 1.5);
-            if (!this.inBounds(x, z) || nearCrev(x, z) || nearAltar(x, z, 10) || this.inLot(x, z, 0.5) || this.path.nearest(x, z).d < half(t) - 0.2) continue;
-            const s = r.range(1.8, 3.4), yaw = Math.atan2(F.nx * side, F.nz * side);
-            cl[r.int(0, 4)].push({ x, y: this.heightAt(x, z) - s * 0.55, z, s, sy: s * r.range(0.45, 0.9), ry: yaw + r.range(-0.5, 0.5), rx: r.range(-0.25, 0.25), rz: r.range(-0.25, 0.25) });
-          }
-        }
-      }
-      clad.forEach((g, i) => this.instanced(g, rockM, cl[i])); }
 
     // ---- the icefall: a frozen waterfall hanging down the gorge wall into a frozen pool
     {
