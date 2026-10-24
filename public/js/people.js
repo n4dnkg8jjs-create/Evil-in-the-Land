@@ -9,6 +9,7 @@ import { lerp } from './util.js';
 import { Cloth } from './cloth.js';
 
 const D2R = Math.PI / 180;
+const smoothstep01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
 
 // ---------------------------------------------------------------- hands
 // A hand hanging from the wrist (local -y), palm toward the body (-x for the left hand, +x for the right), thumb forward
@@ -292,10 +293,46 @@ export function makePerson(kind, quality) {
     for (const [k, s] of [['R', -1], ['L', 1]]) { e('uArm' + k, -14, 0, s * 4); e('fArm' + k, -85, -s * 32, 0); e('hand' + k, 0, -s * 15, 0); }
   }
   // alive: he breathes, shifts his weight, and turns his head to watch whoever comes near
-  const base = {}; for (const n of ['spine', 'chest', 'neck', 'head', 'hips']) base[n] = rig.j[n].rotation.clone();
-  let t0 = Math.random() * 10, look = 0;
+  const base = {}; for (const n of ['spine', 'chest', 'neck', 'head', 'hips', 'uArmR', 'fArmR', 'handR', 'uArmL', 'fArmL', 'handL', 'thighR', 'shinR', 'footR', 'thighL', 'shinL', 'footL']) base[n] = rig.j[n].rotation.clone();
+  let t0 = Math.random() * 10, look = 0, act = null;
+  const setE = (j, x, y, z) => rig.j[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
+  const blendE = (j, x, y, z, w) => { const b = base[j]; rig.j[j].rotation.set(lerp(b.x, x * D2R, w), lerp(b.y, y * D2R, w), lerp(b.z, z * D2R, w), 'YXZ'); };
+  // the blessing: he raises his right hand and makes the sign of the cross over the knight, head to breast, shoulder to shoulder
+  const bless = () => { act = { kind: 'bless', t: 0 }; };
+  // walking to a point (world space), then whatever comes next
+  const walkTo = (target, done, ground) => { act = { kind: 'walk', target: target.clone(), done, ground, t: 0 }; };
+  // sat down on a bench: the sutler's pose
+  const sit = () => {
+    act = null;
+    setE('spine', 4, 0, 0); setE('chest', 6, 0, 0); setE('neck', 10, 0, 0); setE('head', -4, 0, 0); setE('hips', 0, 0, 0);
+    for (const [k, s] of [['R', -1], ['L', 1]]) { setE('thigh' + k, -88, 0, s * 6); setE('shin' + k, 84, 0, 0); setE('foot' + k, 6, 0, 0); setE('uArm' + k, -30, 0, s * 8); setE('fArm' + k, -70, -s * 25, 0); setE('hand' + k, 0, 0, 0); }
+    for (const n in base) base[n] = rig.j[n].rotation.clone();
+  };
   const update = (dt, camPos, watch) => {
     t0 += dt; const br = Math.sin(t0 * 1.3);
+    if (act?.kind === 'bless') {
+      const T = (act.t += dt), D = 3.4;
+      const w = smoothstep01(T / 0.5) * (1 - smoothstep01((T - (D - 0.5)) / 0.5));
+      // the hand traces: up at the brow, down to the breast, then from his left shoulder across to his right
+      let ux = -78, uy = 8, fx = -48;
+      if (T > 0.9 && T < 1.5) ux = lerp(-78, -42, smoothstep01((T - 0.9) / 0.6));
+      else if (T >= 1.5 && T < 1.85) ux = lerp(-42, -62, smoothstep01((T - 1.5) / 0.35));
+      if (T >= 1.85) { ux = -62; uy = lerp(30, -22, smoothstep01((T - 1.85) / 0.7)); }
+      blendE('uArmR', ux, uy, -6, w); blendE('fArmR', fx, 15, 0, w); blendE('handR', -10, 0, -70, w);
+      blendE('uArmL', -18, 0, 4, w); blendE('fArmL', -100, -48, 0, w);   // the left hand to his breast
+      if (T > D) { act = null; for (const n of ['uArmR', 'fArmR', 'handR', 'uArmL', 'fArmL']) rig.j[n].rotation.copy(base[n]); }
+    } else if (act?.kind === 'walk') {
+      const root = rig.root, d = new THREE.Vector3(act.target.x - root.position.x, 0, act.target.z - root.position.z), L = d.length();
+      act.t += dt; const a = Math.sin(act.t * 7.5);
+      if (L < 0.12) { const done = act.done; act = null; J.hips.position.y = rig.basePos.y; for (const n of ['thighR', 'shinR', 'thighL', 'shinL', 'uArmR', 'uArmL']) rig.j[n].rotation.copy(base[n]); done?.(); }
+      else {
+        const step = Math.min(L, dt * 1.25); d.multiplyScalar(step / L); root.position.add(d);
+        let ry = Math.atan2(d.x, d.z) - root.rotation.y; ry = Math.atan2(Math.sin(ry), Math.cos(ry)); root.rotation.y += ry * Math.min(1, dt * 6);
+        if (act.ground) root.position.y = act.ground(root.position.x, root.position.z);
+        setE('thighR', a * 24, 0, 0); setE('thighL', -a * 24, 0, 0); setE('shinR', Math.max(0, -a) * 35, 0, 0); setE('shinL', Math.max(0, a) * 35, 0, 0);
+        J.hips.position.y = rig.basePos.y + Math.abs(a) * 0.015;
+      }
+    }
     J.chest.rotation.x = base.chest.x - br * 0.02; J.spine.rotation.z = base.spine.z + Math.sin(t0 * 0.23) * 0.02;
     if (!sutler) J.hips.rotation.z = base.hips.z + Math.sin(t0 * 0.23) * 0.015;
     let want = 0;
@@ -306,5 +343,5 @@ export function makePerson(kind, quality) {
     if (!camPos || rig.root.getWorldPosition(new THREE.Vector3()).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
   };
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
-  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, kind, cloths, update, dispose: () => cloths.forEach((c) => c.dispose()) };
+  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, kind, cloths, update, bless, walkTo, sit, get busy() { return !!act; }, dispose: () => cloths.forEach((c) => c.dispose()) };
 }

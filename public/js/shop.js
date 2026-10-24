@@ -8,6 +8,9 @@ import { clothTextures } from './textures.js';
 import { makePerson } from './people.js';
 import { bodyReady } from './body.js';
 import { TAU } from './util.js';
+import { makeHorse } from './horse.js';
+
+export const TRADE_TIME = 75;   // seconds the sutler waits before he whips up the horses
 
 const KEY = 'evil.armoury';
 const START_WEAPONS = ['longsword', 'mace', 'pike'];
@@ -46,7 +49,8 @@ function wagonModel() {
     for (let k = 0; k < 12; k++) { const sp = new THREE.CylinderGeometry(0.022, 0.03, 0.46, 6); sp.translate(0, 0.32, 0); sp.rotateZ((k / 12) * Math.PI * 2); parts.push(sp); }
     const gw = new THREE.Group(); parts.forEach((pg, k) => { const o = new THREE.Mesh(pg, k === 1 ? iron : wood); o.castShadow = true; gw.add(o); }); return gw;
   };
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = wheel(); w.position.set(sx * 1.02, 0.6, sz * 1.15); w.rotation.y = Math.PI / 2; w.rotation.z = sz * 0.3; g.add(w); }
+  g.userData.wheels = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = wheel(); w.position.set(sx * 1.02, 0.6, sz * 1.15); w.rotation.y = Math.PI / 2; w.rotation.z = sz * 0.3; g.add(w); g.userData.wheels.push(w); }
   for (const sz of [-1, 1]) add(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 8), wood, [0, 0.6, sz * 1.15], [0, 0, Math.PI / 2]);
   // the tilt: canvas over five bows, sagging between them, creased, gathered and puckered at each end by its cord
   { const NU = 40, NV = 60, pos = [], uv = [], idx = [];
@@ -70,7 +74,11 @@ function wagonModel() {
   }
   add(new THREE.BoxGeometry(1.5, 0.1, 0.42), wood, [0, 1.42, 2.12]); add(new THREE.BoxGeometry(1.5, 0.08, 0.34), wood, [0, 0.98, 2.62]);   // the box seat out in front of the tilt, and the footboard
   for (const s of [-1, 1]) { add(new THREE.BoxGeometry(0.07, 0.42, 0.07), wood, [s * 0.68, 1.18, 2.12]); add(new THREE.BoxGeometry(0.06, 0.06, 0.9), wood, [s * 0.68, 1.0, 2.25]); }
-  add(new THREE.BoxGeometry(0.1, 0.1, 2.6), wood, [0, 0.62, 2.9], [0.2, 0, 0]);         // the shafts
+  add(new THREE.BoxGeometry(0.1, 0.1, 3.4), wood, [0, 0.95, 3.6], [-0.08, 0, 0]);       // the pole
+  add(new THREE.BoxGeometry(1.5, 0.08, 0.08), wood, [0, 0.82, 3.2]);                     // the swingletree
+  // a pair of draught horses in harness either side of the pole
+  g.userData.horses = [];
+  for (const [sx, seed, coat] of [[-0.62, 3, 0x7a4426], [0.62, 7, 0x4a2c1c]]) { const h = makeHorse(seed, coat); h.root.position.set(sx, 0, 4.25); g.add(h.root); g.userData.horses.push(h); }
   // a rack of arms and a hanging lantern at the tailboard
   add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.18]);
   for (let i = 0; i < 4; i++) { add(new THREE.BoxGeometry(0.04, 1.0 + i * 0.1, 0.01), steel, [-0.5 + i * 0.33, 1.4 + i * 0.05, -2.2]); add(new THREE.BoxGeometry(0.18, 0.025, 0.03), iron, [-0.5 + i * 0.33, 1.9 + i * 0.05 - 0.05, -2.2]); }
@@ -103,26 +111,85 @@ export class Shop {
     let x = p.x + nx * 7, z = p.z + nz * 7; if (!world.inBounds(x, z)) { x = p.x - nx * 7; z = p.z - nz * 7; }
     const w = this.wagon = wagonModel(); w.position.set(x, world.heightAt(x, z), z); w.rotation.y = Math.atan2(q.x - p.x, q.z - p.z) + 0.3;
     const n = world.normalAt(x, z); w.rotation.x = Math.atan2(n.z, n.y) * 0.5; w.rotation.z = -Math.atan2(n.x, n.y) * 0.5;
-    this.g.scene.add(w); world.addCollider(x, z, 2.0);
+    this.g.scene.add(w); this.cols = [world.addCollider(x, z, 2.0), world.addCollider(x + Math.sin(w.rotation.y) * 4.2, z + Math.cos(w.rotation.y) * 4.2, 1.1)];
     this.spot = { x, z };
     // the sutler on his box seat, and Father Bertram standing by the wagon, a sanctuary round the wagon
     if (bodyReady()) {
       const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 2.08); w.add(su.root);
       const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
-      pr.root.position.set(px, world.heightAt(px, pz), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; world.addCollider(px, pz, 0.6);
+      pr.root.position.set(px, world.heightAt(px, pz), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; this.cols.push(world.addCollider(px, pz, 0.6));
       this.people = [su, pr];
       for (const pp of this.people) for (const c of pp.cloths || []) { c.ground = world.heightAt(pr.root.position.x, pr.root.position.z); this.g.scene.add(c.mesh); }
       if (su.cloths) { su.cloths[0].ground = w.position.y + 1.0; su.cloths[1].ground = w.position.y + 1.47; }
     }
     this.sanctuary = { x, z, r: 13 };
     this.g.ui.toast('Sanctuary: near the wagon and Father Bertram you are safe. Trade with the sutler, ask his blessing, then ride on.', 6);
-    this.blessed = false;
+    this.blessed = false; this.world = world;
+    this.tradeT = TRADE_TIME; this.leave = null; this.awayT = 0;
+  }
+  // the trading time: the sutler waits, then the priest climbs up beside him and they drive off fast, back down the road
+  tradeLabel() { if (!this.wagon || this.leave || this.tradeT <= 0) return ''; const s = Math.ceil(this.tradeT); return `Trade with the sutler, ask Father Bertram's blessing · the wagon leaves in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+  updateWagon(dt) {
+    const g = this.g, w = this.wagon, W = this.world;
+    const speed = this.leave ? this.leave.v : 0;
+    for (const h of w.userData.horses || []) h.update(dt, speed);
+    for (const wh of w.userData.wheels || []) wh.rotation.z -= speed * dt / 0.58;
+    if (this.blessFx > 0) { this.blessFx -= dt; if (this.blessFx <= 0) { g.fx.holyBurst(g.me.pos, 2); g.audio.holy?.(g.me.pos, 0.4); } }
+    if (!this.leave) {
+      if (g.cinema.active || g.paused || this.open) return;
+      this.tradeT -= dt;
+      // the company has moved on without him: he does not wait the full time
+      const far = g.knightList.every((k) => Math.hypot(k.pos.x - w.position.x, k.pos.z - w.position.z) > 40);
+      this.awayT = far ? this.awayT + dt : 0;
+      if (this.tradeT <= 0 || this.awayT > 6) this.depart();
+      else if (Math.ceil(this.tradeT) === 10 && !this.warned) { this.warned = true; g.ui.toast('The sutler gathers his reins: ten seconds to trade', 3); }
+      return;
+    }
+    const L = this.leave; L.t += dt;
+    if (L.stage === 'board') return;   // the priest is walking to the wagon
+    // whip up the horses and away down the road
+    L.v = Math.min(11, L.v + dt * 4);
+    const tgt = L.route[L.i]; if (!tgt) { this.dispose(); return; }
+    const dx = tgt.x - w.position.x, dz = tgt.z - w.position.z, d = Math.hypot(dx, dz);
+    if (d < 4) { L.i++; return; }
+    let dy = Math.atan2(dx, dz) - w.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); w.rotation.y += dy * Math.min(1, dt * 2.2);
+    w.position.x += Math.sin(w.rotation.y) * L.v * dt; w.position.z += Math.cos(w.rotation.y) * L.v * dt;
+    const gy = W.groundAt(w.position.x, w.position.z); w.position.y = gy;
+    const n = W.inBounds(w.position.x, w.position.z) ? W.normalAt(w.position.x, w.position.z) : new THREE.Vector3(0, 1, 0);
+    w.rotation.x = Math.atan2(n.z * Math.cos(w.rotation.y) + n.x * Math.sin(w.rotation.y), n.y) * 0.6 + Math.sin(L.t * 9) * 0.012; w.rotation.z = Math.sin(L.t * 7.3) * 0.015;
+    for (const pp of this.people || []) for (const c of pp.cloths || []) c.ground = w.position.y + 1.0;
+    L.hoof -= dt; if (L.hoof <= 0) { L.hoof = 0.19; g.audio.footstep?.(w.position.clone(), true, 1.3); }
+    if (Math.random() < dt * 14) g.fx.wisp?.(w.position.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, 0.2, 0)), 0.8, [0.35, 0.3, 0.25]);
+    if (L.t > 40) this.dispose();
+  }
+  depart() {
+    const g = this.g, w = this.wagon, W = this.world;
+    for (const c of this.cols || []) c.r = -100;   // the colliders go with them
+    this.sanctuary = null; if (this.open) this.close();
+    // back down the road the way they came, then on out of sight
+    const route = []; const nr = W.path.nearest(w.position.x, w.position.z);
+    for (let t = Math.max(0, nr.t - 0.01); t > 0; t -= 0.02) route.push(W.path.at(t));
+    const a = W.path.at(0), b = W.path.at(0.02); const ox = a.x - b.x, oz = a.z - b.z, ol = Math.hypot(ox, oz) || 1;
+    for (let k = 1; k <= 8; k++) route.push({ x: a.x + ox / ol * k * 25, z: a.z + oz / ol * k * 25 });
+    this.leave = { stage: 'board', t: 0, v: 0, i: 0, route, hoof: 0 };
+    g.ui.toast('The sutler whips up his horses. Father Bertram climbs up beside him. You are on your own now.', 5);
+    const pr = this.priest, go = () => {
+      // up onto the box, beside the sutler
+      pr.root.removeFromParent(); w.add(pr.root); pr.root.position.set(0.52, 1.47 - pr.hipsY + 0.06, 2.08); pr.root.rotation.set(0, 0, 0); pr.sit?.();
+      this.leave.stage = 'drive'; g.audio.whinny?.(w.position);
+    };
+    if (pr?.walkTo) {
+      w.updateMatrixWorld(true); const side = new THREE.Vector3(1.4, 0, 2.2).applyMatrix4(w.matrixWorld);
+      pr.walkTo(side, go, (x, z) => W.heightAt(x, z));
+    } else go();
+    if (pr) setTimeout(() => { if (this.leave?.stage === 'board') go(); }, 6000);
   }
   inSanctuary(p, pad = 0) { const S = this.sanctuary; return !!S && Math.hypot(p.x - S.x, p.z - S.z) < S.r + pad; }
-  nearPriest() { if (!this.priest) return false; const m = this.g.me.pos, p = this.priest.root.position; return Math.hypot(m.x - p.x, m.z - p.z) < 3; }
-  near() { if (!this.spot) return false; const m = this.g.me.pos; return Math.hypot(m.x - this.spot.x, m.z - this.spot.z) < 4.2; }
+  nearPriest() { if (!this.priest || this.leave) return false; const m = this.g.me.pos, p = this.priest.root.position; return Math.hypot(m.x - p.x, m.z - p.z) < 3; }
+  near() { if (!this.spot || this.leave) return false; const m = this.g.me.pos; return Math.hypot(m.x - this.spot.x, m.z - this.spot.z) < 4.2; }
 
   update(dt) {
+    if (this.wagon) this.updateWagon(dt);
     if (this.people) { const me = this.g.me?.pos, cam = this.g.engine.camera.position; for (const pp of this.people) pp.update?.(dt, cam, me); }
     const g = this.g, I = g.input, me = g.me;
     // nothing unholy comes near the priest: demons that reach the sanctuary are thrown back from it
@@ -131,7 +198,7 @@ export class Shop {
       if (l < S.r + 0.5) { const k = (S.r + 0.6) / (l || 1); d.pos.x = S.x + dx * k; d.pos.z = S.z + dz * k; d.flinch = 1; if (Math.random() < dt * 2) g.fx.holyMotes(d.chest, 0.6, 3); }
     }
     if (!this.open && this.nearPriest() && I.pressed('KeyF')) {
-      if (!this.blessed) { this.blessed = true; me.hp = me.maxHp; g.dread.level = 0; g.audio.holy?.(me.pos, 0.6); g.fx.holyBurst(me.pos, 2); g.ui.subtitle(['Benedicat te omnipotens Deus. Go with God, my son, and keep close to your brothers.', ''], 5); }
+      if (!this.blessed) { this.blessed = true; this.priest?.bless?.(); this.blessFx = 2.6; me.hp = me.maxHp; g.dread.level = 0; g.audio.holy?.(me.pos, 0.6); g.fx.holyBurst(me.pos, 2); g.ui.subtitle(['Benedicat te omnipotens Deus. Go with God, my son, and keep close to your brothers.', ''], 5); }
       else g.ui.subtitle(['I have blessed you already. Go. They are waiting for you out there.', ''], 3.5);
       return;
     }

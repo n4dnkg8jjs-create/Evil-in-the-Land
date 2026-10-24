@@ -461,7 +461,7 @@ export class World {
   }
 
   // ---------------------------------------------------------------- props
-  addCollider(x, z, r) { const c = { x, z, r }; this.colliders.push(c); this.colGrid.insert(c, x, z); }
+  addCollider(x, z, r) { const c = { x, z, r }; this.colliders.push(c); this.colGrid.insert(c, x, z); return c; }
   // keep an entity out of colliders and inside the world
   collide(ent, radius) {
     const p = ent.pos; const near = this.colGrid.query(p.x, p.z, radius + 3, this._q || (this._q = []));

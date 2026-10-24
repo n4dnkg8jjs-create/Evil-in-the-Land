@@ -1003,6 +1003,7 @@ export class Game {
     else if (o.ph === 'cleansed') objText = 'The land is cleansed';
     else if (o.ph === 'boss' && this.boss) objText = o.wards ? 'Pray at the wards to cast Him down' : `Destroy ${this.boss.name}`;
     else if (o.ph === 'wipe') objText = '';
+    const trade = o.ph === 'travel' && this.shop?.tradeLabel?.(); if (trade) objText = trade;
     ui.objective(objText);
     const showPrayer = (o.ph === 'pray' && a && a.state === 'active') || (o.wards && this.activeWard());
     const pa = o.wards ? this.activeWard() : a;
