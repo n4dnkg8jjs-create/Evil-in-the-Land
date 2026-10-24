@@ -864,7 +864,7 @@ export class Game {
   credits() {
     const mins = Math.round((performance.now() - this.stats.start) / 60000);
     const el = document.getElementById('credits'); el.hidden = false;
-    el.innerHTML = `<h1 class="title">Evil in the Land</h1><p>The Great Dragon is cast down, and the land is healed from the valley to the peak.</p><p>${this.stats.kills} demons banished · ${mins} minutes on the road</p><div class="row"><button class="btn primary" id="credBack">Return</button></div>`;
+    el.innerHTML = `<h1 class="title">Evil in the Land</h1><p>The Great Dragon is cast down, and the land is healed from the city walls to the peak.</p><p>${this.stats.kills} demons banished · ${mins} minutes on the road</p><div class="row"><button class="btn primary" id="credBack">Return</button></div>`;
     document.getElementById('credBack').onclick = () => { el.hidden = true; this.app.endGame(true); };
   }
 

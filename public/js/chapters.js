@@ -24,7 +24,7 @@ export const CHAPTERS = [
     ],
     outro: ['Three lights burn in the Vale.', 'On the ridge, something watched you work.'],
     terrain: { kind: 'vale', amp: 9, hill: 28, edge: 40 },
-    atmos: A({ skyTop: 0x0e0f14, skyMid: 0x3b2a26, skyBottom: 0x160d0b, sunColor: 0xff5a24, cloud: 0x1b1517, cloudLit: 0x7a3a26, glow: 0x5a1a0e, cover: 0.68, sunDir: [0.55, 0.12, -0.83], sunLight: 0xffa070, sunIntensity: 2.2, hemiSky: 0x7a6e70, hemiGround: 0x1a1210, hemiIntensity: 0.55, fog: 0x2b201e, fogDensity: 0.0125, exposure: 1.05, fillColor: 0x5a6a90, fillIntensity: 0.3 }),
+    atmos: A({ skyTop: 0x0e0f14, skyMid: 0x3b2a26, skyBottom: 0x160d0b, sunColor: 0xff5a24, cloud: 0x1b1517, cloudLit: 0x7a3a26, glow: 0x5a1a0e, cover: 0.68, sunDir: [0.55, 0.12, -0.83], sunLight: 0xffa070, sunIntensity: 2.2, hemiSky: 0x7a6e70, hemiGround: 0x1a1210, hemiIntensity: 0.55, fog: 0x2b201e, fogDensity: 0.0125, exposure: 1.3, fillColor: 0x5a6a90, fillIntensity: 0.35 }),
     props: { deadTrees: 150, rocks: 80, graves: 36, crosses: 10, farm: 3, fences: 18 },
     pool: { shade: 1.0, crawler: 0.45 }, density: 0.8,
     ambient: 'ash', wind: [1.2, 0.4],
@@ -77,7 +77,7 @@ export const CHAPTERS = [
   {
     id: 'ascent', title: 'The Ascent', latin: 'Ascensus', seed: 6649, altars: 4, prayer: 74,
     intro: ['The road climbs into the mountain he calls his own.', 'Every crevice has eyes in it.', 'He will not wait at the top. He will come down to meet you.'],
-    outro: ['The road behind you is green to the valley floor.', 'Above the clouds, something vast is waking.'],
+    outro: ['The road behind you is green all the way back to the city walls.', 'Above the clouds, something vast is waking.'],
     terrain: { kind: 'mountain', amp: 22, hill: 0, edge: 34, rise: 120 },
     atmos: A({ skyTop: 0x1a1f2c, skyMid: 0x5a5260, skyBottom: 0x2a2626, sunColor: 0xffb070, cloud: 0x2c2a34, cloudLit: 0xb08070, glow: 0x5a3020, cover: 0.55, sunDir: [0.6, 0.22, -0.76], sunLight: 0xffc8a0, sunIntensity: 2.0, hemiSky: 0x8890a8, hemiGround: 0x2a2424, hemiIntensity: 0.6, fog: 0x4c4a54, fogDensity: 0.012, exposure: 1.0, fillColor: 0x6a7aa0, fillIntensity: 0.3 }),
     props: { deadTrees: 120, rocks: 200, crags: 70, crevices: 22, pines: true },

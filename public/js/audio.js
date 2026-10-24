@@ -594,13 +594,13 @@ class Score {
       // the creeping dread: dissonance under the hymn, gone when the knights pray
       if (mood === 'dread' || mood === 'combat' || mood === 'boss') {
         const k = R();
-        if (k < 0.35) this.a.stinger('drone', 0.35);
-        else if (k < 0.6) this.a.stinger('cluster', mood === 'dread' ? 0.22 : 0.3);
-        else if (k < 0.72) this.a.stinger('scrape', 0.18);
-        else if (k < 0.82 && mood === 'dread') this.a.stinger('breath', 0.25);
+        if (k < 0.24) this.a.stinger('drone', 0.35);
+        else if (k < 0.42) this.a.stinger('cluster', mood === 'dread' ? 0.22 : 0.3);
+        else if (k < 0.5) this.a.stinger('scrape', 0.18);
+        else if (k < 0.58 && mood === 'dread') this.a.stinger('breath', 0.25);
         // a semitone grinding against the choir's top note
         if (mood !== 'boss' && R() < 0.5) this.sample(L.choir, oct + 13, 'oo', bar + spb * 2, 0.12, len - spb * 2, 2.5);
-        if (mood === 'dread' && R() < 0.35) this.a.distant('scream');
+        if (mood === 'dread' && R() < 0.25) this.a.distant('scream');
       }
       if (mood === 'prayer') { // the angelic answer: a high descant over the hymn
         for (const n of [oct + 24, third + 24]) this.sample(L.choir, n, 'ah', bar + 0.2, 0.18, len, 2.0);

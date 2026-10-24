@@ -159,7 +159,7 @@ export class Vista {
     }
     for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) { const a = i * (segs + 1) + j, b = a + segs + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-    const mat = hazed(new THREE.MeshStandardMaterial({ color: 0x14100f, roughness: 0.95, flatShading: true }), { color: { value: this.haze.color.value.clone().multiplyScalar(0.45) }, amt: { value: 0.38 }, flash: this.haze.flash });
+    const mat = hazed(new THREE.MeshStandardMaterial({ color: 0x0b0909, roughness: 1, flatShading: true }), { color: { value: this.haze.color.value.clone().multiplyScalar(0.3) }, amt: { value: 0.32 }, flash: this.haze.flash });
     // the summit glows faintly red, as if something burns inside
     const m = new THREE.Mesh(g, mat);
     const y0 = baseY || 0;

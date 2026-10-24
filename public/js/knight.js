@@ -136,6 +136,10 @@ class Cape {
     const chest = rig.j.chest; chest.updateWorldMatrix(true, false);
     const p = this.p, o = this.o;
     const tmp = _a, d = _b;
+    // after a teleport (respawn, chapter load) start the cloth afresh
+    _c.setFromMatrixPosition(chest.matrixWorld);
+    if (this.init && this.lastChest && this.lastChest.distanceToSquared(_c) > 4) this.init = false;
+    (this.lastChest || (this.lastChest = new THREE.Vector3())).copy(_c);
     for (let i = 0; i < CW; i++) {
       this.anchor(i, tmp, chest.matrixWorld);
       if (!this.init) {
@@ -512,6 +516,33 @@ export class Knight {
   }
 
   // ------------------------------------------------ animation
+  plantFeet(world, dt) {
+    const rig = this.rig, s = rig.scale;
+    const ank = [_a.setFromMatrixPosition(rig.j.footR.matrixWorld).clone(), _b.setFromMatrixPosition(rig.j.footL.matrixWorld).clone()];
+    const want = [], def = [];
+    for (let i = 0; i < 2; i++) {
+      const lift = Math.max(0, ank[i].y - this.pos.y - 0.06 * s);
+      want[i] = world.heightAt(ank[i].x, ank[i].z) + 0.068 * s + lift;
+      def[i] = want[i] - ank[i].y;
+    }
+    const drop = clamp(Math.min(0, def[0], def[1]), -0.3, 0);
+    this.hipDrop = damp(this.hipDrop || 0, drop, 14, dt);
+    if (Math.abs(this.hipDrop) < 0.004 && Math.abs(def[0]) < 0.01 && Math.abs(def[1]) < 0.01) return;
+    rig.j.hips.position.y += this.hipDrop / s;
+    rig.root.updateMatrixWorld(true);
+    const fwd = _c.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    ['R', 'L'].forEach((side, i) => {
+      const a = _d.setFromMatrixPosition(rig.j['foot' + side].matrixWorld);
+      const ty = want[i]; if (Math.abs(ty - a.y) < 0.006) return;
+      const footQ = rig.j['foot' + side].getWorldQuaternion(_wq).clone();
+      rig.solveLeg(side, new THREE.Vector3(a.x, ty, a.z), fwd.clone().add(_u.set(0, 0.2, 0)));
+      // keep the sole's world orientation
+      rig.j['shin' + side].updateWorldMatrix(true, false);
+      rig.j['foot' + side].quaternion.copy(rig.j['shin' + side].getWorldQuaternion(_hq).invert().multiply(footQ));
+    });
+    rig.root.updateMatrixWorld(true);
+  }
+
   locomotion(dt) {
     const P = this.loco; P.set(this.st.stance.pose);
     // blend in carry (sprint) / block stance bodies
@@ -547,6 +578,14 @@ export class Knight {
     P[sp_i + 1] += -this.moveYaw * 0.5 - 3 * s * amp * D2R;
     P[ch + 1] += -this.moveYaw * 0.35 - 2 * s * amp * D2R;
     P[sp_i] += (4 * amp + 8 * run) * D2R;
+    // momentum: bank into turns, lean back when braking and into the run when setting off
+    const turn = angleDiff(this.prevYawL ?? this.yaw, this.yaw) / Math.max(dt, 1e-3); this.prevYawL = this.yaw;
+    const vf = this.vel.x * Math.sin(this.yaw) + this.vel.z * Math.cos(this.yaw);
+    const accel = (vf - (this.prevVf ?? vf)) / Math.max(dt, 1e-3); this.prevVf = vf;
+    this.leanZ = damp(this.leanZ || 0, clamp(-turn * sp * 0.035, -0.22, 0.22), 6, dt);
+    this.leanX = damp(this.leanX || 0, clamp(accel * 0.012, -0.12, 0.14), 5, dt);
+    P[sp_i + 2] += this.leanZ * 0.6; P[ch + 2] += this.leanZ * 0.4; P[hips + 2] += this.leanZ * 0.3;
+    P[sp_i] += this.leanX * 0.6; P[ch] += this.leanX * 0.4;
     // breathing + idle sway
     const br = Math.sin(this.time * 1.7);
     P[ch] += br * 1.2 * D2R; P[JI.head * 3] -= br * 0.6 * D2R;
@@ -646,6 +685,8 @@ export class Knight {
     this.group.position.copy(this.pos);
     this.group.rotation.set(0, this.yaw + spin, 0);
     this.group.updateMatrixWorld(true);
+    // feet on the real ground: on slopes the hips sink to the lower foot and each leg reaches its own ground
+    if (world && !this.downed && this.kneel < 0.05 && this.actKind !== 'roll') this.plantFeet(world, dt);
     this.renderYaw = this.yaw + spin;
     const rootQ = _rq.setFromAxisAngle(_a.set(0, 1, 0), this.yaw + spin);
     const toWorld = (x, y, z, out) => out.set(x, y, z).applyQuaternion(rootQ).add(this.pos);

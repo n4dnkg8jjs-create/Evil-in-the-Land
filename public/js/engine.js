@@ -212,6 +212,7 @@ export class Engine {
 
   render(dt) {
     this.time += dt;
+    if (this.headless) return;   // automated tests: run the game without drawing it
     const fx = this.fx;
     fx.hurt = Math.max(0, fx.hurt - dt * 1.4);
     fx.flash = Math.max(0, fx.flash - dt * 3);
