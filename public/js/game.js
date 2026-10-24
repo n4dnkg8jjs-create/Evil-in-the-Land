@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { Knight, RELICS } from './knight.js';
 import { World } from './world.js';
 import { Horde, TYPES, ST } from './demons.js';
-import { Watcher, Crevices, Hound, Serpent, Cryptid, Dragon } from './devil.js';
+import { Watcher, Crevices, Hound, Serpent, Cryptid, Dragon, phantomDevil } from './devil.js';
 import { robeWind } from './horror.js';
 import { FX } from './fx.js';
 import { Companion } from './ai.js';
@@ -80,7 +80,8 @@ export class Game {
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
-    if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); if (ch.devil.army) this.watcher.mode = 'army'; }
+    if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); if (ch.devil.army) this.watcher.mode = 'army'; this.watcher.audio = this.audio; this.watcher.view = this.engine.camera; this.watcher.prewarm(this.engine.renderer, this.engine.camera); }
+    phantomDevil(this);   // the scares' Devil, built and compiled now rather than the first time he appears
     if (ch.devil?.crevice) this.crevices = new Crevices(this.scene, this.world.creviceSpots);
     this.obj = { ch: n, ph: 'intro', a: 0, p: this.world.altars.map(() => 0), s: this.world.altars.map(() => 'blighted'), waveT: 6, roamT: 14, checkpoint: null, wards: false, bossDone: [] };
     // place the company at the road's start
@@ -117,7 +118,11 @@ export class Game {
     const sp = w.startPos; const p0 = V(sp.x, w.heightAt(sp.x, sp.z), sp.z);
     const lead = this.me.pos;
     const shots = [];
+    let cleanup = null;
     if (ch.id === 'peak') {
+      // before anything else: the knights look up into the storm, and something vast passes across it, black against the lightning
+      const sil = this.peakSilhouette(lead); cleanup = sil.cleanup;
+      shots.push({ dur: 6.5, from: { pos: V(lead.x - 1.5, lead.y + 1.7, lead.z - 3), look: V(lead.x + 8, lead.y + 30, lead.z + 40) }, to: { pos: V(lead.x - 1.2, lead.y + 1.6, lead.z - 3.4), look: V(lead.x - 14, lead.y + 34, lead.z + 44) }, fov: 55, fovTo: 46, text: ch.narration?.[0] || '', tick: sil.tick });
       shots.push({ dur: 6, from: { pos: V(-60, 30, -70), look: V(0, 5, 0) }, to: { pos: V(-30, 14, -46), look: V(0, 3, 0) }, fov: 45, text: [ch.intro[0], ''] });
       shots.push({ dur: 5, from: { pos: V(lead.x + 3, lead.y + 2.0, lead.z - 4), look: V(lead.x, lead.y + 1.6, lead.z) }, to: { pos: V(lead.x + 4.5, lead.y + 2.3, lead.z - 2.5), look: V(0, 8, 0) }, fov: 40, text: [ch.intro[1], ''], title: { num: n, title: ch.title, latin: ch.latin } });
       shots.push({ dur: 4, from: { pos: V(lead.x, lead.y + 1.8, lead.z - 3.5), look: V(lead.x, lead.y + 1.7, lead.z + 6) }, to: { pos: V(lead.x, lead.y + 1.5, lead.z - 4.5), look: V(lead.x, lead.y + 1.7, lead.z + 6) }, fov: 50, text: [ch.intro[2], 'Let God arise.'] });
@@ -125,12 +130,15 @@ export class Game {
       const mid = w.path.at(0.3), far = w.path.at(0.75);
       shots.push({ dur: 6.5, from: { pos: V(far.x + 40, w.heightAt(far.x, far.z) + 34, far.z + 30), look: V(mid.x, w.heightAt(mid.x, mid.z), mid.z) }, to: { pos: V(mid.x + 30, w.heightAt(mid.x, mid.z) + 22, mid.z + 10), look: V(a0.x, a0.y + 2, a0.z) }, fov: 42, text: ch.intro[0] });
       shots.push({ dur: 5.5, from: { pos: V(a0.x + 9, a0.y + 3.5, a0.z + 9), look: V(a0.x, a0.y + 2.5, a0.z) }, to: { pos: V(a0.x + 5, a0.y + 2.2, a0.z + 7), look: V(a0.x, a0.y + 3.2, a0.z) }, fov: 38, text: ch.intro[1], title: { num: n, title: ch.title, latin: ch.latin } });
+      // the place itself: low along the road ahead, toward the far altar, the narrator naming it
+      if (ch.narration) { const q0 = w.path.at(0.2), q1 = w.path.at(0.42), aL = w.altars[w.altars.length - 1]; shots.push({ dur: 5.5, from: { pos: V(q0.x, w.heightAt(q0.x, q0.z) + 2.6, q0.z), look: V(q1.x, w.heightAt(q1.x, q1.z) + 2, q1.z) }, to: { pos: V(q1.x, w.heightAt(q1.x, q1.z) + 3.4, q1.z), look: V(aL.x, aL.y + 3, aL.z) }, fov: 50, text: ch.narration[0] }); }
       shots.push({ dur: 5, from: { pos: V(lead.x + 2.5, lead.y + 1.4, lead.z + 3.5), look: V(lead.x, lead.y + 1.55, lead.z) }, to: { pos: V(lead.x + 1.5, lead.y + 1.7, lead.z - 3.8), look: V(lead.x, lead.y + 1.6, lead.z + 4) }, fov: 46, text: ch.intro[2] });
     }
     this.obj.ph = 'intro';
     this.setMood(ch.id === 'peak' ? 'final' : 'dread', 0);
     this.audio.bell(null, 0.8, 0.25);
     this.cinema.play(shots, () => {
+      cleanup?.();
       if (!this.isHost) return;
       if (ch.boss === 'dragon') this.spawnBoss('dragon');
       else this.obj.ph = 'travel';
@@ -219,6 +227,7 @@ export class Game {
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
     if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); this.terror.update(dt, this.time); }
+    if (this.world) this.checkDevilReveal();
     // the sky answers the land beneath you: blue over living country, ember-red in the blight
     if (this.world) {
       const life = this.world.lifeAt(this.me.pos.x, this.me.pos.z);
@@ -613,7 +622,20 @@ export class Game {
         const c = d.chest; const r = d.radius * 1.15 + 0.25;
         let hitP = null;
         if (leftSrc) { const lp = k.rig.j.handL.getWorldPosition(new THREE.Vector3()); if (lp.distanceTo(c) < r + 0.5) hitP = lp; }
-        else for (const [a, b] of segs) { const p = closestOnSeg(c, a, b); const dy = Math.abs(p.y - c.y); if (p.distanceTo(c) < r || (Math.hypot(p.x - c.x, p.z - c.z) < r && dy < d.def.height * 0.6 * d.scale)) { hitP = p; break; } }
+        else {
+          // the blade against the whole body (a capsule from shin to crown, lifted when it leaps), where it is now
+          // and where it was a moment ago, so a demon rushing or springing through the swing is still caught
+          const H = d.def.height * d.scale, y0 = d.pos.y + (d.alt || 0) + Math.min(0.3, H * 0.2), y1 = d.pos.y + (d.alt || 0) + H * 0.95;
+          const back = Math.min(0.12, dt * 2);
+          for (const [a, b] of segs) {
+            for (const bt of [0, back]) {
+              const cx = d.pos.x - d.vel.x * bt, cz = d.pos.z - d.vel.z * bt;
+              const q = segSegClosest(a, b, _ca.set(cx, y0, cz), _cb.set(cx, y1, cz));
+              if (q.d < r) { hitP = q.p; break; }
+            }
+            if (hitP) break;
+          }
+        }
         if (!hitP) continue;
         k.hitSet.add(d.id); cleave--;
         let dmg = dmgBase; if (d.def.big && kind === 'blunt') dmg *= (k.wdef.armorBreak || 1.25);
@@ -850,6 +872,7 @@ export class Game {
       case 'lance': this.audio.whisper(p, 1.2, 0.5); break;
       case 'shriek': this.audio.shriek(p, 0.8, 1.4, 0.7); this.engine.shake(0.05, 0.5); break;
       case 'shriekShort': this.audio.shriek(p, 0.9, 0.6, 0.5); break;
+      case 'spot': this.audio.scream(p, pitch < 0.8, 0.7, pitch * 0.9); if (R() < 0.5) this.audio.shriek(p, pitch * 1.05, 0.9, 0.35); break;   // it has seen you
     }
   }
   creviceGrab(c, k) {
@@ -886,6 +909,42 @@ export class Game {
     }
     mix.fogDensity = base.fogDensity * (1 - f * 0.4); mix.cover = base.cover * (1 - f * 0.4);
     this.engine.setAtmosphere(mix, env); this.fx.setFog(this.scene.fog);
+  }
+  // The Peak's first shot: a dragon (a stand-in with no game state) passes across the storm above, high and dark,
+  // the lightning showing him in flashes. Returns the per-frame tick and the cleanup.
+  peakSilhouette(lead) {
+    let d = null; try { d = new Dragon(this.scene, 1, null); } catch (e) { return { tick: () => {}, cleanup: () => {} }; }
+    d.state = 'circle'; d.fly = 1; d.alt = 0; let a = -0.6, t = 0, nextBolt = 0.4;
+    const tick = (dt) => {
+      t += dt; a += dt * 0.16;
+      d.pos.set(lead.x + Math.sin(a) * 70, lead.y + 38 + Math.sin(t * 0.7) * 3, lead.z + 40 + Math.cos(a) * 30);
+      d.vel.set(Math.cos(a) * 11, 0, -Math.sin(a) * 5); d.yaw = Math.atan2(d.vel.x, d.vel.z);
+      d.animate(dt, this.time + t, null);
+      nextBolt -= dt; if (nextBolt <= 0) { nextBolt = 0.9 + Math.random() * 1.4; try { this.world?.vista?.strike?.(); } catch {} }
+      if (t > 1.5 && t < 1.6) this.audio.roar?.(null, 0.35, 2.6);
+    };
+    return { tick, cleanup: () => { d.dispose(); } };
+  }
+  // The first time He shows himself in a chapter: the camera finds Him on the ridge and closes in on that face
+  checkDevilReveal() {
+    const W = this.watcher, o = this.obj; if (!W || !o || o.ph !== 'travel' || this.cinema.active || this.boss || this.paused) return;
+    if (W.state !== 'watch' || !W.mesh.visible) return;
+    const me = this.me; if (me.downed || me.praying) return;
+    const d = Math.hypot(W.pos.x - me.pos.x, W.pos.z - me.pos.z); if (d > 200 || d < 40) return;
+    let seen = {}; try { seen = JSON.parse(localStorage.getItem('evil.devilReveal') || '{}'); } catch {}
+    const key = CHAPTERS[this.chapterIdx].id; if (seen[key]) return;
+    for (const dm of this.horde.list) if (dm.alive && dm.pos.distanceTo(me.pos) < 25) return;
+    seen[key] = 1; try { localStorage.setItem('evil.devilReveal', JSON.stringify(seen)); } catch {}
+    const LINES = { vale: ['Ecce, adversarius vester.', 'Behold your adversary.'], village: ['Circuit, quaerens quem devoret.', 'He walks about, seeking whom he may devour.'], fen: ['Vidit vos. Semper vidit.', 'He has seen you. He has always seen you.'], wood: ['Princeps huius mundi.', 'The prince of this world.'], field: ['Legio nomen mihi est.', 'My name is Legion.'], ascent: ['Venite. Exspecto.', 'Come. I am waiting.'] };
+    const p = W.pos, hy = p.y + 3.1, m = me.pos;
+    const dir = V(p.x - m.x, 0, p.z - m.z).normalize();
+    const near = V(p.x - dir.x * 9, hy + 0.3, p.z - dir.z * 9);
+    this.audio.stinger?.('drone', 0.5); this.audio.heartbeat?.(0.5);
+    this.dread && (this.dread.level = Math.min(1, this.dread.level + 0.1));
+    this.cinema.play([
+      { dur: 3.2, from: { pos: V(m.x - dir.x * 2.5 + dir.z * 0.8, m.y + 2.0, m.z - dir.z * 2.5 - dir.x * 0.8), look: V(p.x, hy, p.z) }, to: { pos: V(m.x - dir.x * 2.2 + dir.z * 0.7, m.y + 1.9, m.z - dir.z * 2.2 - dir.x * 0.7), look: V(p.x, hy, p.z) }, fov: 40, fovTo: 22, text: LINES[key] || LINES.vale },
+      { dur: 3.4, from: { pos: near, look: V(p.x, hy, p.z) }, to: { pos: V(p.x - dir.x * 6, hy + 0.15, p.z - dir.z * 6), look: V(p.x, hy - 0.05, p.z) }, fov: 30, fovTo: 18, text: '', at: () => this.audio.whisper?.(V(p.x, hy, p.z), 2.6, 0.7) },
+    ], null, { skippable: true });
   }
   playOutro(n) {
     this.shop.earn(60, 'the road is won');
@@ -966,6 +1025,7 @@ export class Game {
   updateMusic(dt) {
     const mu = this.audio.music; if (!mu) return;
     this.audio.update(dt);
+    this.audio.dread = this.dread?.level ?? 0;   // the prayer music falters when the fear is on them
     const near = this.horde.list.filter((d) => d.alive && d.pos.distanceTo(this.me.pos) < 30).length;
     let mood = 'dread', I = Math.min(1, near / 10);
     if (this.boss && this.boss.alive) {
@@ -1033,11 +1093,23 @@ export class Game {
     for (const t of this.trails.values()) t.dispose(this.scene);
     this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
+    if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
     this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); for (const k of this.fallenKnights || []) k.dispose();
     for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'left']) this.net?.off(k);
   }
 }
 
+// closest points between segments ab and cd: { p (on ab), d (distance) }
+const _ca = new THREE.Vector3(), _cb = new THREE.Vector3();
+function segSegClosest(a, b, c, d) {
+  const u = b.clone().sub(a), v = d.clone().sub(c), w = a.clone().sub(c);
+  const A = u.dot(u), B = u.dot(v), Cc = v.dot(v), D = u.dot(w), E = v.dot(w), den = A * Cc - B * B;
+  let s = den > 1e-8 ? clamp((B * E - Cc * D) / den, 0, 1) : 0;
+  let t = Cc > 1e-8 ? clamp((B * s + E) / Cc, 0, 1) : 0;
+  s = A > 1e-8 ? clamp((B * t - D) / A, 0, 1) : 0;
+  const p = a.clone().addScaledVector(u, s), q = c.clone().addScaledVector(v, t);
+  return { p, d: p.distanceTo(q) };
+}
 function closestOnSeg(p, a, b) { const ab = b.clone().sub(a); const t = clamp(p.clone().sub(a).dot(ab) / Math.max(1e-6, ab.lengthSq()), 0, 1); return a.clone().addScaledVector(ab, t); }
 function ordinal(i) { return ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'][i] || 'next'; }
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }

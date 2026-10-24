@@ -116,8 +116,6 @@ export class Vista {
     }
     walls.push(xf(new THREE.BoxGeometry(18, 30, 18), [C[0], 45, C[1] - 18]));
     slates.push(xf(new THREE.ConeGeometry(11, 46, 8), [C[0], 83, C[1] - 18], [0, PI / 8, 0]));
-    // great west window and the rose
-    lights.push({ x: C[0], y: 30, z: C[1] + 60, rot: 0, w: 8, dp: 0, rose: true });
     // the city stands on its own low hill, whose skirts run down below the surrounding land so nothing floats
     const earth = hazed(new THREE.MeshStandardMaterial({ color: 0x3a3428, roughness: 1 }), haze);
     const mound = xf(new THREE.CylinderGeometry(R + 34, R + 190, 140, 40, 3), [0, -70, 0], [0, 0, 0], [1, 1, 0.75]);

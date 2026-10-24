@@ -10,7 +10,7 @@
 // standing right behind you.
 import * as THREE from 'three';
 import { Demon, ST } from './demons.js';
-import { Watcher } from './devil.js';
+import { phantomDevil, releasePhantom } from './devil.js';
 import { clamp, damp, TAU } from './util.js';
 
 const R = Math.random;
@@ -143,7 +143,8 @@ export class Dread {
   // turn round, and He is there
   devilBehind() {
     const g = this.g, me = g.me, w = g.world;
-    if (!this.devil) { this.devil = new Watcher(g.scene, g.fx); }
+    if (g.terror?.active?.figure) return;   // He is already standing on the road ahead
+    this.devil = phantomDevil(g); this.devil.owner = 'dread';
     const { f } = this.camBasis(); const ang = Math.atan2(f.x, f.z) + Math.PI + (R() - 0.5) * 0.5, dist = 8 + R() * 3;
     const x = me.pos.x + Math.sin(ang) * dist, z = me.pos.z + Math.cos(ang) * dist;
     if (!w.inBounds(x, z)) return;
@@ -160,12 +161,12 @@ export class Dread {
       if (this.devilT > 7) { D.state = 'vanish'; D.t = 0; }
     }
     D.animate(dt, time, this.g.engine.camera.position, [this.g.me]);
-    if (D.state === 'vanish' && D.t > 1.3) { D.state = 'hidden'; D.mesh.visible = false; this.devilT = 0; }
+    if (D.state === 'vanish' && D.t > 1.3) { releasePhantom(D, 'dread'); this.devilT = 0; }
   }
   clear() {
     for (const p of this.phantoms) p.d.dispose(); this.phantoms.length = 0;
-    if (this.devil) { this.devil.state = 'hidden'; this.devil.mesh.visible = false; this.devilT = 0; }
+    if (this.devil) { releasePhantom(this.devil, 'dread'); this.devilT = 0; }
     this.level = Math.min(this.level, 0.2); this.lastHp = null;
   }
-  dispose() { this.clear(); if (this.devil) { this.g.scene.remove(this.devil.mesh); this.devil = null; } }
+  dispose() { this.clear(); this.devil = null; }
 }

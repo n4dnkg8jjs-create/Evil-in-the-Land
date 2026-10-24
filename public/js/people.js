@@ -203,6 +203,53 @@ function personMesh(rig, P, look) {
   return mesh;
 }
 
+// standing: turn each foot so its sole lies flat (heel and toe level), and report how far the soles sit above or
+// below the root, so he can be stood exactly on the ground
+function levelFeet(mesh, rig) {
+  const g = mesh.geometry, SI = g.attributes.skinIndex, v = new THREE.Vector3(); let low = 1e9;
+  for (const k of ['R', 'L']) {
+    const fi = JOINTS.indexOf('foot' + k), foot = rig.j['foot' + k];
+    for (let pass = 0; pass < 3; pass++) {
+      rig.root.updateMatrixWorld(true);
+      let heel = 1e9, toe = 1e9, zMin = 1e9, zMax = -1e9; const pts = [];
+      for (let i = 0; i < g.attributes.position.count; i++) if (SI.getX(i) === fi) { mesh.getVertexPosition(i, v); v.applyMatrix4(mesh.matrixWorld); pts.push(v.clone()); zMin = Math.min(zMin, v.z); zMax = Math.max(zMax, v.z); }
+      for (const p of pts) { if (p.z < zMin + (zMax - zMin) * 0.3) heel = Math.min(heel, p.y); if (p.z > zMax - (zMax - zMin) * 0.3) toe = Math.min(toe, p.y); }
+      const L = (zMax - zMin) * 0.7; if (!(L > 0.02)) break;
+      const tilt = Math.atan2(toe - heel, L); if (Math.abs(tilt) < 0.005) break;
+      foot.rotation.x += tilt;   // pitch the toes down onto the ground (or up, if they dig in)
+    }
+    rig.root.updateMatrixWorld(true);
+    for (let i = 0; i < g.attributes.position.count; i++) if (SI.getX(i) === fi) { mesh.getVertexPosition(i, v); v.applyMatrix4(mesh.matrixWorld); low = Math.min(low, v.y); }
+  }
+  return isFinite(low) ? -low + rig.root.position.y : 0;
+}
+// the posed body's outline in the hips' frame: for each height and bearing, how far out the flesh reaches
+// (arms and hands left out), widened a little across neighbouring bearings
+function measureHull(mesh, rig, H) {
+  rig.root.updateMatrixWorld(true); mesh.skeleton.update?.();
+  const inv = new THREE.Matrix4().copy(H.bone.matrixWorld).invert().multiply(mesh.matrixWorld);
+  const g = mesh.geometry, SI = g.attributes.skinIndex, v = new THREE.Vector3();
+  const arm = new Set(['clavR', 'uArmR', 'fArmR', 'handR', 'clavL', 'uArmL', 'fArmL', 'handL', 'head', 'neck'].map((n) => JOINTS.indexOf(n)));
+  const R = H.R; R.fill(0);
+  for (let i = 0; i < g.attributes.position.count; i++) {
+    if (arm.has(SI.getX(i))) continue;
+    mesh.getVertexPosition(i, v); v.applyMatrix4(inv);
+    const yi = Math.round((v.y - H.y0) / H.dy); if (yi < 0 || yi >= H.nY) continue;
+    let an = Math.atan2(v.x, v.z); if (an < 0) an += Math.PI * 2; const ai = Math.round(an / (Math.PI * 2) * H.nA) % H.nA;
+    const r = Math.hypot(v.x, v.z); const k = yi * H.nA + ai; if (r > R[k]) R[k] = r;
+  }
+  // a cassock does not dip between the legs: each height's outline is the ellipse round its widest reach side to
+  // side and front to back (and never inside what was measured)
+  for (let y = 0; y < H.nY; y++) {
+    let ax = 0, az = 0;
+    for (let a = 0; a < H.nA; a++) { const an = a / H.nA * Math.PI * 2, r = R[y * H.nA + a]; ax = Math.max(ax, Math.abs(Math.sin(an)) * r); az = Math.max(az, Math.abs(Math.cos(an)) * r); }
+    if (ax > 0 && az > 0) for (let a = 0; a < H.nA; a++) { const an = a / H.nA * Math.PI * 2; const e = 1 / Math.sqrt((Math.sin(an) / ax) ** 2 + (Math.cos(an) / az) ** 2); R[y * H.nA + a] = Math.max(R[y * H.nA + a], e); }
+  }
+  // fill and widen: each cell takes the most of its neighbours (a bearing with no vertex inherits from beside it)
+  const out = new Float32Array(R.length);
+  for (let y = 0; y < H.nY; y++) for (let a = 0; a < H.nA; a++) { let m = 0; for (let dy = -1; dy <= 1; dy++) for (let da = -2; da <= 2; da++) { const yy = y + dy; if (yy < 0 || yy >= H.nY) continue; m = Math.max(m, R[yy * H.nA + (a + da + H.nA) % H.nA]); } out[y * H.nA + a] = m; }
+  R.set(out);
+}
 // put something (a hat) on the top of the head: find the crown of the skinned head in the head bone's own frame
 function seatOnCrown(obj, mesh, rig, sink) {
   const hi = JOINTS.indexOf('head');
@@ -246,12 +293,16 @@ export function makePerson(kind, quality) {
     J['fArm' + k].add(new THREE.Mesh(lathe(sutler ? [[0.072, 0.02], [0.074, -0.12], [0.06, -0.2], [0.055, -0.235]] : [[0.072, 0.02], [0.085, -0.12], [0.11, -0.25]], 16, fold), mat));
   }
   const beltM = new THREE.MeshStandardMaterial({ color: sutler ? 0x3a2414 : 0x101010, roughness: 0.85 });
-  const ring = (rx, rz, y, bone) => (i, n) => { const an = (i / n) * Math.PI * 2; return { bone, local: new THREE.Vector3(Math.sin(an) * rx, y, Math.cos(an) * rz + 0.01), flare: new THREE.Vector3(Math.sin(an), 0, Math.cos(an)).multiplyScalar(0.18) }; };
+  // the body's own outline round the hips, measured from the skinned mesh once he is posed (see measureHull):
+  // skirts are pinned just outside it and never fall inside it, so the cloth hangs all round, back as well as front
+  const hull = { bone: J.hips, nA: 36, nY: 32, y0: -1.12, dy: 0.04, R: new Float32Array(36 * 32) };
+  const hullR = (an, y) => { const yi = Math.max(0, Math.min(hull.nY - 1, Math.round((y - hull.y0) / hull.dy))); let a = an % (Math.PI * 2); if (a < 0) a += Math.PI * 2; return hull.R[yi * hull.nA + Math.round(a / (Math.PI * 2) * hull.nA) % hull.nA]; };
+  const ring = (rx, rz, y, bone, useHull = true) => (i, n) => { const an = (i / n) * Math.PI * 2; const r0 = Math.hypot(Math.sin(an) * rx, Math.cos(an) * rz); const r = useHull ? Math.max(r0, hullR(an, y) + 0.025) : r0; return { bone, local: new THREE.Vector3(Math.sin(an) * r, y, Math.cos(an) * r), flare: new THREE.Vector3(Math.sin(an), 0, Math.cos(an)).multiplyScalar(0.16) }; };
   const legCaps = (c, r = 1) => { for (const k of ['R', 'L']) { c.addCapsule({ a: J['thigh' + k], b: J['shin' + k], r: 0.095 * r }); c.addCapsule({ a: J['shin' + k], b: J['foot' + k], r: 0.07 * r }); } c.addCapsule({ a: J.hips, ao: new THREE.Vector3(0, 0.02, 0), r: 0.16 }); return c; };
   if (!sutler) {
     // the cassock's skirt, to the ankles, swinging and settling round his legs
     const n = 30, pin = ring(0.19, 0.15, 0.03, J.hips);
-    const skirt = legCaps(new Cloth({ cols: n, rows: 18, ring: true, len: 0.98, material: mat, pins: (i) => pin(i, n), axis: J.hips, hold: 0.92 }));
+    const skirt = legCaps(new Cloth({ cols: n, rows: 18, ring: true, len: 0.98, material: mat, pins: (i) => pin(i, n), hull, axis: J.hips, hold: 0.9 }));
     cloths.push(skirt);
     // a short shoulder cape (mozzetta) over the arms
     const cn = 26; const cpin = (i) => { const an = (i / cn) * Math.PI * 2; return { bone: J.chest, local: new THREE.Vector3(Math.sin(an) * 0.1, 0.19, Math.cos(an) * 0.085 + 0.01), flare: new THREE.Vector3(Math.sin(an), 0, Math.cos(an)).multiplyScalar(1.1) }; };
@@ -269,7 +320,7 @@ export function makePerson(kind, quality) {
     cr.position.set(0, 0.02, 0.2); J.chest.add(cr);
   } else {
     // the tunic's skirt, falling over his knees as he sits
-    const n = 26, pin = ring(0.2, 0.16, 0.04, J.hips);
+    const n = 26, pin = ring(0.2, 0.16, 0.04, J.hips, false);
     cloths.push(legCaps(new Cloth({ cols: n, rows: 9, ring: true, len: 0.42, material: mat, pins: (i) => pin(i, n), axis: J.hips, hold: 0.85 })));
     // a heavy russet cloak from his shoulders, hanging down his back and over the seat
     const cm = clothMat([110, 62, 38], 'sutlercloak'); const cn = 20;
@@ -292,6 +343,9 @@ export function makePerson(kind, quality) {
     e('spine', 6, 0, 0); e('chest', 9, 0, 0); e('neck', 14, 0, 0); e('head', -8, 0, 0);
     for (const [k, s] of [['R', -1], ['L', 1]]) { e('uArm' + k, -14, 0, s * 4); e('fArm' + k, -85, -s * 32, 0); e('hand' + k, 0, -s * 15, 0); }
   }
+  let groundOffset = 0;
+  if (body && !sutler) groundOffset = levelFeet(body, rig);
+  if (body) measureHull(body, rig, hull);
   // alive: he breathes, shifts his weight, and turns his head to watch whoever comes near
   const base = {}; for (const n of ['spine', 'chest', 'neck', 'head', 'hips', 'uArmR', 'fArmR', 'handR', 'uArmL', 'fArmL', 'handL', 'thighR', 'shinR', 'footR', 'thighL', 'shinL', 'footL']) base[n] = rig.j[n].rotation.clone();
   let t0 = Math.random() * 10, look = 0, act = null;
@@ -343,5 +397,5 @@ export function makePerson(kind, quality) {
     if (!camPos || rig.root.getWorldPosition(new THREE.Vector3()).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
   };
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
-  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, kind, cloths, update, bless, walkTo, sit, get busy() { return !!act; }, dispose: () => cloths.forEach((c) => c.dispose()) };
+  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, groundOffset, kind, cloths, update, bless, walkTo, sit, get busy() { return !!act; }, dispose: () => cloths.forEach((c) => c.dispose()) };
 }

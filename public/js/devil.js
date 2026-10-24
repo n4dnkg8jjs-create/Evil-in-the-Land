@@ -55,17 +55,31 @@ function dragonMaterial() {
 // knee, ram horns, a ragged cloak, and two wide white eyes that never blink.
 // He stands perfectly still. Only the head moves, in sudden snaps, and at the
 // end it turns all the way round before he is gone.
-const WATCHER_DEF = { rim: 0x000000, skin: 0x8e9592, horns: [0.95, 0.07, 3.0], hooded: true, dead: true, realEyes: true, eyeScale: 1.15 };
+const WATCHER_DEF = { rim: 0x000000, skin: 0x8e9592, horns: [0.95, 0.07, 3.0], hooded: true, dead: true, realEyes: true, eyeScale: 1.15, fingers: 1.95 };
 
 export class Watcher {
   constructor(scene, fx) {
     this.scene = scene; this.fx = fx;
     const body = buildHorror('devil', WATCHER_DEF);
     this.mat = body.mat; this.mesh = body.mesh; this.B = body.B;
+    // taller and gaunter than any man; the forearms far too long, so the pale wrists hang out of the sleeves
+    this.mesh.scale.set(0.92, 1.1, 0.92);
+    for (const k of ['R', 'L']) { const h = this.B['hand' + k]; h.position.multiplyScalar(1.32); h.userData.rest = h.position.clone(); }
+    this.casters = []; this.mesh.traverse((o) => { if (o.isMesh && o.castShadow) this.casters.push(o); }); this.shadows = true;
     this.mesh.visible = false; scene.add(this.mesh);
+    this._v = new THREE.Vector3(); this._f = new THREE.Vector3(); this.droneT = 3; this.unseen = 0; this.steps = 0; this.audio = null; this.view = null;
     this.pos = new THREE.Vector3(); this.yaw = 0; this.headYaw = 0; this.headTarget = 0; this.headRoll = 0; this.retarget = 0;
     this.state = 'hidden'; this.t = 0; this.fade = 0; this.mode = 'watch'; this.cool = 6; this.spotIdx = -1; this.seenT = 0;
   }
+  // compile every one of his shaders now (at chapter load), so the first time he appears the game does not stall
+  prewarm(renderer, camera) {
+    const was = this.mesh.visible; this.mesh.visible = true; this.mat.userData.u.uDissolve.value = 0.5;
+    try { renderer.compile(this.mesh, camera, this.scene); } catch (e) { try { renderer.compile(this.scene, camera); } catch {} }
+    this.mesh.visible = was;
+  }
+  setShadows(on) { if (on === this.shadows) return; this.shadows = on; for (const m of this.casters) m.castShadow = on; }
+  // is the camera looking at him (cosine of the angle off the view axis)
+  looked() { const c = this.view; if (!c) return 1; c.getWorldDirection(this._f); this._v.set(this.pos.x, this.pos.y + 3, this.pos.z).sub(c.position).normalize(); return this._f.dot(this._v); }
   // host decides where he appears; clients mirror the state
   hostUpdate(dt, world, knights, phase) {
     this.t += dt;
@@ -84,13 +98,21 @@ export class Watcher {
       });
       if (best < 0) { this.cool = 3; return; }
       this.spotIdx = best; const s = spots[best];
-      this.pos.set(s.x, s.y, s.z); this.state = 'appear'; this.t = 0; this.stay = 30 + R() * 25;
+      this.pos.set(s.x, s.y, s.z); this.state = 'appear'; this.t = 0; this.stay = 30 + R() * 25; this.steps = 0; this.unseen = 0;
       return 'appear';
     }
     let dmin = 1e9, nearest = null; for (const k of knights) { const d = Math.hypot(k.pos.x - this.pos.x, k.pos.z - this.pos.z); if (d < dmin) { dmin = d; nearest = k; } }
     if (nearest) { this.yaw = dampAngle(this.yaw, Math.atan2(nearest.pos.x - this.pos.x, nearest.pos.z - this.pos.z), 0.3, dt); }
     if (this.state === 'appear' && this.t > 1.6) { this.state = 'watch'; this.t = 0; }
     if (this.state === 'watch') {
+      // look away for long enough and when you look back he is closer. He is never seen to move.
+      if (this.looked() < 0.35) this.unseen += dt; else this.unseen = 0;
+      if (this.unseen > 2.6 && this.steps < 2 && nearest && dmin > 80) {
+        this.unseen = 0; this.steps++; const step = Math.min(16, dmin - 70);
+        const dx = (nearest.pos.x - this.pos.x) / dmin, dz = (nearest.pos.z - this.pos.z) / dmin;
+        const nx = this.pos.x + dx * step, nz = this.pos.z + dz * step;
+        if (world.inBounds(nx, nz)) { this.pos.set(nx, world.heightAt(nx, nz), nz); this.yaw = Math.atan2(dx, dz); return 'step'; }
+      }
       if (dmin < 60 || this.t > this.stay) { this.state = 'turn'; this.t = 0; return 'turn'; }
     }
     if (this.state === 'turn' && this.t > 2.4) { this.state = 'vanish'; this.t = 0; return 'vanish'; }
@@ -107,8 +129,20 @@ export class Watcher {
     this.fade = want;
     this.mat.userData.u.uDissolve.value = (1 - want) * 0.98;
     this.mat.userData.u.uTime.value = time; tickRobes(time);
-    if (this.fx && (this.state === 'appear' || this.state === 'vanish') && R() < 0.6) this.fx.wisp(new THREE.Vector3(this.pos.x, this.pos.y + R() * 3.5, this.pos.z), 1.0);
+    // smoke off him as he forms and unforms (a steady trickle, not a burst every frame)
+    if (this.fx && (this.state === 'appear' || this.state === 'vanish') && R() < dt * 14) this.fx.wisp(this._v.set(this.pos.x, this.pos.y + R() * 3.8, this.pos.z), 1.0);
+    // he has moved while no one was looking: a breath at your ear as you find him nearer
+    if (this.lastPos && this.state === 'watch' && this.lastPos.distanceToSquared(this.pos) > 25 && this.audio) { this.audio.stinger?.('breath', 0.45); this.audio.whisper?.(camPos || this.pos, 1.6, 0.45); }
+    (this.lastPos ||= new THREE.Vector3()).copy(this.pos);
     this.mesh.position.copy(this.pos); this.mesh.rotation.y = this.yaw;
+    // far off he casts no shadow (and nothing while he is still forming)
+    const camD = camPos ? Math.hypot(camPos.x - this.pos.x, camPos.z - this.pos.z) : 0;
+    this.setShadows(camD < 60 && want > 0.95);
+    // while he watches and you look at him: a drone too low to hear so much as feel, and a whisper
+    if (this.audio && this.state === 'watch') {
+      this.droneT -= dt;
+      if (this.droneT <= 0 && this.looked() > 0.9) { this.droneT = 9 + R() * 5; this.audio.stinger?.('drone', 0.32); if (R() < 0.5) this.audio.whisper?.(this._v.set(this.pos.x, this.pos.y + 3, this.pos.z), 2.4, 0.35); }
+    }
     // the head tracks the nearest knight with sudden, unnatural snaps
     this.retarget -= dt;
     if (this.retarget <= 0) {
@@ -118,27 +152,29 @@ export class Watcher {
       this.headTarget = clamp(look, -1.8, 1.8);
       // now and then the head lolls over, far past where a neck should allow, and stays there
       this.tilt = R() < 0.3 ? (R() < 0.5 ? -1 : 1) * (0.75 + R() * 0.35) : (R() - 0.5) * 0.35;
-      this.snap = R() < 0.6;   // most moves are a single sudden snap; the rest a slow, deliberate creep
+      this.snap = R() < 0.5;   // half the moves a sudden snap; the rest a slow, deliberate creep
     }
     if (this.state === 'stare') { this.headTarget = 0; this.tilt = 0.12; this.snap = false; this.retarget = 1; }
     let hy = this.headTarget, roll = this.tilt || 0;
     if (this.state === 'turn') {
       // the owl-turn: all the way round, in small jerking steps, the head tipping over as it goes
-      const p = smooth(clamp(this.t / 2.2, 0, 1)), steps = Math.floor(p * 9) / 9;
-      const q = lerp(steps, p, 0.25) + Math.sin(time * 41) * 0.006;
+      // each jerk is quick and then held, so it reads as a deliberate stop-start, not a stutter
+      const p = clamp(this.t / 2.2, 0, 1) * 9, k = Math.floor(p), f = p - k, q = Math.min(1, (k + 1 - Math.pow(1 - Math.min(1, f * 3.5), 3)) / 9);
       hy = this.turnFrom === undefined ? (this.turnFrom = this.headYaw) : this.turnFrom;
       hy += Math.sign(this.headTarget || 1) * Math.PI * q;
       roll = Math.sin(q * Math.PI) * 0.55 * Math.sign(this.headTarget || 1);
       this.headYaw = hy;
     } else {
       this.turnFrom = undefined;
-      this.headYaw = dampAngle(this.headYaw, hy, this.snap ? 30 : 1.6, dt);
+      this.headYaw = dampAngle(this.headYaw, hy, this.snap ? 13 : 1.2, dt);
     }
-    this.headRoll = damp(this.headRoll, roll, this.state === 'turn' ? 30 : 2.2, dt);
-    const tremor = Math.sin(time * 29) * 0.012 + Math.sin(time * 17.3) * 0.008;
+    // the head creeps over into its tilt, slowly, and keeps going a little further than it should
+    this.headRoll = damp(this.headRoll, roll * (1 + 0.15 * Math.sin(time * 0.21)), this.state === 'turn' ? 14 : 0.9, dt);
+    // a palsy too slight to see except as wrongness (smooth, so it never reads as a glitch)
+    const tremor = (Math.sin(time * 6.1) * 0.6 + Math.sin(time * 9.7 + 1.3) * 0.4) * 0.006;
     // utterly still; a slow breath and nothing else
-    const breath = Math.sin(time * 0.5) * 1.2;
-    e(B.hips, 0, 0, 0); e(B.spine, 4, 0, 0); e(B.chest, 6 + breath, 0, 0);
+    const breath = Math.sin(time * 0.42) * 1.6, sway = Math.sin(time * 0.17) * 1.2;
+    e(B.hips, 0, 0, sway * 0.3); e(B.spine, 5, 0, -sway * 0.5); e(B.chest, 9 + breath, 0, 0);   // a slight stoop over you
     // the neck takes a little of the turn and leans into the tilt; the head does the rest
     const ny = clamp(this.headYaw, -0.6, 0.6) * 0.3;
     B.neck.rotation.set(0.14 - Math.abs(this.headRoll) * 0.1, ny, this.headRoll * 0.25, 'YXZ');
@@ -153,6 +189,16 @@ export class Watcher {
     }
   }
 }
+
+// One Devil for the scares (Dread's 'turn round and He is there', Terror's figure on the road), shared, built and
+// compiled once per game rather than once per system.
+export function phantomDevil(g) {
+  let D = g._phantomDevil;
+  if (!D) { D = g._phantomDevil = new Watcher(g.scene, g.fx); D.audio = g.audio; D.view = g.engine.camera; D.prewarm(g.engine.renderer, g.engine.camera); }
+  if (D.mesh.parent !== g.scene) g.scene.add(D.mesh);
+  return D;
+}
+export function releasePhantom(D, owner) { if (!D || (owner && D.owner && D.owner !== owner)) return; D.state = 'hidden'; D.mesh.visible = false; D.owner = null; }
 
 // ================================================================ CREVICE EYES
 export class Crevices {

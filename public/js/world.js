@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { icoSmooth } from './demons.js';
 import { CHAPTERS, HEALED } from './chapters.js';
-import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture } from './textures.js';
+import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture, cloudTexture } from './textures.js';
 import { rng, makeNoise, pathSampler, clamp, lerp, smooth, SpatialHash, TAU } from './util.js';
 import { Vista } from './vista.js';
 import { buildFallen } from './battlefield.js';
@@ -19,7 +19,7 @@ function xf(g, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) {
   g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(...p), new THREE.Quaternion().setFromEuler(new THREE.Euler(...r)), new THREE.Vector3(...s)));
   return g;
 }
-function clean(g) { for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n); if (!g.index) { const a = []; for (let i = 0; i < g.attributes.position.count; i++) a.push(i); g.setIndex(a); } return g; }
+function clean(g) { for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n); if (!g.attributes.normal) g.computeVertexNormals(); if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2)); if (!g.index) { const a = []; for (let i = 0; i < g.attributes.position.count; i++) a.push(i); g.setIndex(a); } return g; }
 function merge(list) { return mergeGeometries(list.map(clean)); }
 function uvScale(g, su, sv) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv); return g; }
 function lumpy(g, amt, seed) { // perturb a rock along its normals
@@ -49,8 +49,8 @@ function snowyRock(mat) {
   mat.customProgramCacheKey = () => 'snowyRock';
   return mat;
 }
-function jaggedRock(seed, taper = 0) {
-  const r = rng(seed); let g = icoSmooth(3); const p = g.attributes.position; const v = new THREE.Vector3();
+function jaggedRock(seed, taper = 0, detail = 3) {
+  const r = rng(seed); let g = icoSmooth(detail); const p = g.attributes.position; const v = new THREE.Vector3();
   const planes = []; for (let k = 0; k < 9; k++) { const nrm = new THREE.Vector3(r() - 0.5, (r() - 0.5) * 1.2, r() - 0.5).normalize(); planes.push([nrm, 0.55 + r() * 0.35]); }
   const nz = makeNoise(seed);
   for (let i = 0; i < p.count; i++) {
@@ -61,6 +61,15 @@ function jaggedRock(seed, taper = 0) {
     p.setXYZ(i, v.x, v.y, v.z);
   }
   g = g.toNonIndexed(); g.computeVertexNormals(); return g;
+}
+
+// a lot's corners in world space (pad metres outside it); with n, a grid of n+1 x n+1 sample points over it
+function lotCorners(L, pad = 0, n = 0) {
+  const C = Math.cos(L.yaw), S = Math.sin(L.yaw), out = [];
+  const toW = (lx, lz) => [L.x + lx * C + lz * S, L.z - lx * S + lz * C];
+  if (!n) return [toW(L.x0 - pad, L.z0 - pad), toW(L.x1 + pad, L.z0 - pad), toW(L.x1 + pad, L.z1 + pad), toW(L.x0 - pad, L.z1 + pad)];
+  for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) out.push(toW(lerp(L.x0 - pad, L.x1 + pad, i / n), lerp(L.z0 - pad, L.z1 + pad, j / n)));
+  return out;
 }
 
 export class World {
@@ -74,6 +83,7 @@ export class World {
     this.fires = []; this.waterLevel = -1000;
     this.healedFrac = 0;
     this.buildPath();
+    this.planSettlement();
     this.buildHeights();
     this.buildTerrain();
     if (this.ch.terrain.kind !== 'peak') this.buildFarTerrain();
@@ -102,6 +112,12 @@ export class World {
       pts.push({ x: r.range(-15, 15), z: 128 });
     }
     this.path = pathSampler(pts);
+    if (kind === 'mountain') {
+      // a ledge stretch with the drop on the outside of the bend, and a crevasse split across the track
+      this.ledge = { t0: 0.47, t1: 0.57, side: 1 };
+      const ct = 0.27, c0 = this.path.at(ct), c1 = this.path.at(ct + 0.004); let tx = c1.x - c0.x, tz = c1.z - c0.z; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      this.crevasse = { t: ct, x: c0.x, z: c0.z, nx: tx, nz: tz };   // its line runs across the track (normal = the track direction)
+    }
     // altars along the path
     const n = this.ch.altars; this.altarT = [];
     if (kind === 'peak') {
@@ -169,42 +185,213 @@ export class World {
   buildHeights() {
     const H = this.H = new Float32Array(N * N);
     const T = this.ch.terrain;
-    // path table
-    const PT = 400; const pathH = new Float32Array(PT + 1);
+    this.makePathHeights();
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) H[j * N + i] = this.rawHeight(-HALF + i * CELL, -HALF + j * CELL);
+    this.flattenLots();
+    for (const a of this.altarT) a.y = this.heightAt(a.x, a.z);
+    for (const s of this.devilSpots) s.y = this.groundAt(s.x, s.z);
+  }
+  // the ground as generated, before any building pad is levelled into it (needs the path heights)
+  rawHeight(x, z) {
+    const T = this.ch.terrain, PT = 400, pathH = this.pathH;
+    let h = this.baseHeight(x, z);
+    if (T.kind !== 'peak') {
+      const nr = this.path.nearest(x, z);
+      const ph = pathH[Math.round(nr.t * PT)];
+      if (T.kind === 'mountain') h = this.gorgeHeight(x, z, nr, ph, h);
+      else h = lerp(ph, h, smooth(clamp((nr.d - 4) / 14, 0, 1)));
+    }
+    // flatten altar sites
+    for (const a of this.altarT) {
+      const d = Math.hypot(x - a.x, z - a.z);
+      const fr = T.kind === 'peak' ? 5.5 : 9;
+      if (d < fr * 2) { const ah = this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - fr) / fr, 0, 1))); }
+    }
+    return h;
+  }
+  // half the width of the Ascent's track at t: wide at the foot where the company gathers, narrow above
+  trackHalf(t) { return 4.6 + this.noise.fbm(t * 9, 3.1, 2) * 2.2 + 9 * (1 - smooth(clamp(t / 0.07, 0, 1))); }
+  gorgeHeight(x, z, nr, ph, h) {
+    // the Ascent: a narrow track up a gorge. Its walls stand up as cliffs from the track's edge, bedded in strata
+    // (benches where harder beds stand out), split by fractures; above them broken slopes climb into snow. In one
+    // stretch the track is a ledge along the cliff with a drop into the gorge on its outer side; a crevasse splits
+    // it further on, crossed by a rope bridge.
+    const n = this.noise, t = nr.t;
+    const half = this.trackHalf(t);                                                     // how wide the track is here
+    const wall = Math.max(0, nr.d - half);
+    let rise = Math.min(wall, 9) * 2.4 + Math.max(0, wall - 9) * 1.15 + Math.pow(Math.max(0, wall - 14), 1.25) * 0.08;
+    const bands = 5.5 + n.fbm(x * 0.01, z * 0.01, 2) * 2;                             // strata: harder beds make benches
+    const q = rise / bands, f = q - Math.floor(q);
+    rise = (Math.floor(q) + smooth(clamp((f - 0.25) / 0.5, 0, 1))) * bands * 0.55 + rise * 0.45;
+    rise += (n.ridge(x * 0.11, z * 0.11, 3) - 0.5) * 3.2 * smooth(clamp(wall / 3, 0, 1));   // fractures and buttresses
+    rise += n.fbm(x * 0.04, z * 0.04, 3) * 6 * smooth(clamp((wall - 10) / 10, 0, 1));
+    let y = ph + rise + h * 0.15 * smooth(clamp((wall - 12) / 20, 0, 1));
+    // the track itself: rough, cambered a little, scattered with grit
+    y += n.fbm(x * 0.3, z * 0.3, 2) * 0.12 * (1 - smooth(clamp(wall, 0, 1)));
+    // the ledge: one side of the track falls away into the gorge
+    const L = this.ledge; if (L && t > L.t0 && t < L.t1) {
+      const k = smooth(clamp((t - L.t0) / 0.03, 0, 1)) * smooth(clamp((L.t1 - t) / 0.03, 0, 1));
+      const p = this.path.at(t), q2 = this.path.at(Math.min(1, t + 0.004)); const nx = -(q2.z - p.z), nz = q2.x - p.x;
+      const side = Math.sign((x - p.x) * nx + (z - p.z) * nz);
+      if (side === L.side && nr.d > 3.2) y = lerp(y, ph - Math.min(40, (nr.d - 3.2) * 4.5) - 2, k);
+    }
+    // the crevasse across the track
+    const C = this.crevasse; if (C) { const d = Math.abs((x - C.x) * C.nx + (z - C.z) * C.nz); const along = Math.abs((x - C.x) * C.nz - (z - C.z) * C.nx); if (d < 3.4 && along < 26) y -= (1 - smooth(d / 3.4)) * 9 * (1 - smooth(clamp((along - 14) / 12, 0, 1))); }
+    return y;
+  }
+  // ---------------------------------------------------------------- settlement
+  // Farms and the village are laid out on purpose: houses front the road at a set-back, turned to face it, with
+  // yards behind; a farmstead is a house and a barn round a yard beside a fenced field; each building stands on
+  // a pad levelled into the ground before the terrain is built. Fences are planned here too, as continuous runs.
+  planSettlement() {
+    const P = this.ch.props, T = this.ch.terrain; this.lots = []; this.fenceRuns = [];
+    if (T.kind === 'peak') return;
+    if (T.kind === 'mountain') {
+      // the First Company's last camp: a shelf cut back into the gorge wall beside the track
+      this.makePathHeights();
+      const t = 0.74, p = this.path.at(t), q = this.path.at(t + 0.004); let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
+      const x = p.x + nx * 8.5, z = p.z + nz * 8.5; const yaw = Math.atan2(-nx, -nz);
+      const camp = { kind: 'camp', x, z, yaw, w: 11, d: 8, x0: -6, x1: 6, z0: -4.5, z1: 5.5, rad: 9 };
+      camp.padH = this.pathH[Math.round(t * 400)]; this.lots.push(camp); this.camp = camp;
+      return;
+    }
+    const r = rng(this.ch.seed + 909);
+    // the path heights are needed for rawHeight; make them now (buildHeights keeps them)
+    this.makePathHeights();
+    const roadPt = (t) => { const p = this.path.at(t), q = this.path.at(Math.min(1, t + 0.004)), q0 = this.path.at(Math.max(0, t - 0.004)); let tx = q.x - q0.x, tz = q.z - q0.z; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; return { p, tx, tz, nx: -tz, nz: tx }; };
+    const fits = (lot) => {
+      const corners = lotCorners(lot, 0);
+      for (const [cx, cz] of corners) { if (!this.inBounds(cx, cz) || this.path.nearest(cx, cz).d < 5.5) return false; for (const a of this.altarT) if (Math.hypot(cx - a.x, cz - a.z) < 13) return false; }
+      for (const a of this.altarT) if (Math.hypot(lot.x - a.x, lot.z - a.z) < 16) return false;
+      for (const o of this.lots) if (Math.hypot(o.x - lot.x, o.z - lot.z) < o.rad + lot.rad + 1) return false;
+      let lo = 1e9, hi = -1e9; for (const [cx, cz] of lotCorners(lot, 0, 3)) { const h = this.rawHeight(cx, cz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+      return hi - lo < (lot.kind === 'field' ? 5 : 3.2);
+    };
+    const add = (lot) => { lot.rad = Math.hypot(Math.max(-lot.x0, lot.x1), Math.max(-lot.z0, lot.z1)); if (!fits(lot)) return null; this.lots.push(lot); return lot; };
+    // a house fronting the road: local +z faces the road; the front yard runs to the road, the back yard behind
+    const house = (t, side, set, w, d, kind = 'house') => {
+      const R = roadPt(t); const x = R.p.x + R.nx * side * set, z = R.p.z + R.nz * side * set;
+      const yaw = Math.atan2(-R.nx * side, -R.nz * side);
+      return add({ kind, x, z, yaw, w, d, x0: -w / 2 - 2.2, x1: w / 2 + 2.2, z0: -d / 2 - 5, z1: d / 2 + 1.2, t, side });
+    };
+    // Saint Aldric's: the church by the second altar, and the village street along the road either side of it
+    if (P.village) {
+      const a = this.altarT[1] || this.altarT[0];
+      const R = roadPt(a.t); const x = a.x + R.nx * 22, z = a.z + R.nz * 22, yaw = Math.atan2(R.nx, R.nz);
+      const ch = { kind: 'church', x, z, yaw, w: 9, d: 20, x0: -18, x1: 18, z0: -12, z1: 24, rad: 0 }; ch.rad = Math.hypot(18, 24); this.lots.push(ch); this.churchLot = ch;
+      let n = 0;
+      for (let k = 0; k < 40 && n < 11; k++) {
+        const t = a.t + (k % 2 ? 1 : -1) * (0.035 + Math.floor(k / 2) * 0.032), side = Math.floor(k / 2) % 2 ? 1 : -1;
+        if (t < 0.04 || t > 0.96) continue;
+        if (house(t, side, r.range(12, 14), r.range(6, 8.5), r.range(5, 6.5))) n++;
+        else if (house(t, -side, r.range(12, 14), r.range(6, 8.5), r.range(5, 6.5))) n++;
+      }
+    }
+    // farmsteads: a house fronting the road, a barn across the yard behind it, a fenced field beside them
+    for (let k = 0, made = 0; k < 30 && made < (P.farm || 0); k++) {
+      const t = r.range(0.08, 0.92), side = r.sign();
+      const h = house(t, side, r.range(13, 16), r.range(7, 8.5), r.range(5.5, 6.5)); if (!h) continue;
+      const C = Math.cos(h.yaw), S = Math.sin(h.yaw), toW = (lx, lz) => [h.x + lx * C + lz * S, h.z - lx * S + lz * C];
+      const fs = r.sign(), [bx, bz] = toW(fs * 4, -h.d / 2 - 13);
+      const barn = add({ kind: 'barn', x: bx, z: bz, yaw: h.yaw + Math.PI, w: r.range(10, 12), d: r.range(6.5, 7.5), x0: -7, x1: 7, z0: -6, z1: 6.5 });
+      if (!barn) { this.lots.splice(this.lots.indexOf(h), 1); continue; }
+      made++;
+      // the field: a fenced rectangle along the road beside the steading, with a gate toward the yard
+      const FW = r.range(26, 34), FD = r.range(20, 26); const [fx, fz] = toW(-fs * (h.w / 2 + 6 + FW / 2), -FD / 2 + 2);
+      const field = { kind: 'field', x: fx, z: fz, yaw: h.yaw, w: FW, d: FD, x0: -FW / 2, x1: FW / 2, z0: -FD / 2, z1: FD / 2 };
+      if (add(field)) this.fenceRuns.push({ pts: lotCorners(field, 0), closed: true, gate: 0.82, field });
+      // a small paddock against the barn
+      const pad = { kind: 'paddock', x: 0, z: 0, yaw: h.yaw, w: 10, d: 8, x0: -5, x1: 5, z0: -4, z1: 4 }; [pad.x, pad.z] = toW(fs * 4 + fs * 13, -h.d / 2 - 13);
+      if (add(pad)) this.fenceRuns.push({ pts: lotCorners(pad, 0), closed: true, gate: 0.1 });
+    }
+    // fences along the road where people lived: a run either side of each settled stretch, open at each gateway
+    if (P.fences) {
+      const stretches = [];
+      for (const L of this.lots) if (L.t !== undefined) stretches.push([L.t - 0.045, L.t + 0.045]);
+      stretches.sort((a, b) => a[0] - b[0]);
+      const merged = []; for (const s2 of stretches) { const m = merged[merged.length - 1]; if (m && s2[0] <= m[1] + 0.03) m[1] = Math.max(m[1], s2[1]); else merged.push([...s2]); }
+      for (const [t0, t1] of merged) for (const side of [-1, 1]) {
+        const pts = []; for (let t = Math.max(0.03, t0); t <= Math.min(0.97, t1); t += 0.004) { const R = roadPt(t); pts.push([R.p.x + R.nx * side * 6.8, R.p.z + R.nz * side * 6.8]); }
+        if (pts.length > 3) this.fenceRuns.push({ pts, closed: false, road: true });
+      }
+    }
+  }
+  makePathHeights() {
+    if (this.pathH) return;
+    const T = this.ch.terrain, PT = 400; const pathH = new Float32Array(PT + 1);
     for (let i = 0; i <= PT; i++) {
       const p = this.path.at(i / PT);
       if (T.kind === 'mountain') pathH[i] = (i / PT) * T.rise;
       else if (T.kind === 'fen') pathH[i] = Math.max(0.5, this.baseHeight(p.x, p.z) * 0.3 + 0.6);
       else pathH[i] = this.baseHeight(p.x, p.z) * 0.6;
     }
-    // smooth the path heights
     for (let pass = 0; pass < 6; pass++) for (let i = 1; i < PT; i++) pathH[i] = (pathH[i - 1] + pathH[i] * 2 + pathH[i + 1]) / 4;
     this.pathH = pathH;
-    const altars = this.altarT;
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const x = -HALF + i * CELL, z = -HALF + j * CELL;
-      let h = this.baseHeight(x, z);
-      if (T.kind !== 'peak') {
-        const nr = this.path.nearest(x, z);
-        const ph = pathH[Math.round(nr.t * PT)];
-        if (T.kind === 'mountain') {
-          // the road is a ravine climbing the mountain: walls rise to either side
-          const wall = Math.max(0, nr.d - 7);
-          h = ph + h * smooth(clamp((nr.d - 6) / 24, 0, 1)) + wall * 0.9 + Math.pow(wall, 1.3) * 0.05;
-        } else {
-          h = lerp(ph, h, smooth(clamp((nr.d - 4) / 14, 0, 1)));
-        }
+  }
+  // level a pad under every building (not under fields), blending out over a few metres
+  flattenLots() {
+    const H = this.H;
+    for (const L of this.lots) {
+      if (L.kind === 'field' || L.kind === 'paddock') continue;
+      let sum = 0, n = 0; if (L.padH === undefined) for (const [cx, cz] of lotCorners(L, 0, 4)) { sum += this.rawHeight(cx, cz); n++; }
+      const ph = L.padH ?? (L.padH = sum / n); const B = L.kind === 'camp' ? 4 : 7;
+      const C = Math.cos(L.yaw), S = Math.sin(L.yaw), R = L.rad + B;
+      const i0 = Math.max(0, Math.floor((L.x - R + HALF) / CELL)), i1 = Math.min(N - 1, Math.ceil((L.x + R + HALF) / CELL));
+      const j0 = Math.max(0, Math.floor((L.z - R + HALF) / CELL)), j1 = Math.min(N - 1, Math.ceil((L.z + R + HALF) / CELL));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const x = -HALF + i * CELL - L.x, z = -HALF + j * CELL - L.z;
+        const lx = x * C - z * S, lz = x * S + z * C;   // into the lot's frame
+        const dx = Math.max(L.x0 - lx, 0, lx - L.x1), dz = Math.max(L.z0 - lz, 0, lz - L.z1); const d = Math.hypot(dx, dz);
+        if (d > B) continue;
+        const k = j * N + i; H[k] = lerp(ph, H[k], smooth(d / B));
       }
-      // flatten altar sites
-      for (const a of altars) {
-        const d = Math.hypot(x - a.x, z - a.z);
-        const fr = T.kind === 'peak' ? 5.5 : 9;
-        if (d < fr * 2) { const ah = this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - fr) / fr, 0, 1))); }
-      }
-      H[j * N + i] = h;
     }
-    for (const a of altars) a.y = this.heightAt(a.x, a.z);
-    for (const s of this.devilSpots) s.y = this.groundAt(s.x, s.z);
+  }
+  inLot(x, z, pad = 0) {
+    for (const L of this.lots || []) {
+      const C = Math.cos(L.yaw), S = Math.sin(L.yaw), dx = x - L.x, dz = z - L.z, lx = dx * C - dz * S, lz = dx * S + dz * C;
+      if (lx > L.x0 - pad && lx < L.x1 + pad && lz > L.z0 - pad && lz < L.z1 + pad) return L;
+    }
+    return null;
+  }
+  // fences as continuous runs of posts and two rails, each rail sloping with the ground between its posts
+  buildFences(mat) {
+    if (!this.fenceRuns?.length) return;
+    const r = rng(this.ch.seed + 313); const posts = [], rails = [], gates = [];
+    for (const run of this.fenceRuns) {
+      const pts = run.closed ? [...run.pts, run.pts[0]] : run.pts;
+      // resample at ~2.4 m
+      const P2 = []; for (let k = 0; k < pts.length - 1; k++) { const [ax, az] = pts[k], [bx, bz] = pts[k + 1]; const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 2.4)); for (let i = 0; i < n; i++) P2.push([ax + (bx - ax) * i / n, az + (bz - az) * i / n, k]); }
+      P2.push([...pts[pts.length - 1], pts.length - 2]);
+      const total = P2.length; const gi = run.gate !== undefined ? Math.floor(run.gate * (total - 1)) : -1;
+      const ok = P2.map(([x, z]) => {
+        if (!this.inBounds(x, z) || this.normalAt(x, z).y < 0.82) return false;
+        if (!run.road && this.path.nearest(x, z).d < 4.8) return false;
+        for (const a of this.altarT) if (Math.hypot(x - a.x, z - a.z) < 11) return false;
+        const L = this.inLot(x, z, 0.4); if (L && L !== run.field && L.kind !== 'field' && L.kind !== 'paddock') return false;
+        return true;
+      });
+      // a gateway in front of each house along a road fence
+      const gap = P2.map(([x, z]) => { if (!run.road) return false; for (const L of this.lots) if (L.kind === 'house' && Math.hypot(x - L.x, z - L.z) < 9.5) { const toRoadx = Math.sin(L.yaw), toRoadz = Math.cos(L.yaw); const along = (x - L.x) * toRoadz - (z - L.z) * toRoadx; if (Math.abs(along) < 1.8) return true; } return false; });
+      for (let i = 0; i < total; i++) {
+        const [x, z] = P2[i]; if (!ok[i] || gap[i]) continue; const y = this.heightAt(x, z);
+        posts.push({ x, y: y - 0.32, z, ry: r() * 0.4, rx: r.range(-0.04, 0.04), rz: r.range(-0.04, 0.04) });
+        if (i + 1 >= total || !ok[i + 1] || gap[i + 1]) continue;
+        const [x2, z2] = P2[i + 1], y2 = this.heightAt(x2, z2), L = Math.hypot(x2 - x, z2 - z);
+        if (i === gi) { gates.push({ x: (x + x2) / 2, z: (z + z2) / 2, y: (y + y2) / 2, ry: Math.atan2(-(z2 - z), x2 - x), L }); continue; }
+        // the ground between posts must not rise through the rails
+        let bump = 0; for (const f of [0.25, 0.5, 0.75]) bump = Math.max(bump, this.heightAt(x + (x2 - x) * f, z + (z2 - z) * f) - (y + (y2 - y) * f));
+        const pitch = Math.atan2(y2 - y, L), ry = Math.atan2(-(z2 - z), x2 - x);
+        for (const hh of [0.42, 0.88]) { if (r() < 0.08) continue; rails.push({ x: (x + x2) / 2, y: (y + y2) / 2 + hh + bump, z: (z + z2) / 2, ry, rz: pitch, sx: L + 0.12 }); }
+      }
+    }
+    const post = new THREE.BoxGeometry(0.13, 1.4, 0.13); post.translate(0, 0.7, 0);
+    const rail = new THREE.BoxGeometry(1, 0.09, 0.055);
+    this.instanced(post, mat, posts); this.instanced(rail, mat, rails);
+    // gates, standing ajar
+    const gateList = [];
+    for (const G of gates) for (let k = 0; k < 4; k++) gateList.push({ x: G.x, y: G.y + 0.25 + k * 0.22, z: G.z, ry: G.ry + 0.5, sx: G.L * 0.95 });
+    if (gateList.length) this.instanced(new THREE.BoxGeometry(1, 0.08, 0.05), mat, gateList);
   }
   altarHeightGuess(a) {
     const T = this.ch.terrain;
@@ -223,7 +410,8 @@ export class World {
   }
   // where feet stand: the ground, or the steps of an altar (three octagonal steps of 26 cm) on top of it
   standAt(x, z) {
-    const h = this.heightAt(x, z);
+    let h = this.heightAt(x, z);
+    const B = this.bridge; if (B) { const dx = x - B.x, dz = z - B.z, a = dx * B.dx + dz * B.dz, s2 = Math.abs(dx * B.dz - dz * B.dx); if (Math.abs(a) < B.half && s2 < 1.05) h = Math.max(h, B.y - Math.cos((a / B.half) * Math.PI / 2) * 0.35); }
     if (!this.altars) return h;
     for (const a of this.altars) {
       const dx = x - a.x, dz = z - a.z, d2 = dx * dx + dz * dz; if (d2 > 11) continue;
@@ -270,7 +458,7 @@ export class World {
       tDead: { value: tt.dead }, tDeadN: { value: tt.deadN }, tAlive: { value: tt.alive }, tAliveN: { value: tt.aliveN },
       tRock: { value: tt.rock }, tRockN: { value: tt.rockN }, tSnow: { value: tt.snow }, tMask: { value: this.mask },
       uSize: { value: HALF * 2 }, uTile: { value: 0.22 }, uSnowLine: { value: T.kind === 'mountain' ? 85 : 9999 },
-      uWater: { value: T.water !== undefined ? 0.0 : -9999 }, uEmber: { value: this.ch.id === 'peak' ? 0.5 : this.ch.id === 'field' ? 1.6 : 0.9 }, uNStr: { value: 1.0 }, uRockAll: { value: T.kind === 'peak' ? 0.35 : 0 }, uFlatSnow: { value: T.kind === 'peak' ? 1 : 0 },
+      uWater: { value: T.water !== undefined ? 0.0 : -9999 }, uEmber: { value: this.ch.id === 'peak' ? 0.5 : this.ch.id === 'field' ? 1.6 : 0.9 }, uNStr: { value: 1.0 }, uRockAll: { value: T.kind === 'peak' ? 0.35 : 0 }, uFlatSnow: { value: T.kind === 'peak' || T.kind === 'mountain' ? 1 : 0 }, uSnowFrom: { value: T.kind === 'mountain' ? 10 : -1e4 }, uStrata: { value: T.kind === 'mountain' ? 1 : 0 },
       uDeadTint: { value: new THREE.Color(T.kind === 'fen' ? 0x8a8a78 : T.kind === 'mountain' || T.kind === 'peak' ? 0x9a9090 : 0xffffff) },
       uAliveTint: { value: new THREE.Color(T.kind === 'mountain' ? 0x9aa080 : 0xffffff) },
     };
@@ -283,7 +471,7 @@ export class World {
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
         varying vec3 vWPos; varying vec3 vWNorm;
         uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask;
-        uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow; uniform vec3 uDeadTint, uAliveTint;`)
+        uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow, uSnowFrom, uStrata; uniform vec3 uDeadTint, uAliveTint;`)
         .replace('#include <map_fragment>', `
         vec2 wuv = vWPos.xz * uTile;
         vec2 muv = vWPos.xz / uSize + 0.5;
@@ -298,10 +486,14 @@ export class World {
         vec3 ground = mix(deadCol, mix(grass.rgb, grass2.rgb, 0.4) * uAliveTint, aliveMix);
         float rockMix = smoothstep(0.30, 0.52, slope + (rock.a - 0.5) * 0.18);
         rockMix = max(rockMix, uRockAll * smoothstep(0.25, 0.6, rock.a + dead2.a * 0.4));   // the summit: bare broken rock with grit in the hollows
-        vec3 tcol = mix(ground, rock.rgb * mix(0.62, 1.0, aliveMix), rockMix);
+        vec3 rockC = rock.rgb * mix(0.62, 1.0, aliveMix);
+        // the gorge walls: bedded strata, pale and dark bands that kink with the folds of the rock
+        float bed = vWPos.y * 0.55 + sin(vWPos.x * 0.05 + vWPos.z * 0.04) * 2.2 + rock.a * 1.2;
+        rockC *= mix(1.0, 0.72 + 0.5 * smoothstep(0.2, 0.8, abs(fract(bed) - 0.5) * 2.0) + 0.15 * sin(bed * 0.37), uStrata);
+        vec3 tcol = mix(ground, rockC, rockMix);
         float snow = smoothstep(uSnowLine, uSnowLine + 10.0, vWPos.y + rock.a * 5.0) * (1.0 - rockMix * 0.5);
         // on the summit the snow lies on everything flat enough to hold it, thin and wind-scoured, rock showing through
-        snow = max(snow, uFlatSnow * smoothstep(0.62, 0.86, vWNorm.y + (rock.a - 0.5) * 0.3 + (dead2.a - 0.5) * 0.15));
+        snow = max(snow, uFlatSnow * smoothstep(0.62, 0.86, vWNorm.y + (rock.a - 0.5) * 0.3 + (dead2.a - 0.5) * 0.15) * smoothstep(uSnowFrom, uSnowFrom + 70.0, vWPos.y + (rock.a - 0.5) * 16.0));
         tcol = mix(tcol, texture2D(tSnow, wuv).rgb, snow);
         float wet = 1.0 - smoothstep(uWater - 0.2, uWater + 0.7, vWPos.y);
         tcol *= mix(1.0, 0.5, wet);
@@ -474,7 +666,14 @@ export class World {
     else if (this.ch.terrain.kind === 'mountain') {
       // stay in the ravine
       const nr = this.path.nearest(p.x, p.z);
-      if (nr.d > 13) { const q = this.path.at(nr.t); const k = 13 / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
+      // along the ledge, the outer edge is the edge of the world
+      let lim = 13; const L = this.ledge;
+      if (L && nr.t > L.t0 && nr.t < L.t1) { const a = this.path.at(nr.t), b = this.path.at(Math.min(1, nr.t + 0.004)); const side = Math.sign((p.x - a.x) * -(b.z - a.z) + (p.z - a.z) * (b.x - a.x)); if (side === L.side) lim = 3.0; }
+      if (nr.d > lim) { const q = this.path.at(nr.t); const k = lim / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
+      // the crevasse: only the bridge crosses it
+      const C = this.crevasse, B = this.bridge;
+      if (C && B) { const d = (p.x - C.x) * C.nx + (p.z - C.z) * C.nz, along = (p.x - C.x) * C.nz - (p.z - C.z) * C.nx;
+        if (Math.abs(d) < 3.6 && Math.abs(along) < 16 && Math.abs(along) > 0.95) { const push = (Math.sign(d) || 1) * 3.6 - d; p.x += C.nx * push; p.z += C.nz * push; } }
     } else { p.x = clamp(p.x, -lim, lim); p.z = clamp(p.z, -lim, lim); }
   }
   inBounds(x, z) { return Math.abs(x) < HALF - 10 && Math.abs(z) < HALF - 10; }
@@ -483,6 +682,7 @@ export class World {
     if (!this.inBounds(x, z)) return false;
     if (this.ch.terrain.kind !== 'peak' && this.path.nearest(x, z).d < minPath) return false;
     for (const a of this.altarT) if (Math.hypot(x - a.x, z - a.z) < minAltar) return false;
+    if (this.inLot(x, z, 1.5)) return false;
     return true;
   }
   scatter(n, test, cb, tries = 6) {
@@ -497,7 +697,7 @@ export class World {
     if (!list.length) return null;
     const m = new THREE.InstancedMesh(geo, mat, list.length);
     const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3(), E = new THREE.Euler();
-    list.forEach((it, i) => { E.set(it.rx || 0, it.ry || 0, it.rz || 0); Q.setFromEuler(E); S.setScalar(it.s || 1); if (it.sy) S.y = it.sy; P.set(it.x, it.y, it.z); M.compose(P, Q, S); m.setMatrixAt(i, M); });
+    list.forEach((it, i) => { E.set(it.rx || 0, it.ry || 0, it.rz || 0); Q.setFromEuler(E); S.setScalar(it.s || 1); if (it.sy) S.y = it.sy; if (it.sx) S.x = it.sx; if (it.sz) S.z = it.sz; P.set(it.x, it.y, it.z); M.compose(P, Q, S); m.setMatrixAt(i, M); });
     m.castShadow = shadow; m.receiveShadow = receive; m.instanceMatrix.needsUpdate = true;
     m.computeBoundingSphere?.();
     this.group.add(m); return m;
@@ -576,7 +776,7 @@ export class World {
       const lists = variants.map(() => []);
       const leafList = [];
       const dense = kind === 'wood';
-      this.scatter(P.deadTrees, (x, z) => this.okSpot(x, z, dense ? 7 : 9, 16) && (kind !== 'fen' || this.heightAt(x, z) > -0.3), (x, z, y) => {
+      this.scatter(P.deadTrees, (x, z) => this.okSpot(x, z, dense ? 7 : 9, 16) && (kind !== 'fen' || this.heightAt(x, z) > -0.3) && (kind !== 'mountain' || this.normalAt(x, z).y > 0.74), (x, z, y) => {
         const v = r.int(0, 5); const s = r.range(0.8, 1.35);
         const it = { x, y: y - 0.1, z, ry: r() * TAU, s, rx: r.range(-0.06, 0.06), rz: r.range(-0.06, 0.06) };
         lists[v].push(it); this.addCollider(x, z, 0.45 * s);
@@ -600,7 +800,7 @@ export class World {
       const rocks = []; for (let v = 0; v < 5; v++) rocks.push(lumpy(icoSmooth(2), 0.35, 30 + v));
       const lists = rocks.map(() => []);
       this.scatter(P.rocks || 0, (x, z) => this.okSpot(x, z, 4, 11), (x, z, y) => { const s = r.range(0.4, 1.6); lists[r.int(0, 4)].push({ x, y: y - s * 0.3, z, s, sy: s * r.range(0.6, 1), ry: r() * TAU }); if (s > 0.9) this.addCollider(x, z, s * 0.8); });
-      if (P.crags && kind !== 'peak') this.scatter(P.crags, (x, z) => this.okSpot(x, z, 11, 14), (x, z, y) => { const s = r.range(2.5, 6); lists[r.int(0, 4)].push({ x, y: y + s * 0.4, z, s, sy: s * r.range(1.4, 2.6), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }); this.addCollider(x, z, s * 0.85); });
+      if (P.crags && kind !== 'peak' && kind !== 'mountain') this.scatter(P.crags, (x, z) => this.okSpot(x, z, 11, 14), (x, z, y) => { const s = r.range(2.5, 6); lists[r.int(0, 4)].push({ x, y: y + s * 0.4, z, s, sy: s * r.range(1.4, 2.6), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }); this.addCollider(x, z, s * 0.85); });
       if (kind === 'peak') {
         // fractured outcrops on the lip of the arena and along the arêtes, leaning spires of black rock, the summit fang
         const jag = [], spires = []; for (let v = 0; v < 4; v++) { jag.push(jaggedRock(500 + v)); spires.push(jaggedRock(600 + v, 0.35)); }
@@ -625,7 +825,14 @@ export class World {
       const list = [];
       const yard = this.altarT[Math.min(1, this.altarT.length - 1)];
       for (let k = 0; k < P.graves; k++) {
-        const cx = yard.x + 14 + (k % 6) * 1.6 + r.range(-0.2, 0.2), cz = yard.z - 6 + Math.floor(k / 6) * 1.8;
+        let cx = yard.x + 14 + (k % 6) * 1.6 + r.range(-0.2, 0.2), cz = yard.z - 6 + Math.floor(k / 6) * 1.8;
+        const CL = this.churchLot;
+        if (CL) {   // the churchyard: rows of graves beside the nave, on the church's levelled ground
+          const lx = (k % 2 ? 1 : -1) * (11 + (Math.floor(k / 2) % 4) * 1.7) + r.range(-0.15, 0.15), lz = -9 + Math.floor(k / 8) * 2.0 + r.range(-0.15, 0.15);
+          const C = Math.cos(CL.yaw), S = Math.sin(CL.yaw); cx = CL.x + lx * C + lz * S; cz = CL.z - lx * S + lz * C;
+          if (!this.inBounds(cx, cz) || this.normalAt(cx, cz).y < 0.94 || this.path.nearest(cx, cz).d < 4) continue;
+          list.push({ x: cx, y: this.heightAt(cx, cz) - 0.15, z: cz, ry: CL.yaw + r.range(-0.08, 0.08), rx: r.range(-0.1, 0.1), rz: r.range(-0.1, 0.1), s: r.range(0.85, 1.15) }); continue;
+        }
         const [x, z] = this.okSpot(cx, cz, 3, 9) ? [cx, cz] : [r.range(-100, 100), r.range(-100, 100)];
         if (!this.okSpot(x, z, 3, 9) || this.normalAt(x, z).y < 0.94) continue;   // a churchyard is level ground, never a hillside
         list.push({ x, y: this.heightAt(x, z) - 0.15, z, ry: r.range(-0.2, 0.2), rx: r.range(-0.15, 0.15), rz: r.range(-0.15, 0.15), s: r.range(0.85, 1.15) });
@@ -634,20 +841,13 @@ export class World {
     }
     if (P.crosses) {
       const cg = merge([xf(new THREE.BoxGeometry(0.1, 1.6, 0.1), [0, 0.7, 0]), xf(new THREE.BoxGeometry(0.7, 0.09, 0.09), [0, 1.1, 0])]);
-      const list = []; this.scatter(P.crosses, (x, z) => this.okSpot(x, z, 3, 12), (x, z, y) => list.push({ x, y: y - 0.1, z, ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.2, 0.2) }));
+      const list = []; this.scatter(P.crosses, (x, z) => this.okSpot(x, z, 3, 12) && this.normalAt(x, z).y > 0.86, (x, z, y) => list.push({ x, y: y - 0.1, z, ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.2, 0.2) }));
       this.instanced(cg, woodMat, list);
     }
-    if (P.fences) {
-      const fg = merge([xf(new THREE.BoxGeometry(0.1, 1.1, 0.1), [-1.2, 0.55, 0]), xf(new THREE.BoxGeometry(0.1, 1.1, 0.1), [1.2, 0.55, 0]), xf(new THREE.BoxGeometry(2.6, 0.08, 0.06), [0, 0.8, 0]), xf(new THREE.BoxGeometry(2.6, 0.08, 0.06), [0, 0.4, 0.0])]);
-      const list = []; this.scatter(P.fences, (x, z) => { const n = this.path.nearest(x, z); return n.d > 5 && n.d < 9 && this.okSpot(x, z, 4, 12); }, (x, z, y) => { const n = this.path.nearest(x, z); const a = this.path.at(n.t), b = this.path.at(Math.min(1, n.t + 0.004)); list.push({ x, y: y - 0.05, z, ry: Math.atan2(b.x - a.x, b.z - a.z) + PI / 2, rz: r.range(-0.15, 0.15) }); });
-      this.instanced(fg, charMat, list);
-    }
-    // --- ruins: farms and the village of Saint Aldric
-    if (P.farm) for (let k = 0; k < P.farm; k++) this.placeHouse(r, woodMat, charMat, brickMat, false);
-    if (P.village) {
-      for (let k = 0; k < 11; k++) this.placeHouse(r, woodMat, charMat, brickMat, false);
-      this.placeChurch(r, brickMat, charMat);
-    }
+    this.buildFences(woodMat.clone());
+    // --- the farms and the village of Saint Aldric, on their planned lots
+    for (const L of this.lots || []) if (L.kind === 'house' || L.kind === 'barn') this.placeHouse(r, woodMat, charMat, brickMat, L.kind === 'barn', L);
+    if (P.village) this.placeChurch(r, brickMat, charMat);
     if (P.fires) {
       for (let k = 0; k < P.fires; k++) {
         const near = this.ruinSpots?.length ? this.ruinSpots[k % this.ruinSpots.length] : null;
@@ -674,7 +874,7 @@ export class World {
     }
     if (P.logs) {
       const lg = new THREE.CylinderGeometry(0.35, 0.4, 6, 10, 1); lg.rotateZ(PI / 2);
-      const list = []; this.scatter(P.logs, (x, z) => this.okSpot(x, z, 6, 12), (x, z, y) => { const ry = r() * TAU; list.push({ x, y: y + 0.25, z, ry }); for (let s = -2; s <= 2; s++) this.addCollider(x + Math.cos(ry) * s * 1.2, z - Math.sin(ry) * s * 1.2, 0.45); });
+      const list = []; this.scatter(P.logs, (x, z) => this.okSpot(x, z, 6, 12) && this.normalAt(x, z).y > 0.93, (x, z, y) => { const ry = r() * TAU; list.push({ x, y: y + 0.25, z, ry }); for (let s = -2; s <= 2; s++) this.addCollider(x + Math.cos(ry) * s * 1.2, z - Math.sin(ry) * s * 1.2, 0.45); });
       this.instanced(lg, barkMat, list);
     }
     if (P.boardwalk) {
@@ -698,7 +898,7 @@ export class World {
     if (P.cannons) {
       const bronze = new THREE.MeshStandardMaterial({ color: 0x7a5a2a, metalness: 1, roughness: 0.45 });
       for (let k = 0; k < P.cannons; k++) {
-        const x = r.range(-90, 90), z = r.range(-90, 90); if (!this.okSpot(x, z, 6, 14)) continue;
+        const x = r.range(-90, 90), z = r.range(-90, 90); if (!this.okSpot(x, z, 6, 14) || this.normalAt(x, z).y < 0.9) continue;
         const g = new THREE.Group(); g.position.set(x, this.heightAt(x, z), z); g.rotation.y = r() * TAU; g.rotation.z = r.range(-0.2, 0.2);
         const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, 2.4, 14), bronze); barrel.rotation.x = PI / 2 - 0.15; barrel.position.y = 0.75; g.add(barrel);
         for (const s of [-1, 1]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.07, 6, 14), woodMat); w.position.set(s * 0.45, 0.5, 0); w.rotation.y = PI / 2; g.add(w); }
@@ -707,12 +907,13 @@ export class World {
       }
     }
     if (P.wagons) for (let k = 0; k < P.wagons; k++) {
-      const x = r.range(-100, 100), z = r.range(-100, 100); if (!this.okSpot(x, z, 6, 14)) continue;
-      const g = new THREE.Group(); g.position.set(x, this.heightAt(x, z), z); g.rotation.set(0, r() * TAU, r.range(-0.4, 0.4));
+      const x = r.range(-100, 100), z = r.range(-100, 100); if (!this.okSpot(x, z, 6, 14) || this.normalAt(x, z).y < 0.9) continue;
+      const g = new THREE.Group(); g.position.set(x, this.heightAt(x, z) - 0.1, z); g.rotation.set(0, r() * TAU, r.range(-0.3, 0.3));
       const bed = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3.2), charMat); bed.position.y = 0.8; g.add(bed);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.06, 6, 12), woodMat); w.position.set(sx * 0.85, 0.45, sz * 1.1); w.rotation.y = PI / 2; g.add(w); }
       g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.addCollider(x, z, 1.8);
     }
+    if (kind === 'mountain') this.buildAscent(stoneMat, woodMat, charMat);
     // --- mountain crevices: dark clefts where eyes will watch
     this.creviceSpots = [];
     if (P.crevices) {
@@ -730,26 +931,19 @@ export class World {
     }
   }
 
-  placeHouse(r, woodMat, charMat, brickMat, big) {
-    let x, z, ok = false;
-    for (let k = 0; k < 40 && !ok; k++) {
-      const t = r.range(0.05, 0.95); const p = this.path.at(t); const side = r.sign(); const d = r.range(14, 34);
-      const q = this.path.at(Math.min(1, t + 0.005)); let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1;
-      x = p.x + nx / l * side * d; z = p.z + nz / l * side * d; ok = this.okSpot(x, z, 11, 18);
-    }
-    if (!ok) return;
-    const w = r.range(6, 9), dpt = r.range(5, 7), yaw = r() * TAU;
+  placeHouse(r, woodMat, charMat, brickMat, big, lot) {
+    const x = lot.x, z = lot.z, w = lot.w, dpt = lot.d, yaw = lot.yaw;
     // set the house on its lowest corner; a stone footing takes up the slope
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     let lo = 1e9, hi = -1e9;
     for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) { const [px, pz] = toW((i / 4 - 0.5) * (w + 0.8), (j / 4 - 0.5) * (dpt + 0.8)); const h = this.heightAt(px, pz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
-    const y = hi + 0.15;              // the floor sits just above the highest ground
-    const footing = y - lo + 1.2;     // and the footing reaches well below the lowest
+    const y = hi + 0.12;              // the floor sits just above the (levelled) ground
+    const footing = y - lo + 0.9;     // and the footing reaches below the lowest
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
     const walls = [], timber = [], plaster = [], dark = [];
     walls.push(xf(new THREE.BoxGeometry(w + 0.7, footing, dpt + 0.7), [0, -footing / 2 + 0.12, 0]));
-    const intact = r() < 0.4;          // some still stand to the eaves
+    const intact = big || r() < 0.4;   // some still stand to the eaves; barns are whole
     const eave = 4.8;
     const wall = (len, cx, cz, rot, front) => {
       const segs = Math.max(3, Math.round(len / 1.15)); const sw = len / segs;
@@ -876,16 +1070,12 @@ export class World {
       T.push(xf(new THREE.BoxGeometry(0.08, 0.08, 2.0), [cx, 0.3, cz + 2.0], [0.25, 0.3, 0]));
     }
     // a wattle fence round part of the yard
-    if (r() < 0.6) { const sz = r() < 0.5 ? 1 : -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)])); } }
+    if (r() < 0.6) { const sz = -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)])); } }
   }
 
   placeChurch(r, brickMat, charMat) {
     // the church of Saint Aldric beside the second altar, with its bell tower
-    const a = this.altarT[1] || this.altarT[0];
-    const t = a.t; const p = this.path.at(t), q = this.path.at(Math.min(1, t + 0.01));
-    let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
-    const x = a.x + nx * 22, z = a.z + nz * 22;
-    const yaw = Math.atan2(nx, nz);
+    const CL = this.churchLot; const x = CL.x, z = CL.z, yaw = CL.yaw;
     const W = 9, L = 20, Hh = 7;
     const C0 = Math.cos(yaw), S0 = Math.sin(yaw);
     let lo = 1e9, hi = -1e9;
@@ -995,6 +1185,191 @@ export class World {
     const bf = toW(0, L / 2 + 2.7);
     this.belfry = new THREE.Vector3(bf[0], y + 17.5, bf[1]);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
+  }
+
+  // ---------------------------------------------------------------- the Ascent
+  buildAscent(stoneMat, woodMat, charMat) {
+    const r = rng(this.ch.seed + 41);
+    const frame = (t) => { const p = this.path.at(t), q = this.path.at(Math.min(1, t + 0.004)), q0 = this.path.at(Math.max(0, t - 0.004)); let tx = q.x - q0.x, tz = q.z - q0.z; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; return { p, tx, tz, nx: -tz, nz: tx, y: this.pathH[Math.round(t * 400)] }; };
+    const half = (t) => this.trackHalf(t);
+    const rockM = snowyRock(stoneMat.clone()); rockM.color = new THREE.Color(0x8a8480); rockM.flatShading = true;
+    const geos = []; for (let v = 0; v < 6; v++) geos.push(jaggedRock(700 + v, v > 3 ? 0.3 : 0));
+    const lists = geos.map(() => []);
+    const put = (it) => lists[r.int(0, 5)].push(it);
+    const ledgeSide = (t) => this.ledge && t > this.ledge.t0 && t < this.ledge.t1 ? this.ledge.side : 0;
+    const nearCrev = (x, z) => { const C = this.crevasse; return C && Math.abs((x - C.x) * C.nx + (z - C.z) * C.nz) < 5 && Math.abs((x - C.x) * C.nz - (z - C.z) * C.nx) < 18; };
+    const nearAltar = (x, z, m) => this.altarT.some((a) => Math.hypot(x - a.x, z - a.z) < m);
+    // boulders fallen to the foot of the walls, and fans of scree below the gullies
+    for (let k = 0; k < 140; k++) {
+      const t = r.range(0.02, 0.98), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
+      const d = half(t) + r.range(-0.3, 1.0), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
+      if (!this.inBounds(x, z) || nearCrev(x, z) || nearAltar(x, z, 9) || this.inLot(x, z, 1)) continue;
+      const s = r.range(0.5, 2.0); put({ x, y: this.heightAt(x, z) - s * 0.35, z, s, sy: s * r.range(0.6, 1.1), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) });
+      if (s > 1.1 && d < half(t) + 1.5) this.addCollider(x, z, s * 0.75);
+    }
+    for (let fan = 0; fan < 26; fan++) {
+      const t = r.range(0.03, 0.97), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
+      const cx = F.p.x + F.nx * side * (half(t) + 5), cz = F.p.z + F.nz * side * (half(t) + 5);
+      for (let k = 0; k < 22; k++) {
+        const a = r() * TAU, d2 = Math.sqrt(r()) * 6, x = cx + Math.cos(a) * d2, z = cz + Math.sin(a) * d2;
+        if (!this.inBounds(x, z) || nearCrev(x, z) || this.path.nearest(x, z).d < half(t) - 0.5 || this.normalAt(x, z).y < 0.55) continue;
+        const s = r.range(0.12, 0.45); put({ x, y: this.heightAt(x, z) - s * 0.25, z, s, sy: s * 0.6, ry: r() * TAU, rx: r() * 2, rz: r() * 2 });
+      }
+    }
+    // overhangs: great slabs of the harder beds jutting from the walls over the track
+    for (let k = 0; k < 18; k++) {
+      const t = r.range(0.03, 0.97), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
+      const d = half(t) + r.range(5, 7), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d; if (!this.inBounds(x, z)) continue;
+      const y = this.heightAt(x, z); if (y - F.y < 6.5) continue;
+      const s = r.range(2.2, 4); const yaw = Math.atan2(-F.nx * side, -F.nz * side);
+      put({ x, y: y - s * 0.3, z, s: s * 1.6, sy: s * 0.42, ry: yaw, rx: -0.12 + r.range(-0.08, 0.08), rz: r.range(-0.1, 0.1) });
+    }
+    // crags and pinnacles up on the broken slopes above
+    for (let k = 0; k < 70; k++) {
+      const t = r.range(0, 1), F = frame(t), side = r.sign(), d = half(t) + r.range(14, 40), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
+      if (!this.inBounds(x, z) || this.path.nearest(x, z).d < 12) continue;
+      const s = r.range(2.5, 6.5); put({ x, y: this.heightAt(x, z) - s * 0.2, z, s, sy: s * r.range(1.1, 2.4), ry: r() * TAU, rx: r.range(-0.15, 0.15), rz: r.range(-0.15, 0.15) });
+    }
+    geos.forEach((g, i) => this.instanced(g, rockM, lists[i]));
+    // the cliff faces themselves: fractured slabs of the beds, set into the walls row above row, so the gorge is
+    // walled in broken rock rather than smooth ground
+    { const clad = []; for (let v = 0; v < 5; v++) clad.push(jaggedRock(800 + v, 0, 1)); const cl = clad.map(() => []);
+      for (let t = 0.0; t < 1; t += 0.006) {
+        const F = frame(t); const ls = ledgeSide(t);
+        for (const side of [-1, 1]) {
+          for (let row = 0; row < 4; row++) {
+            if (r() < 0.25) continue;
+            const d = half(t) + 0.6 + row * 2.6 + r.range(-0.4, 0.6) + (ls === side ? 3 : 0);
+            const x = F.p.x + F.nx * side * d + F.tx * r.range(-1.5, 1.5), z = F.p.z + F.nz * side * d + F.tz * r.range(-1.5, 1.5);
+            if (!this.inBounds(x, z) || nearCrev(x, z) || nearAltar(x, z, 10) || this.inLot(x, z, 0.5) || this.path.nearest(x, z).d < half(t) - 0.2) continue;
+            const s = r.range(1.8, 3.4), yaw = Math.atan2(F.nx * side, F.nz * side);
+            cl[r.int(0, 4)].push({ x, y: this.heightAt(x, z) - s * 0.55, z, s, sy: s * r.range(0.45, 0.9), ry: yaw + r.range(-0.5, 0.5), rx: r.range(-0.25, 0.25), rz: r.range(-0.25, 0.25) });
+          }
+        }
+      }
+      clad.forEach((g, i) => this.instanced(g, rockM, cl[i])); }
+
+    // ---- the icefall: a frozen waterfall hanging down the gorge wall into a frozen pool
+    {
+      const t = 0.45, F = frame(t), side = -1, w = 7, H = 26, NX = 16, NY = 34;
+      const pos = [], idx = [];
+      for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
+        const u = i / NX - 0.5, v = j / NY, targetY = F.y + v * H;
+        const bx = F.p.x + F.tx * u * w * (1 - v * 0.35), bz = F.p.z + F.tz * u * w * (1 - v * 0.35);
+        let d = half(t); for (let s2 = 0; s2 < 80 && this.heightAt(bx + F.nx * side * d, bz + F.nz * side * d) < targetY; s2++) d += 0.25;
+        const bulge = 0.35 + 0.45 * Math.abs(Math.sin(u * 9.3 + v * 2)) + 0.3 * Math.sin(v * 31 + u * 5) * (1 - v) + (j === 0 ? -0.2 : 0);
+        const drip = j % 6 === 0 ? Math.max(0, Math.sin(i * 2.7) ) * 0.6 : 0;
+        d -= bulge * (1 - Math.abs(u) * 1.6);
+        pos.push(bx + F.nx * side * d, targetY - drip, bz + F.nz * side * d);
+      }
+      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) { const a = j * (NX + 1) + i, b = a + NX + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+      const ice = new THREE.MeshStandardMaterial({ color: 0xa8c8dc, roughness: 0.12, metalness: 0.0, emissive: 0x0c1c28, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
+      const m = new THREE.Mesh(g, ice); m.castShadow = true; this.group.add(m);
+      const px = F.p.x + F.nx * side * (half(t) - 0.6), pz = F.p.z + F.nz * side * (half(t) - 0.6);
+      const pool = new THREE.Mesh(new THREE.CircleGeometry(1, 28).rotateX(-PI / 2), ice); pool.scale.set(4, 1, 2.2); pool.position.set(px, this.heightAt(px, pz) + 0.06, pz); pool.rotation.y = Math.atan2(F.tx, F.tz); this.group.add(pool);
+      // icicles hanging from the slabs either side
+      const ic = []; for (let k = 0; k < 40; k++) { const u = r.range(-0.6, 0.6), x = F.p.x + F.tx * u * 12 + F.nx * side * (half(t) + 1.2), z = F.p.z + F.tz * u * 12 + F.nz * side * (half(t) + 1.2); const y = F.y + r.range(3, 7); const L = r.range(0.4, 1.6); ic.push(xf(new THREE.ConeGeometry(0.06 + L * 0.04, L, 5), [x, y, z], [PI, 0, 0])); }
+      this.group.add(new THREE.Mesh(merge(ic), ice));
+    }
+
+    // ---- the rope bridge over the crevasse
+    if (this.crevasse) {
+      const C = this.crevasse, y = this.pathH[Math.round(C.t * 400)], halfL = 4.6; this.bridge = { x: C.x, z: C.z, dx: C.nx, dz: C.nz, half: halfL, y };
+      const plank = [], rope = [], posts = [];
+      const yaw = Math.atan2(C.nx, C.nz);
+      for (let k = -14; k <= 14; k++) { const a = (k / 14) * halfL; if (r() < 0.08 && Math.abs(k) < 12) continue; const sag = Math.cos((a / halfL) * PI / 2) * 0.35;
+        plank.push(xf(new THREE.BoxGeometry(1.7, 0.06, 0.24), [C.x + C.nx * a, y - sag - 0.03, C.z + C.nz * a], [r.range(-0.03, 0.03), yaw, r.range(-0.03, 0.03)])); }
+      for (const side of [-1, 1]) {
+        const ox = C.nz * side * 0.95, oz = -C.nx * side * 0.95;
+        for (const e of [-1, 1]) { const px = C.x + C.nx * e * (halfL + 0.8) + ox, pz = C.z + C.nz * e * (halfL + 0.8) + oz; posts.push(xf(new THREE.CylinderGeometry(0.09, 0.11, 2.0, 7), [px, this.heightAt(px, pz) + 0.7, pz])); }
+        for (const hh of [0.95, 0.15]) {   // hand rope and foot rope, sagging
+          const pts = []; for (let k = 0; k <= 20; k++) { const a = (k / 20 - 0.5) * 2 * (halfL + 0.8); const sag = Math.cos(clamp(a / (halfL + 0.8), -1, 1) * PI / 2) * (hh > 0.5 ? 0.45 : 0.36); pts.push(new THREE.Vector3(C.x + C.nx * a + ox, y + hh - sag + (Math.abs(a) > halfL ? 0.2 : 0), C.z + C.nz * a + oz)); }
+          rope.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.025, 5, false));
+        }
+        for (let k = -6; k <= 6; k++) { const a = (k / 6) * halfL; const sag = Math.cos((a / halfL) * PI / 2); rope.push(xf(new THREE.CylinderGeometry(0.012, 0.012, 0.85, 4), [C.x + C.nx * a + ox, y + 0.55 - sag * 0.42, C.z + C.nz * a + oz])); }
+      }
+      const ropeM = new THREE.MeshStandardMaterial({ color: 0x6a5a40, roughness: 0.95 });
+      for (const [list, m] of [[plank, woodMat], [rope, ropeM], [posts, woodMat]]) { const mesh = new THREE.Mesh(merge(list), m); mesh.castShadow = true; mesh.receiveShadow = true; this.group.add(mesh); }
+    }
+
+    // ---- the ledge: stakes driven into the edge, a rope strung between them
+    if (this.ledge) {
+      const L = this.ledge, posts = [], ropePts = [];
+      for (let t = L.t0 + 0.01; t < L.t1 - 0.01; t += 0.006) {
+        const F = frame(t), x = F.p.x + F.nx * L.side * 3.1, z = F.p.z + F.nz * L.side * 3.1; const y = this.heightAt(x, z);
+        posts.push(xf(new THREE.CylinderGeometry(0.05, 0.07, 1.2, 6), [x, y + 0.45, z], [r.range(-0.12, 0.12), 0, r.range(-0.12, 0.12)]));
+        ropePts.push(new THREE.Vector3(x, y + 0.92, z));
+      }
+      const ropeM = new THREE.MeshStandardMaterial({ color: 0x6a5a40, roughness: 0.95 });
+      this.group.add(new THREE.Mesh(merge(posts), woodMat));
+      if (ropePts.length > 2) { const segs = []; for (let k = 0; k < ropePts.length - 1; k++) { const a = ropePts[k], b = ropePts[k + 1], m = a.clone().lerp(b, 0.5); m.y -= 0.12; segs.push(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(a, m, b), 6, 0.022, 4, false)); } this.group.add(new THREE.Mesh(merge(segs), ropeM)); }
+    }
+
+    // ---- the frozen dead, and the First Company's last camp
+    const frost = snowyRock(new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.9 }));
+    const rust = new THREE.MeshStandardMaterial({ color: 0x5a4636, metalness: 0.6, roughness: 0.75 });
+    const body = (pose) => {   // a man frozen where he stopped: wrapped in his cloak, his helm on, snow on him
+      const g = new THREE.Group(), parts = [], helm = [];
+      const cap = (r0, len, p, rot) => parts.push(xf(new THREE.CapsuleGeometry(r0, len, 3, 8), p, rot));
+      if (pose === 'sit') {   // sitting against the rock, knees up, head down on them
+        cap(0.17, 0.42, [0, 0.42, -0.08], [0.25, 0, 0]); parts.push(xf(new THREE.SphereGeometry(0.11, 10, 8), [0, 0.78, 0.12]));
+        for (const s of [-1, 1]) { cap(0.075, 0.38, [s * 0.11, 0.25, 0.2], [-0.9, 0, 0]); cap(0.06, 0.38, [s * 0.11, 0.2, 0.42], [0.35, 0, 0]); cap(0.055, 0.3, [s * 0.16, 0.48, 0.15], [-1.2, 0, s * 0.3]); }
+        helm.push(xf(new THREE.SphereGeometry(0.135, 12, 8, 0, TAU, 0, PI * 0.6), [0, 0.82, 0.14], [0.6, 0, 0]));
+        parts.push(xf(new THREE.ConeGeometry(0.42, 0.9, 10, 1, true), [0, 0.42, -0.06], [0.15, 0, 0]));   // the cloak round him
+      } else {                // lying on his side, curled
+        cap(0.17, 0.45, [0, 0.17, 0], [0, 0, PI / 2]); parts.push(xf(new THREE.SphereGeometry(0.11, 10, 8), [0.5, 0.15, 0.05]));
+        for (const s of [-1, 1]) { cap(0.075, 0.38, [-0.45, 0.14 + s * 0.04, 0.18], [PI / 2, 0, 0.6]); cap(0.06, 0.36, [-0.3, 0.12 + s * 0.04, 0.48], [PI / 2, 0, -0.4]); }
+        cap(0.055, 0.3, [0.25, 0.3, 0.2], [0.8, 0, 0.4]);
+        helm.push(xf(new THREE.SphereGeometry(0.135, 12, 8, 0, TAU, 0, PI * 0.6), [0.55, 0.17, 0.05], [0, 0, -PI / 2]));
+      }
+      const m = new THREE.Mesh(merge(parts), frost); m.castShadow = true; g.add(m); g.add(new THREE.Mesh(merge(helm), rust)); return g;
+    };
+    const placeBody = (x, z, yaw, pose) => { const b = body(pose); b.position.set(x, this.heightAt(x, z) - 0.04, z); b.rotation.y = yaw; this.group.add(b); };
+    for (let k = 0; k < 9; k++) {   // along the way, where they sat down and did not get up
+      const t = 0.08 + k * 0.1 + r.range(-0.02, 0.02), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
+      const d = half(t) - 0.4, x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d; if (nearCrev(x, z) || nearAltar(x, z, 10)) continue;
+      placeBody(x, z, Math.atan2(-F.nx * side, -F.nz * side) + r.range(-0.4, 0.4), r() < 0.6 ? 'sit' : 'lie');
+    }
+    if (this.camp) {
+      const L = this.camp, C = Math.cos(L.yaw), S = Math.sin(L.yaw), toW = (lx, lz) => [L.x + lx * C + lz * S, L.z - lx * S + lz * C];
+      const gy = L.padH; const parts = [], wood = [], cloth = [];
+      // the fire: a ring of stones round black logs, long dead, with snow drifted in
+      const [fx, fz] = toW(0, 1.5);
+      for (let k = 0; k < 11; k++) { const a = (k / 11) * TAU; parts.push(xf(lumpy(icoSmooth(1), 0.3, 900 + k), [fx + Math.cos(a) * 0.62, gy + 0.08, fz + Math.sin(a) * 0.62], [r() * 3, r() * 3, 0], [0.16, 0.12, 0.14])); }
+      for (let k = 0; k < 4; k++) wood.push(xf(new THREE.CylinderGeometry(0.06, 0.07, 0.9, 6), [fx, gy + 0.08, fz], [PI / 2, (k / 4) * PI + 0.3, 0.12]));
+      // the tent: its ridge pole snapped, the canvas fallen in over what was inside it
+      { const [tx, tz] = toW(-2.6, -1.2); const ty = gy; const NXc = 14, NZc = 12, pos = [], idx = [];
+        for (let j = 0; j <= NZc; j++) for (let i = 0; i <= NXc; i++) { const u = i / NXc - 0.5, v = j / NZc; const ridge = lerp(1.6, 0.35, smooth(v)) ; const y = Math.max(0.05, ridge * (1 - Math.abs(u) * 2) + Math.sin(u * 13 + v * 7) * 0.05) + (1 - Math.abs(u) * 2) * 0.1 * Math.sin(v * 20);
+          const lx = u * 2.6, lz = (v - 0.5) * 3.2; pos.push(lx, y, lz); }
+        for (let j = 0; j < NZc; j++) for (let i = 0; i < NXc; i++) { const a = j * (NXc + 1) + i, b = a + NXc + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
+        const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); tg.setIndex(idx); tg.computeVertexNormals();
+        tg.rotateY(L.yaw); tg.translate(tx, ty, tz); cloth.push(tg);
+        const [px, pz] = toW(-2.6, -2.75); wood.push(xf(new THREE.CylinderGeometry(0.04, 0.04, 1.8, 5), [px, gy + 0.85, pz], [0, 0, 0.08]));
+        const [qx, qz] = toW(-2.4, 0.2); wood.push(xf(new THREE.CylinderGeometry(0.04, 0.04, 1.1, 5), [qx, gy + 0.3, qz], [1.1, L.yaw, 0.2])); }
+      // gear: shields, a spear driven in, bedrolls, a pot on its side
+      const [sx, sz] = toW(2.6, -2.2); parts.push(xf(new THREE.CylinderGeometry(0.35, 0.35, 0.04, 16), [sx, gy + 0.36, sz], [1.2, L.yaw, 0]));
+      const [sx2, sz2] = toW(3.4, 0.4); parts.push(xf(new THREE.CylinderGeometry(0.33, 0.33, 0.04, 16), [sx2, gy + 0.03, sz2]));
+      const [spx, spz] = toW(1.4, -3.2); wood.push(xf(new THREE.CylinderGeometry(0.02, 0.025, 2.2, 5), [spx, gy + 1.0, spz], [0.15, 0, 0.1]));
+      for (const [bx, bz] of [[-0.8, -0.6], [0.9, 3.3]]) { const [x, z] = toW(bx, bz); cloth.push(xf(new THREE.CylinderGeometry(0.14, 0.14, 0.9, 10), [x, gy + 0.14, z], [0, L.yaw + 0.4, PI / 2])); }
+      const [ox, oz] = toW(0.8, 1.0); parts.push(xf(new THREE.SphereGeometry(0.18, 10, 8, 0, TAU, 0, PI * 0.6), [ox, gy + 0.12, oz], [1.4, 0.3, 0]));
+      this.group.add(new THREE.Mesh(merge(parts), rust)); this.group.add(new THREE.Mesh(merge(wood), charMat));
+      const canvasM = snowyRock(new THREE.MeshStandardMaterial({ color: 0x6a6252, roughness: 0.95, side: THREE.DoubleSide })); canvasM.customProgramCacheKey = () => 'snowyCanvas';
+      const cm = new THREE.Mesh(merge(cloth), canvasM); cm.castShadow = true; cm.receiveShadow = true; this.group.add(cm);
+      // the last of them, round the fire
+      const [b1x, b1z] = toW(-0.9, 2.3); placeBody(b1x, b1z, L.yaw + PI + 0.5, 'sit');
+      const [b2x, b2z] = toW(1.0, 2.6); placeBody(b2x, b2z, L.yaw - 0.8, 'lie');
+      const [b3x, b3z] = toW(-3.2, 3.6); placeBody(b3x, b3z, L.yaw + 2.6, 'sit');
+      this.addCollider(...toW(-2.6, -1.2), 1.6);
+    }
+
+    // ---- mist lying in the gorge, drifting
+    const tex = cloudTexture(); this.mist = [];
+    for (let k = 0; k < 46; k++) {
+      const t = r.range(0, 1), F = frame(t), d = r.range(-10, 10), x = F.p.x + F.nx * d, z = F.p.z + F.nz * d; if (!this.inBounds(x, z)) continue;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: 0xb8c0cc, transparent: true, opacity: 0.16 + r() * 0.1, depthWrite: false }));
+      const y = F.y + r.range(1.5, 7); sp.position.set(x, y, z); sp.scale.set(r.range(14, 26), r.range(5, 9), 1); this.group.add(sp); this.mist.push({ s: sp, x, y, ph: r() * 10 });
+    }
   }
 
   buildBanners(n, r, woodMat) {
@@ -1129,6 +1504,7 @@ export class World {
     if (this.swayMats) for (const m of this.swayMats) m.userData.uTime.value = this.time;
     if (this.waterTime) this.waterTime.value = this.time;
     if (this.cloudTime) this.cloudTime.value = this.time;
+    if (this.mist) for (const m of this.mist) { m.s.position.x = m.x + Math.sin(this.time * 0.05 + m.ph) * 3; m.s.position.y = m.y + Math.sin(this.time * 0.11 + m.ph) * 0.6; m.s.material.rotation = m.ph + this.time * 0.01; }
     for (const a of this.altars) {
       a.circle.material.uniforms.time.value = this.time;
       a.circle.material.uniforms.prog.value = a.progress;

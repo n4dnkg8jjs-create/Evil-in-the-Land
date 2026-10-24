@@ -7,7 +7,7 @@ export class Cinema {
     this.engine = engine; this.ui = ui; this.shots = null; this.t = 0; this.idx = 0; this.onDone = null; this.active = false;
     this.cam = engine.camera; this.lb = 0; this.skippable = true;
   }
-  // shots: [{ dur, from:{pos,look}, to:{pos,look}, fov?, fovTo?, ease?, text?, title?, shake?, at?: fn }]
+  // shots: [{ dur, from:{pos,look}, to:{pos,look}, fov?, fovTo?, ease?, text?, title?, shake?, at?: fn, tick?: fn(dt, k) }]
   play(shots, onDone, { skippable = true } = {}) {
     this.shots = shots; this.t = 0; this.idx = 0; this.onDone = onDone; this.active = true; this.skippable = skippable; this.fired = new Set();
     this.ui.letterbox(true); this.ui.hint(skippable ? 'Hold Space to skip' : '');
@@ -36,6 +36,7 @@ export class Cinema {
       if (s.at) s.at();
       if (s.shake) this.engine.shake(s.shake, s.dur);
     }
+    if (s.tick) s.tick(dt, k);
     if (this.t >= s.dur) { this.idx++; this.t = 0; if (this.idx >= this.shots.length) this.finish(); }
     return true;
   }

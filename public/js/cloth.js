@@ -9,7 +9,8 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _p = new THREE.Vector3
 
 export class Cloth {
   // pins(i) -> { bone, local: Vector3 } for each column i of the top row; ring: true joins the last column to the first
-  constructor({ cols, rows, pins, len, material, ring = false, stiff = 0.95, damping = 0.985, mass = 1, thick = 0.02, axis = null, hold = 0.88 }) {
+  constructor({ cols, rows, pins, len, material, ring = false, stiff = 0.95, damping = 0.985, mass = 1, thick = 0.02, axis = null, hold = 0.88, hull = null }) {
+    this.hull = hull;
     this.cols = cols; this.rows = rows; this.ring = ring; this.pins = pins; this.damping = damping; this.thick = thick; this.axis = axis; this.hold = hold;
     const n = cols * rows; this.n = n;
     this.pos = new Float32Array(n * 3); this.prev = new Float32Array(n * 3); this.rest = [];
@@ -76,6 +77,7 @@ export class Cloth {
     // capsules in world space this step
     const caps = this.capsules.map((c) => { c.a.updateWorldMatrix(true, false); const A = (c.ao || V0).clone().applyMatrix4(c.a.matrixWorld); let B = A; if (c.b) { c.b.updateWorldMatrix(true, false); B = (c.bo || V0).clone().applyMatrix4(c.b.matrixWorld); } return [A, B, c.r + this.thick]; });
     if (this.axis) { this.axis.updateWorldMatrix(true, false); _b.setFromMatrixPosition(this.axis.matrixWorld); this.ax = _b.x; this.az = _b.z; }
+    if (this.hull) { this.hull.bone.updateWorldMatrix(true, false); (this.hullInv || (this.hullInv = new THREE.Matrix4())).copy(this.hull.bone.matrixWorld).invert(); }
     for (let it = 0; it < 6; it++) {
       for (const s of this.springs) {
         const a = s[0] * 3, b = s[1] * 3;
@@ -92,6 +94,15 @@ export class Cloth {
           _d.subVectors(B, A); const L2 = _d.lengthSq(); let t = L2 > 1e-8 ? _b.subVectors(_p, A).dot(_d) / L2 : 0; t = Math.max(0, Math.min(1, t));
           _a.copy(A).addScaledVector(_d, t); _b.subVectors(_p, _a); const l = _b.length();
           if (l < r) { if (l < 1e-5) _b.set(0, 0, 1); else _b.multiplyScalar(1 / l); _p.copy(_a).addScaledVector(_b, r); }
+        }
+        if (this.hull) {   // stay outside the body itself: its measured outline at this height and bearing
+          const H = this.hull; _a.copy(_p).applyMatrix4(this.hullInv);
+          const yi = Math.round((_a.y - H.y0) / H.dy);
+          if (yi >= 0 && yi < H.nY) {
+            const r = Math.hypot(_a.x, _a.z); let an = Math.atan2(_a.x, _a.z); if (an < 0) an += Math.PI * 2;
+            const ai = Math.round(an / (Math.PI * 2) * H.nA) % H.nA; const m = H.R[yi * H.nA + ai] + this.thick;
+            if (r < m && m > 0) { const k = r > 1e-5 ? m / r : 1; _a.x *= k; _a.z *= k; if (r <= 1e-5) _a.z = m; _p.copy(_a).applyMatrix4(H.bone.matrixWorld); }
+          }
         }
         if (this.minR) { const dx = _p.x - this.ax, dz = _p.z - this.az, d = Math.hypot(dx, dz), m = this.minR[i]; if (d < m && d > 1e-5) { _p.x = this.ax + dx / d * m; _p.z = this.az + dz / d * m; } }
         if (_p.y < this.ground + 0.01) { _p.y = this.ground + 0.01; Q[k] = _p.x * 0.2 + Q[k] * 0.8; Q[k + 2] = _p.z * 0.2 + Q[k + 2] * 0.8; }   // rests, with friction, on the ground

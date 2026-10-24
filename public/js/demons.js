@@ -191,6 +191,8 @@ export class Demon {
     let toT = T ? new THREE.Vector3(T.pos.x - this.pos.x, 0, T.pos.z - this.pos.z) : new THREE.Vector3();
     const dist = toT.length(); if (dist > 1e-4) toT.divideScalar(dist);
     const faceT = () => { if (T) this.yaw = dampAngle(this.yaw, Math.atan2(toT.x, toT.z), 8, dt); };
+    // it sees you: a wail, once, the first time it has you in its sights
+    if (T && !this.spotted && this.state === ST.chase && dist < 26) { this.spotted = true; if (R() < 0.7) C.ev('demonSfx', this, 'spot'); }
     const bh = this.behave[this.type] || this.behave.melee;
     bh.call(this, dt, C, T, toT, dist, want, speed, faceT);
     // separation from other demons
@@ -200,14 +202,19 @@ export class Demon {
       const dx = this.pos.x - o.pos.x, dz = this.pos.z - o.pos.z; const d2 = dx * dx + dz * dz; const m = this.radius + o.radius;
       if (d2 < m * m && d2 > 1e-6) { const d = Math.sqrt(d2); const push = (m - d) / d * (o.def.mass / (o.def.mass + def.mass)); this.pos.x += dx * push * 0.5; this.pos.z += dz * push * 0.5; }
     }
-    // knights are solid
+    this.vel.x = damp(this.vel.x, want.x, this.state === ST.stagger ? 2 : this.state === ST.leap ? 20 : 8, dt); this.vel.z = damp(this.vel.z, want.z, this.state === ST.stagger ? 2 : this.state === ST.leap ? 20 : 8, dt);
+    this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
+    // knights are solid: after moving, so nothing tunnels through or slides round behind one; the part of its
+    // velocity driving into the knight is taken away, so it stops at him rather than skidding past
     for (const k of C.knights) {
       if (k.downed) continue;
-      const dx = this.pos.x - k.pos.x, dz = this.pos.z - k.pos.z; const d = Math.hypot(dx, dz); const m = this.radius + 0.4;
-      if (d < m && d > 1e-4) { this.pos.x = k.pos.x + dx / d * m; this.pos.z = k.pos.z + dz / d * m; }
+      const dx = this.pos.x - k.pos.x, dz = this.pos.z - k.pos.z; const d = Math.hypot(dx, dz); const m = this.radius + 0.42;
+      if (d < m && d > 1e-4) {
+        const nx = dx / d, nz = dz / d; this.pos.x = k.pos.x + nx * m; this.pos.z = k.pos.z + nz * m;
+        const vin = this.vel.x * nx + this.vel.z * nz; if (vin < 0) { this.vel.x -= vin * nx; this.vel.z -= vin * nz; }
+        this.vel.multiplyScalar(0.6);
+      }
     }
-    this.vel.x = damp(this.vel.x, want.x, this.state === ST.stagger ? 2 : 8, dt); this.vel.z = damp(this.vel.z, want.z, this.state === ST.stagger ? 2 : 8, dt);
-    this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
     C.world.collide(this, this.radius * 0.8);
     const gy = C.world.standAt(this.pos.x, this.pos.z);
     if (this.state === ST.leap) this.pos.y = gy + Math.sin(clamp(this.stateT / this.leapT, 0, 1) * Math.PI) * (this.leapH || 1.4);
@@ -221,16 +228,26 @@ export class Demon {
       case ST.chase: {
         if (!T) break;
         // weave slightly so the swarm surrounds rather than queues
-        const side = Math.sin(C.time * 0.8 + this.seed) * 0.35;
-        want.set(toT.x + toT.z * side, 0, toT.z - toT.x * side).normalize().multiplyScalar(speed * (dist < 3 ? 0.4 : 1));
+        const side = Math.sin(C.time * 0.8 + this.seed) * 0.35 * clamp((dist - 3) / 4, 0, 1);
+        // it comes on flat out, then brakes hard at arm's length: it never runs on past
+        const stand = this.radius + 0.42 + 0.35;
+        const arrive = clamp((dist - stand) / 2.2, 0, 1);
+        want.set(toT.x + toT.z * side, 0, toT.z - toT.x * side).normalize().multiplyScalar(speed * arrive * arrive * (3 - 2 * arrive) * (dist < 3 ? 0.85 : 1));
         faceT();
-        if (o.leap && dist < o.leap[1] && dist > o.leap[0] && this.cd <= 0) { this.setState(ST.leap); this.leapT = o.leapT || 0.6; this.leapH = o.leapH || 1.2; this.leapDir = toT.clone(); this.leapSpeed = dist / this.leapT * 1.05; C.ev('demonSfx', this, 'leap'); break; }
+        if (o.leap && dist < o.leap[1] && dist > o.leap[0] && this.cd <= 0) {
+          this.setState(ST.leap); this.leapT = o.leapT || 0.6; this.leapH = o.leapH || 1.2; this.leapDir = toT.clone();
+          // it springs to land just in front of you, claws first, not on top of you or beyond
+          this.leapSpeed = Math.max(0, dist - stand - 0.15) / this.leapT; C.ev('demonSfx', this, 'leap'); break;
+        }
         if (dist < def.range * this.scale + 0.3 && this.cd <= 0) { this.setState(ST.windup); this.atk = o.pickAttack ? o.pickAttack.call(this, dist) : 0; C.ev('demonSfx', this, 'windup'); }
         break;
       }
       case ST.leap: {
-        want.copy(this.leapDir).multiplyScalar(this.leapSpeed);
-        if (this.stateT >= this.leapT) { this.setState(ST.strike); this.atk = 9; this.didHit = false; }
+        // a little homing in the air, and it lands short of you whatever you do
+        if (T) { this.leapDir.lerp(toT, Math.min(1, dt * 3)).normalize(); faceT(); }
+        const stand = this.radius + 0.42 + 0.25;
+        want.copy(this.leapDir).multiplyScalar(T && dist < stand + 0.3 ? 0 : this.leapSpeed);
+        if (this.stateT >= this.leapT) { this.setState(ST.strike); this.atk = 9; this.didHit = false; this.vel.multiplyScalar(0.15); }
         break;
       }
       case ST.windup: {
@@ -240,7 +257,7 @@ export class Demon {
       }
       case ST.strike: {
         const step = o.lunge ?? 2.5; const f = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-        if (this.stateT < 0.15) want.copy(f).multiplyScalar(step);
+        if (this.stateT < 0.15 && (!T || dist > this.radius + 0.42 + 0.45)) want.copy(f).multiplyScalar(step);
         if (!this.didHit && this.stateT > 0.08) {
           this.didHit = true;
           const reach = def.range * this.scale + 0.6, arc = o.arc || 1.2;
@@ -256,7 +273,7 @@ export class Demon {
         break;
       }
       case ST.recover: if (this.stateT > (o.recover || 0.45)) { this.setState(ST.chase); this.cd = def.cd * (0.7 + R() * 0.6); } break;
-      case ST.stagger: if (this.stateT > 0.55) this.setState(ST.chase); break;
+      case ST.stagger: if (this.stateT > (this.staggerDur || 0.55)) { this.staggerDur = 0; this.setState(ST.chase); } break;
     }
   }
 
@@ -267,7 +284,9 @@ export class Demon {
     if (dir) { this.hitDir = dir.clone ? dir.clone() : dir; const lx = dir.x * Math.cos(this.yaw) - dir.z * Math.sin(this.yaw); this.flinchDir = lx >= 0 ? 1 : -1; } else this.flinchDir = R() < 0.5 ? -1 : 1;
     if (dir) { const k = 3.5 * stagger / this.def.mass; this.vel.x += dir.x * k; this.vel.z += dir.z * k; }
     if (this.hp <= 0) { this.die(C); return true; }
-    if (stagger * this.def.stagger > 0.55 && this.state !== ST.leap) { this.setState(ST.stagger); }
+    // cut out of the air mid-leap: it is smashed down and lies stunned a moment
+    if (this.state === ST.leap) { this.setState(ST.stagger); this.staggerDur = 1.0; this.knocked = 1; if (dir) { this.vel.x = dir.x * 4 / this.def.mass; this.vel.z = dir.z * 4 / this.def.mass; } }
+    else if (stagger * this.def.stagger > 0.55) { this.setState(ST.stagger); }
     return false;
   }
   die(C) {
@@ -301,6 +320,13 @@ export class Demon {
       if (this.dissolve >= 1) this.removed = true;
     }
     this.mat.userData.u.uHit.value = this.hitFlash * 0.8;
+    // it flickers into being, its outline tearing and slipping, and now and then glitches again
+    if (this.state === ST.spawn) this.glitch = 1;
+    else if (this.lastState === ST.spawn) this.glitch = 0.8;
+    this.lastState = this.state;
+    if (this.h && this.h.stutter > 0) this.glitch = Math.max(this.glitch || 0, 0.5);
+    this.glitch = Math.max(0, (this.glitch || 0) - dt * 1.4);
+    if (this.mat.userData.u.uGlitch) this.mat.userData.u.uGlitch.value = this.state === ST.dead ? 0 : this.glitch;
     // distance LOD for animation updates
     const d2 = camPos ? (camPos.x - this.pos.x) ** 2 + (camPos.z - this.pos.z) ** 2 : 0;
     this.lodSkip = d2 > 70 * 70 ? (this.lodSkip + 1) % 3 : 0;
@@ -344,7 +370,7 @@ Demon.prototype.behave = {
     // erratic scuttling
     if (this.state === ST.chase) { this.zig = (this.zig || 0) + dt * 5; }
     this.meleeStep(dt, C, T, toT, dist, want, speed, faceT, { leap: [2.6, 6.5], leapT: 0.5, leapH: 1.0, windup: [0.25], lunge: 2, arc: 1.4 });
-    if (this.state === ST.chase) { const z = Math.sin(this.zig + this.seed) * 0.7; want.x += -toT.z * z * speed * 0.6; want.z += toT.x * z * speed * 0.6; }
+    if (this.state === ST.chase) { const z = Math.sin(this.zig + this.seed) * 0.7 * clamp((dist - 2.2) / 3, 0, 1); want.x += -toT.z * z * speed * 0.6; want.z += toT.x * z * speed * 0.6; }
   },
   wretch(dt, C, T, toT, dist, want, speed, faceT) {
     const def = this.def;

@@ -117,7 +117,7 @@ export class Shop {
     if (bodyReady()) {
       const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 2.08); w.add(su.root);
       const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
-      pr.root.position.set(px, world.heightAt(px, pz), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; this.cols.push(world.addCollider(px, pz, 0.6));
+      pr.root.position.set(px, world.heightAt(px, pz) + (pr.groundOffset || 0), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; this.cols.push(world.addCollider(px, pz, 0.6));
       this.people = [su, pr];
       for (const pp of this.people) for (const c of pp.cloths || []) { c.ground = world.heightAt(pr.root.position.x, pr.root.position.z); this.g.scene.add(c.mesh); }
       if (su.cloths) { su.cloths[0].ground = w.position.y + 1.0; su.cloths[1].ground = w.position.y + 1.47; }

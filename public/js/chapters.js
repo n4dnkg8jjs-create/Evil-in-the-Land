@@ -16,7 +16,7 @@ const A = (o) => o;
 
 export const CHAPTERS = [
   {
-    id: 'vale', title: 'The Vale of Ashes', latin: 'Vallis Cinerum', seed: 1101, altars: 3, prayer: 48,
+    id: 'vale', narration: [['Vallis cinerum. Hic primum cecidit nix nigra.', 'The Vale of Ashes. Here the black snow fell first.'], ['Ecce, ager quem benedixit Dominus.', 'Behold the field the Lord once blessed.']], title: 'The Vale of Ashes', latin: 'Vallis Cinerum', seed: 1101, altars: 3, prayer: 48,
     intro: [
       'Anno Domini 1523. The harvest did not come.',
       'A black rot rose out of the earth. Last Lent, twenty knights under Sir Godric rode out to end it. None came home.',
@@ -31,7 +31,7 @@ export const CHAPTERS = [
     devil: { watch: 3, finale: true },
   },
   {
-    id: 'village', title: "Saint Aldric's", latin: 'Villa Sancti Aldrici', seed: 2207, altars: 4, prayer: 58,
+    id: 'village', narration: [['Sancte Aldrice, ora pro nobis.', 'Saint Aldric, pray for us.'], ['Campana tacet. Mortui non quiescunt.', 'The bell is silent. The dead do not rest.']], title: "Saint Aldric's", latin: 'Villa Sancti Aldrici', seed: 2207, altars: 4, prayer: 58,
     intro: ['The village of Saint Aldric burned on the night of the Ember Days.', 'No one buried its dead. Something else came for them.', 'Ring the bell again. Take back the churchyard.'],
     outro: ['The bell of Saint Aldric rings over green grass.', 'It was not the only thing listening.'],
     terrain: { kind: 'village', amp: 6, hill: 22, edge: 38 },
@@ -42,7 +42,7 @@ export const CHAPTERS = [
     devil: { watch: 4 },
   },
   {
-    id: 'fen', title: 'The Weeping Fen', latin: 'Palus Lacrimarum', seed: 3313, altars: 4, prayer: 62,
+    id: 'fen', narration: [['De profundis clamavi ad te, Domine.', 'Out of the depths I have cried to thee, O Lord.'], ['Aqua nigra non reddit quod accepit.', 'The black water gives back nothing it takes.']], title: 'The Weeping Fen', latin: 'Palus Lacrimarum', seed: 3313, altars: 4, prayer: 62,
     intro: ['South of the abbey lie the fens, where the monks once cut peat.', 'The water has turned black. Things bloat in it and do not sink.', 'Do not let them reach you whole.'],
     outro: ['The fen is clear water again. Herons stand in the reeds.', 'A pale shape moved across the water, and was gone.'],
     terrain: { kind: 'fen', amp: 3.5, hill: 16, edge: 30, water: 0.35 },
@@ -53,7 +53,7 @@ export const CHAPTERS = [
     devil: { watch: 4 },
   },
   {
-    id: 'wood', title: 'The Hollow Wood', latin: 'Silva Cava', seed: 4421, altars: 4, prayer: 66,
+    id: 'wood', narration: [['In silva obscura bestia vigilat.', 'In the dark wood the beast keeps watch.'], ['Hic sculptores lapidis draconem viderunt.', 'Here the stone-carvers saw the Dragon, long ago.']], title: 'The Hollow Wood', latin: 'Silva Cava', seed: 4421, altars: 4, prayer: 66,
     intro: ['The charcoal-burners fled the wood at Michaelmas.', 'They spoke of a great beast among the trees, and of a tall man who watched.', 'He is closer now.'],
     outro: ['Leaves on the old oaks. Birdsong.', 'The hound is dead. Its master is not.'],
     terrain: { kind: 'wood', amp: 12, hill: 26, edge: 36 },
@@ -64,7 +64,7 @@ export const CHAPTERS = [
     devil: { watch: 5, close: true }, miniboss: 'hound',
   },
   {
-    id: 'field', title: 'Field of the Fallen', latin: 'Campus Caesorum', seed: 5531, altars: 5, prayer: 70,
+    id: 'field', narration: [['Hic stetit exercitus Imperatoris.', 'Here stood the army of the Emperor.'], ['Ossa arida, audite verbum Domini.', 'O dry bones, hear the word of the Lord.']], title: 'Field of the Fallen', latin: 'Campus Caesorum', seed: 5531, altars: 5, prayer: 70,
     intro: ['Here the Emperor\'s army met the darkness, and was broken.', 'Their banners still stand. Their bones do not lie still.', 'On the hill above the field, He reviews his legion.'],
     outro: ['The banners stand over a green field.', 'He did not run. He walked away, toward the mountain.'],
     terrain: { kind: 'field', amp: 7, hill: 34, edge: 40 },
@@ -75,18 +75,18 @@ export const CHAPTERS = [
     devil: { watch: 6, army: true },
   },
   {
-    id: 'ascent', title: 'The Ascent', latin: 'Ascensus', seed: 6649, altars: 4, prayer: 74,
+    id: 'ascent', narration: [['Levavi oculos meos in montes.', 'I lifted up my eyes unto the mountains.'], ['Unde veniet auxilium mihi?', 'Whence shall my help come?']], title: 'The Ascent', latin: 'Ascensus', seed: 6649, altars: 4, prayer: 74,
     intro: ['The road climbs into the mountain he calls his own.', 'Every crevice has eyes in it.', 'He will not wait at the top. He will come down to meet you.'],
     outro: ['The road behind you is green all the way back to the city walls.', 'Above the clouds, something vast is waking.'],
     terrain: { kind: 'mountain', amp: 22, hill: 0, edge: 34, rise: 120 },
-    atmos: A({ skyTop: 0x1a1f2c, skyMid: 0x5a5260, skyBottom: 0x2a2626, sunColor: 0xffb070, cloud: 0x2c2a34, cloudLit: 0xb08070, glow: 0x5a3020, cover: 0.55, sunDir: [0.6, 0.22, -0.76], sunLight: 0xffc8a0, sunIntensity: 2.0, hemiSky: 0x8890a8, hemiGround: 0x2a2424, hemiIntensity: 0.6, fog: 0x4c4a54, fogDensity: 0.012, exposure: 1.0, fillColor: 0x6a7aa0, fillIntensity: 0.3 }),
-    props: { deadTrees: 120, rocks: 200, crags: 70, crevices: 22, pines: true },
+    atmos: A({ skyTop: 0x161a24, skyMid: 0x4a5060, skyBottom: 0x5a5c66, sunColor: 0xd8c0a0, cloud: 0x30323c, cloudLit: 0x8a8a98, glow: 0x4a3a34, cover: 0.85, sunDir: [0.5, 0.35, -0.78], sunLight: 0xd8d4d0, sunIntensity: 1.7, hemiSky: 0x8a94aa, hemiGround: 0x3a3634, hemiIntensity: 0.85, fog: 0x5c6270, fogDensity: 0.013, exposure: 1.15, fillColor: 0x7080a8, fillIntensity: 0.35 }),
+    props: { deadTrees: 70, rocks: 90, crags: 0, crevices: 22, pines: true },
     pool: { shade: 1.0, crawler: 0.8, wretch: 0.4, husk: 0.3, brute: 0.14, wraith: 0.14, herald: 0.05 }, density: 1.15,
-    ambient: 'snow', wind: [2.0, 0.6],
+    ambient: 'snow', wind: [3.2, 0.9],
     devil: { watch: 0, crevice: true }, miniboss: ['serpent', 'cryptid'],
   },
   {
-    id: 'peak', title: 'The Peak', latin: 'Culmen', seed: 7757, altars: 3, prayer: 30,
+    id: 'peak', narration: [['Et vidi draconem magnum in nubibus.', 'And I saw a great dragon in the clouds.'], ['Draco ille magnus, serpens antiquus.', 'That great dragon, that old serpent.']], title: 'The Peak', latin: 'Culmen', seed: 7757, altars: 3, prayer: 30,
     intro: ['Above the clouds, in the heart of the storm.', 'Lucifer, the Old Serpent, the great Dragon.', 'Exsurgat Deus.'],
     outro: [],
     terrain: { kind: 'peak', amp: 6, hill: 0, edge: 0 },

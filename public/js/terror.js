@@ -5,7 +5,7 @@
 // Like the dread, all of it is yours alone: every player is frightened on their own machine.
 import * as THREE from 'three';
 import { Demon, ST } from './demons.js';
-import { Watcher } from './devil.js';
+import { phantomDevil, releasePhantom } from './devil.js';
 import { clamp, TAU } from './util.js';
 
 const R = Math.random;
@@ -57,13 +57,14 @@ export class Terror {
     let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1;
     const x = p.x + nx / l * side, z = p.z + nz / l * side; return new THREE.Vector3(x, w.heightAt(x, z), z);
   }
-  devil() { if (!this.figure) this.figure = new Watcher(this.g.scene, this.g.fx); return this.figure; }
+  devil() { this.figure = phantomDevil(this.g); this.figure.owner = 'terror'; return this.figure; }
 
   // ---------------------------------------------------------------- the scares
   // He stands in the middle of the road ahead. Walk toward him, or look away and back, and he is gone.
   roadFigure() {
-    const g = this.g, D = this.devil(), p = this.ahead(28 + R() * 8);
-    if (!g.world.inBounds(p.x, p.z)) return { done: true };
+    const g = this.g; if (g.dread?.devilT) return { done: true };   // He is already behind you
+    const D = this.devil(), p = this.ahead(28 + R() * 8);
+    if (!g.world.inBounds(p.x, p.z)) { releasePhantom(D, 'terror'); return { done: true }; }
     D.pos.copy(p); D.yaw = Math.atan2(g.me.pos.x - p.x, g.me.pos.z - p.z); D.state = 'watch'; D.t = 2; D.retarget = 0; D.mesh.visible = true;
     let seen = false, away = 0, t = 0;
     return {
@@ -74,9 +75,10 @@ export class Terror {
         const d = D.pos.distanceTo(g.me.pos);
         if (D.state === 'watch' && (d < 20 || away > 1.6 || t > 30)) { D.state = away > 1.6 ? 'hidden' : 'vanish'; D.t = 0; if (D.state === 'vanish') g.audio.whisper(D.pos.clone().setY(D.pos.y + 3), 1.5, 0.6); }
         D.animate(dt, time, g.engine.camera.position, [g.me]);
-        if (D.state === 'hidden' || (D.state === 'vanish' && D.t > 1.3)) { D.state = 'hidden'; D.mesh.visible = false; this.active.done = true; }
+        if (D.state === 'hidden' || (D.state === 'vanish' && D.t > 1.3)) { releasePhantom(D, 'terror'); this.active.done = true; }
       },
-      cleanup: () => { D.state = 'hidden'; D.mesh.visible = false; },
+      figure: true,
+      cleanup: () => { releasePhantom(D, 'terror'); },
     };
   }
   // something pale and fast crosses the road ahead, in and out of the fog
@@ -164,5 +166,5 @@ export class Terror {
   }
   // late on, whatever your dread: turn round, and He is there
   behindYou() { this.g.dread.devilBehind(); return { done: true }; }
-  dispose() { this.end(); if (this.figure) { this.g.scene.remove(this.figure.mesh); this.figure = null; } }
+  dispose() { this.end(); this.figure = null; }
 }

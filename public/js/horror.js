@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { demonTextures, clothTextures } from './textures.js';
 import { clamp, lerp, smooth, TAU } from './util.js';
 import { realHand } from './people.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const D2R = Math.PI / 180, PI = Math.PI;
 let DB = null;
@@ -49,15 +50,21 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
   const dt = demonTextures();
   const u = { uDissolve: { value: 0 }, uRim: { value: new THREE.Color(rimHex) }, uGlow: { value: glow }, uHit: { value: 0 }, uTime: { value: 0 }, uSeed: { value: Math.random() * 10 },
     uWristR: { value: new THREE.Vector3() }, uWristL: { value: new THREE.Vector3() }, uHandR: { value: -9 }, uHandL: { value: -9 },
-    uEyeL: { value: new THREE.Vector3(...(eyes ? eyes[0] : [0, -9, 0])) }, uEyeR: { value: new THREE.Vector3(...(eyes ? eyes[1] : [0, -9, 0])) }, uHeadY: { value: eyes ? eyes[2] : 99 } };
+    uEyeL: { value: new THREE.Vector3(...(eyes ? eyes[0] : [0, -9, 0])) }, uEyeR: { value: new THREE.Vector3(...(eyes ? eyes[1] : [0, -9, 0])) }, uHeadY: { value: eyes ? eyes[2] : 99 }, uGlitch: { value: 0 } };
   const mat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.5, metalness: 0.0, side: THREE.DoubleSide });
   mat.userData.u = u;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u, { tA: { value: dt.map }, tE: { value: dt.emissiveMap } });
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float region;\nvarying vec3 vDPos; varying vec3 vDN; varying float vReg;\nuniform vec3 uWristR, uWristL; uniform float uHandR, uHandL;')
+      .replace('#include <common>', '#include <common>\nattribute float region;\nvarying vec3 vDPos; varying vec3 vDN; varying float vReg;\nuniform vec3 uWristR, uWristL; uniform float uHandR, uHandL, uGlitch, uTime, uSeed;\nfloat gh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vDPos = position; vDN = normal; vReg = region;
+        #ifndef DEAD_SKIN
+        // tearing into being: horizontal slices of the body slip sideways, flickering
+        if (uGlitch > 0.0) { float band = floor(position.y * 13.0), tt = floor(uTime * 20.0);
+          float on = step(1.0 - uGlitch * 0.55, gh(vec3(band, tt, uSeed)));
+          transformed.x += (gh(vec3(band, tt + 3.1, uSeed)) - 0.5) * 0.42 * on * uGlitch; transformed.z += (gh(vec3(band, tt + 7.7, uSeed)) - 0.5) * 0.2 * on * uGlitch; }
+        #endif
         #ifdef DEAD_SKIN
         // His own hands are folded away into the wrists; real hands are fixed on there instead
         { float bi = skinIndex.x, bw = skinWeight.x;
@@ -67,7 +74,7 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vDPos; varying vec3 vDN; varying float vReg;
-        uniform float uDissolve, uGlow, uHit, uTime, uSeed, uHeadY; uniform vec3 uRim, uEyeL, uEyeR; uniform sampler2D tA, tE;
+        uniform float uDissolve, uGlow, uHit, uTime, uSeed, uHeadY, uGlitch; uniform vec3 uRim, uEyeL, uEyeR; uniform sampler2D tA, tE;
         float dh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
         float dn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(dh(i), dh(i+vec3(1,0,0)), f.x), mix(dh(i+vec3(0,1,0)), dh(i+vec3(1,1,0)), f.x), f.y),
@@ -84,6 +91,16 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         float teeth = step(0.5, vReg);
         #ifdef DEAD_SKIN
         if (teeth > 0.5) discard;   // no fangs on Him: a shut, bloodless mouth
+        #else
+        if (uGlitch > 0.0 && dh(vec3(floor(vDPos.y * 55.0), floor(uTime * 28.0), uSeed)) < uGlitch * 0.22) discard;
+        // starved: every rib stands out under skin stretched tight over them, the belly sunk in beneath
+        { float ey = (uEyeL.y + uEyeR.y) * 0.5; float ry = vDPos.y + abs(vDPos.x) * 0.4;
+          float band = smoothstep(ey * 0.6, ey * 0.65, ry) * (1.0 - smoothstep(ey * 0.79, ey * 0.83, ry));
+          float wide = 1.0 - smoothstep(ey * 0.085, ey * 0.12, abs(vDPos.x));
+          float rib = pow(0.5 + 0.5 * sin(ry / (ey * 0.03) * 6.2832), 2.5);
+          hgt = mix(hgt, hgt * 0.4 + rib * 0.75, band * wide * 0.85);
+          float belly = smoothstep(ey * 0.5, ey * 0.56, vDPos.y) * (1.0 - smoothstep(ey * 0.6, ey * 0.64, vDPos.y)) * wide;
+          hgt *= 1.0 - belly * 0.5; }
         #endif`)
       .replace('#include <map_fragment>', `
         #ifdef DEAD_SKIN
@@ -104,6 +121,9 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         // deep black sockets round the burning eyes, and black blood run from them down the face in streaks
         float dl = length(vDPos - uEyeL), dr2 = length(vDPos - uEyeR);
         diffuseColor.rgb *= mix(0.12, 1.0, smoothstep(0.03, 0.075, min(dl, dr2)));
+        // the lids raw and red round the staring eyes, wet with it
+        float sockRing = smoothstep(0.026, 0.036, min(dl, dr2)) * (1.0 - smoothstep(0.04, 0.07, min(dl, dr2)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.015, 0.012), sockRing * 0.8);
         float bleed = 0.0;
         for (int e = 0; e < 2; e++) {
           vec3 E = e == 0 ? uEyeL : uEyeR; vec3 q = vDPos - E;
@@ -122,7 +142,7 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         #else
         if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.03, 0.0, 0.0);   // throat and sockets
         #endif`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(clamp(roughness + (0.5 - hgt) * 0.45, 0.25, 0.9), 0.28, teeth);\n#ifndef DEAD_SKIN\nroughnessFactor = mix(roughnessFactor, 0.12, bleed);\n#endif')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(clamp(roughness + (0.5 - hgt) * 0.45, 0.25, 0.9), 0.28, teeth);\n#ifndef DEAD_SKIN\nroughnessFactor = mix(roughnessFactor, 0.12, bleed);\nroughnessFactor = mix(roughnessFactor, 0.16, (1.0 - hgt) * 0.55 + sockRing * 0.5);\n#endif')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         vec2 dHdxy = vec2(dFdx(hgt), dFdy(hgt)) * 0.007 * (1.0 - teeth) * (gl_FrontFacing ? 1.0 : 0.0);
         normal = bumpN(-vViewPosition, normal, dHdxy, faceDirection);`)
@@ -133,16 +153,32 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         totalEmissiveRadiance += uRim * pow(veins, 4.0) * 0.35 * pulse * uGlow * (1.0 - teeth) * ff;
         float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
         totalEmissiveRadiance += uRim * fres * 0.18 * uGlow * ff;
+        totalEmissiveRadiance += vec3(0.7, 0.04, 0.0) * sockRing * 0.35 * uGlow * ff;
         #endif
         totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit * 1.6;
         if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);
   };
   if (dead) { mat.defines = { DEAD_SKIN: '' }; mat.roughness = 0.62; }
-  mat.customProgramCacheKey = () => dead ? 'demonSkin-dead-v2' : 'demonSkin-v4';
+  mat.customProgramCacheKey = () => dead ? 'demonSkin-dead-v3' : 'demonSkin-v5';
   return mat;
 }
 // Eyes: blank, white, burning. Shared by every demon.
-const EYE_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 1, 1).multiplyScalar(5), toneMapped: false });
+// white-hot, bloodshot: the whites shot through with red veins from every side, staring
+function bloodshotTex() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 128; const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, 256, 128);
+  const cx = 64, cy = 64;   // the front of the sphere: u .25, v .5
+  for (let i = 0; i < 70; i++) {
+    let a = Math.random() * Math.PI * 2, r = 46 + Math.random() * 20; let px = cx + Math.cos(a) * r * 1.6, py = cy + Math.sin(a) * r;
+    x.strokeStyle = `rgba(${150 + Math.random() * 80},0,0,${0.5 + Math.random() * 0.5})`; x.lineWidth = 0.6 + Math.random() * 1.6; x.beginPath(); x.moveTo(px, py);
+    for (let k = 0; k < 9; k++) { const dx = cx - px, dy = cy - py, l = Math.hypot(dx, dy) || 1; px += dx / l * 4 + (Math.random() - 0.5) * 6; py += dy / l * 2.5 + (Math.random() - 0.5) * 4; x.lineTo(px, py); if (l < 18) break; }
+    x.stroke();
+  }
+  const g = x.createRadialGradient(cx, cy, 20, cx, cy, 64); g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(160,10,0,0.55)'); x.fillStyle = g; x.fillRect(0, 0, 256, 128);
+  x.fillStyle = 'rgba(140,0,0,0.7)'; x.fillRect(128, 0, 128, 128);   // the back of the eye, never seen
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const EYE_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 1, 1).multiplyScalar(4), map: typeof document !== 'undefined' ? bloodshotTex() : null, toneMapped: false });
 const EYE_GEO = new THREE.SphereGeometry(1, 14, 10);
 const PUPIL_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.05, 0.02).multiplyScalar(3), toneMapped: false });
 // His eyes are not lamps: real, wet eyes, the whites shot with red veins from the corners, the iris milked over
@@ -269,7 +305,7 @@ export function buildHorror(kind, def) {
   // eyes, sunk in the sockets
   for (const e of K.eyes) {
     const real = !!def.realEyes;
-    const m = new THREE.Mesh(real ? REAL_EYE_GEO : EYE_GEO, real ? realEyeMat() : EYE_MAT); m.scale.setScalar(e[3] * (real ? 1.0 : 0.92)); m.position.set(e[0], e[1], e[2] - e[3] * (real ? 0.32 : 0.1));
+    const m = new THREE.Mesh(real ? REAL_EYE_GEO : EYE_GEO, real ? dissolvable(realEyeMat().clone(), mat.userData.u.uDissolve) : EYE_MAT); m.scale.setScalar(e[3] * (real ? 1.0 : 0.92)); m.position.set(e[0], e[1], e[2] - e[3] * (real ? 0.32 : 0.1));
     if (real) m.rotation.y = e[0] * 1.5;   // a slight outward turn: eyes that look past you as much as at you
     m.userData.eye = true; B.head.add(m);
   }
@@ -346,10 +382,13 @@ export function buildHorror(kind, def) {
   if (wings) bindWings(wings, mesh);
   // back to rest: limbs straight, the animation works from here
   for (const b of bones) { b.quaternion.identity(); b.userData.rest = b.position.clone(); }
-  if (def.hooded) dressDevil(B, K, def);
+  // hands too big and fingers too long for any man
+  if (!def.dead && !def.big && B.handR) for (const k of ['R', 'L']) B['hand' + k].scale.set(1.2, 1.45, 1.2);
+  if (def.hooded) { dressDevil.horn = null; dressDevil(B, K, def, def.dead ? mat.userData.u.uDissolve : null); }
   if (def.dead) {   // long, bony, real hands: pale skin over the knuckles, yellowed nails
-    const skin = new THREE.MeshStandardMaterial({ color: def.skin ?? 0x8e9592, roughness: 0.6 }), nail = new THREE.MeshStandardMaterial({ color: 0x6a6252, roughness: 0.4 });
-    for (const [k, side] of [['R', -1], ['L', 1]]) { const h = realHand(side, { skin, nail, scale: K.height / 1.78 * 0.95, long: 1.55, thin: 0.85, curl: 0.45 }); B['hand' + k].add(h); }
+    const DU = mat.userData.u.uDissolve;
+    const skin = dissolvable(new THREE.MeshStandardMaterial({ color: def.skin ?? 0x8e9592, roughness: 0.6 }), DU), nail = dissolvable(new THREE.MeshStandardMaterial({ color: 0x6a6252, roughness: 0.4 }), DU);
+    for (const [k, side] of [['R', -1], ['L', 1]]) { const h = mergeByMaterial(realHand(side, { skin, nail, scale: K.height / 1.78 * 0.95, long: def.fingers || 1.55, thin: 0.8, curl: 0.4 })); B['hand' + k].add(h); }
   }
   mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
   return { mesh, B, mat, wings, height: K.height };
@@ -362,8 +401,37 @@ export function buildHorror(kind, def) {
 // heavy black wool: a coarse weave in the normal map, a faint sheen at grazing angles, and a slow stir of wind
 // that grows toward the hem (y below the garment's top, in its own space, scaled by uSway)
 let _robeMat = null;
+// The Devil's garments, horns, eyes and hands come and go with his flesh: the same burning dissolve as his skin,
+// driven by the same uniform, so nothing pops in whole while the face is still forming out of the air.
+function dissolvable(mat, DU) {
+  if (!DU) return mat;
+  const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey ? mat.customProgramCacheKey() : mat.type;
+  mat.onBeforeCompile = (sh, r) => {
+    if (prev) prev.call(mat, sh, r);
+    sh.uniforms.uDissolve = DU;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vDsP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvDsP = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      varying vec3 vDsP; uniform float uDissolve;
+      float dsh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+      float dsn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(mix(dsh(i), dsh(i+vec3(1,0,0)), f.x), mix(dsh(i+vec3(0,1,0)), dsh(i+vec3(1,1,0)), f.x), f.y),
+                   mix(mix(dsh(i+vec3(0,0,1)), dsh(i+vec3(1,0,1)), f.x), mix(dsh(i+vec3(0,1,1)), dsh(i+vec3(1,1,1)), f.x), f.y), f.z); }`)
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  float dsz = dsn(vDsP * 7.0) * 0.65 + dsn(vDsP * 19.0) * 0.35; if (uDissolve > 0.0 && dsz < uDissolve) discard;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 5.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dsz));');
+  };
+  mat.customProgramCacheKey = () => key + '|dslv';
+  return mat;
+}
+// bake a hand built of many little meshes into one mesh per material (two draw calls instead of ~40)
+function mergeByMaterial(group) {
+  group.updateMatrixWorld(true); const inv = group.matrixWorld.clone().invert(); const by = new Map();
+  group.traverse((o) => { if (!o.isMesh) return; const g = o.geometry.clone(); for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n); if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2)); const ng = g.index ? g.toNonIndexed() : g; ng.applyMatrix4(inv.clone().multiply(o.matrixWorld)); if (!by.has(o.material)) by.set(o.material, []); by.get(o.material).push(ng); });
+  for (const c of [...group.children]) group.remove(c);
+  for (const [m, gs] of by) { const mesh = new THREE.Mesh(mergeGeometries(gs), m); mesh.castShadow = true; group.add(mesh); }
+  return group;
+}
 const ROBE_U = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0, 0) } };
-function robeMat(sway, top) {
+function robeMat(sway, top, DU) {
   const ct = clothTextures([26, 22, 24], false, 256, 'devilwool');
   const m = new THREE.MeshPhysicalMaterial({ color: 0x0d0b0c, map: ct.map, normalMap: ct.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.92, sheen: 0.5, sheenRoughness: 0.75, sheenColor: new THREE.Color(0x2a2630), side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
@@ -382,8 +450,8 @@ function robeMat(sway, top) {
         transformed.x += wd.x + flap * uWind.y * hang; transformed.z += wd.y + flap * uWind.x * hang;
         transformed.y += length(wd) * 0.35 * hang;`);
   };
-  m.customProgramCacheKey = () => 'robe' + sway + '_' + top.toFixed(2);
-  return m;
+  m.customProgramCacheKey = () => 'devilRobe';   // sway and top are uniforms: one shader for every garment
+  return dissolvable(m, DU);
 }
 export function tickRobes(time) { ROBE_U.uTime.value = time; }
 // wind on the Devil's robes, in his own frame (+x his left)
@@ -396,7 +464,7 @@ function lathe(profile, segs, shape) {
 }
 // a little value noise for wrinkles
 const wn = (x, y) => { const i = Math.floor(x), j = Math.floor(y), f = x - i, g2 = y - j; const h = (a, b) => { const t = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return t - Math.floor(t); }; const u = f * f * (3 - 2 * f), v = g2 * g2 * (3 - 2 * g2); return (h(i, j) * (1 - u) + h(i + 1, j) * u) * (1 - v) + (h(i, j + 1) * (1 - u) + h(i + 1, j + 1) * u) * v; };
-function dressDevil(B, K, def) {
+function dressDevil(B, K, def, DU) {
   const chestY = B.chest.getWorldPosition(new THREE.Vector3()).y;   // mesh is at the origin, at rest
   const neckTop = B.neck.position.y;                                    // neck base, in the chest's frame
   const L = chestY - 0.02;                                              // to the ground
@@ -413,15 +481,15 @@ function dressDevil(B, K, def) {
     v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.82 + 0.07;
     if (t > 0.96) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.1 - 0.02;   // the hem, uneven, dragging
   });
-  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop)); robe.castShadow = true; B.chest.add(robe);
+  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe);
   // sleeves: wide and long, falling in folds, the hands hang out of them
   for (const k of ['R', 'L']) {
     const ul = Math.abs(B['fArm' + k].position.y), fl = Math.abs(B['hand' + k].position.y);
-    const up = new THREE.Mesh(lathe([[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul - 0.02]], 24, (v, a) => { const r = Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * 0.012 + (wn(a * 4, v.y * 12) - 0.5) * 0.02; v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), robeMat(0.0, 0)); B['uArm' + k].add(up);
+    const up = new THREE.Mesh(lathe([[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul - 0.02]], 24, (v, a) => { const r = Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * 0.012 + (wn(a * 4, v.y * 12) - 0.5) * 0.02; v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), robeMat(0.0, 0, DU)); B['uArm' + k].add(up);
     const lo = new THREE.Mesh(lathe([[0.16, 0.02], [0.19, -fl * 0.4], [0.27, -fl * 0.75], [0.31, -fl * 0.88], [0.3, -fl * 0.92]], 28, (v, a) => {
       const t = -v.y / fl; const r = Math.hypot(v.x, v.z) + Math.sin(a * 7 + v.y * 3) * 0.018 * t + (wn(a * 5, v.y * 10) - 0.5) * 0.02;
       v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
-    }), robeMat(0.06, 0));
+    }), robeMat(0.06, 0, DU));
     B['fArm' + k].add(lo); up.castShadow = lo.castShadow = true;
   }
   // the hood. It rests on the skull and comes down over the brow, so the face is a pale shape in its shadow:
@@ -459,10 +527,10 @@ function dressDevil(B, K, def) {
   const hood = new THREE.BufferGeometry(); hood.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   const uv = []; for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) uv.push(i / NU * 3, j / NV * 2); hood.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   hood.setIndex(idx); hood.computeVertexNormals();
-  const hm = new THREE.Mesh(hood, robeMat(0.02, 0.0)); hm.castShadow = true; B.head.add(hm);
+  const hm = new THREE.Mesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; B.head.add(hm);
   // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
   if (def.horns) for (const s of [-1, 1]) {
-    const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), HORN_MAT); h.castShadow = true;
+    const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true;
     h.position.set(s * 0.11, 0.19, 0.05); h.rotation.set(-0.15, s * 0.75, -s * 1.15);   // out to the sides, then back and down round the hood, a ram's curl
     B.head.add(h);
   }
@@ -511,6 +579,23 @@ function overlay(d, B, time, k = 1) {
   }
 }
 
+// the head never still: it snaps to a new angle every fraction of a second as if wrenched by something inside,
+// trembles there, and now and then thrashes violently; the jaw hangs open and chatters
+function spasm(d, B, time, dt, k = 1) {
+  const S = d.sp || (d.sp = { t: 0, tg: [0, 0, 0], cur: [0, 0, 0] });
+  S.t -= dt;
+  if (S.t <= 0) {
+    const big = Math.random() < 0.12;
+    S.t = big ? 0.06 + Math.random() * 0.08 : 0.12 + Math.random() * 0.45;
+    const m = big ? 2.2 : 1;
+    S.tg = [(Math.random() - 0.5) * 34 * m, (Math.random() - 0.5) * 70 * m, (Math.random() - 0.5) * 60 * m];
+  }
+  for (let i = 0; i < 3; i++) S.cur[i] += (S.tg[i] - S.cur[i]) * Math.min(1, dt * 38);   // a snap, not a turn
+  const tr = Math.sin(time * 47 + d.seed) * 3 + Math.sin(time * 31) * 2;
+  add(B.head, (S.cur[0] + tr) * k, (S.cur[1] + tr * 0.6) * k, (S.cur[2] + tr) * k);
+  add(B.neck, S.cur[0] * 0.35 * k, S.cur[1] * 0.3 * k, S.cur[2] * 0.25 * k);
+  if (B.jaw) add(B.jaw, (14 + Math.max(0, Math.sin(time * 21 + d.seed)) * 18 + Math.abs(S.cur[1]) * 0.2) * k, 0, Math.sin(time * 17) * 4 * k);
+}
 // a loping, hunched biped gait
 function legs(B, ph, run, o = {}) {
   const stride = o.stride ?? 1, crouch = o.crouch ?? 15;
@@ -532,6 +617,13 @@ function arms(B, ph, run, time, seed, mode = 'trail') {
       const claw = Math.sin(time * 9 + seed + off * 4) * 12;
       e(B['clav' + k], -10, 0, sg * -8); e(B['uArm' + k], -75 + sw * 18 * run + claw * 0.5, -sg * 12, sg * 14);
       e(B['fArm' + k], -25 - claw, 0, 0); e(B['hand' + k], -20 + claw, 0, 0);
+    } else if (mode === 'grasp') { // sprinting at you with both arms thrust out ahead, hands clawing, snatching on each stride
+      const snatch = Math.max(0, sinp((ph + off + 0.25) % 1)) * run;
+      const claw = Math.sin(time * 13 + seed + off * 5) * 0.5 + Math.sin(time * 29 + off * 3) * 0.5;
+      e(B['clav' + k], -14 * run, 0, sg * -10 * run);
+      e(B['uArm' + k], lerp(-12 + idle, -128 - snatch * 18 + claw * 5, run), -sg * 16 * run, sg * lerp(10, 6 + snatch * 6, run));   // the body is pitched far forward: this holds the arms out level, at you
+      e(B['fArm' + k], lerp(-28, -4 - (1 - snatch) * 18, run), 0, 0);
+      e(B['hand' + k], lerp(-15, 35 + claw * 30, run), 0, sg * claw * 12 * run);
     } else if (mode === 'swing') { // heavy pendulum (brute)
       e(B['clav' + k], 0, 0, 0); e(B['uArm' + k], -sw * 30 * run - 10 + idle, 0, sg * 16); e(B['fArm' + k], -25 - Math.max(0, -sw) * 30 * run, 0, 0); e(B['hand' + k], -10, 0, 0);
     } else { // hanging limp
@@ -582,12 +674,15 @@ export const ANIM = {
   // gaunt sprinter: arms flung back, head low and level, jaw hanging
   shade(dt, time) {
     const B = this.B, s = this.speedVis, st = this.state, T = this.stateT;
-    this.phase += dt * s / 2.9;
+    // a lurching, uneven stride: one leg seems to drag, then it lunges on
+    this.phase += dt * s / 2.9 * (1 + 0.35 * Math.sin(time * 2.6 + this.seed) + 0.2 * Math.sin(time * 7.1));
     const ph = this.phase, run = clamp(s / 5, 0, 1);
-    torso(B, ph, run, 34, time, this.seed);
-    legs(B, ph, run, { crouch: 14, stride: 1.15 });
-    arms(B, ph, run, time, this.seed, 'trail');
-    e(B.head, -24 - 10 * run, 0, this.h ? this.h.tilt * (1 - run) : 0); e(B.jaw, 18 + Math.max(0, Math.sin(time * 4 + this.seed)) * 15, 0, 0);
+    torso(B, ph, run, 34 + 12 * run, time, this.seed);
+    add(B.hips, 0, 0, Math.sin(ph * TAU * 0.5 + this.seed) * 9 * run); add(B.spine, 0, 0, -Math.sin(ph * TAU * 0.5 + this.seed) * 7 * run);
+    legs(B, ph, run, { crouch: 14, stride: 1.2 });
+    arms(B, ph, run, time, this.seed, run > 0.3 ? 'grasp' : 'trail');
+    e(B.head, -24 - 6 * run, 0, this.h ? this.h.tilt * (1 - run) : 0); e(B.jaw, 26 + Math.max(0, Math.sin(time * 4 + this.seed)) * 18, 0, 0);
+    spasm(this, B, time, dt, 0.5 + 0.6 * run);
     if (st === ST.windup || st === ST.strike || st === ST.recover || st === ST.leap) attackPose(this, B, T, { wind: 0.4 });
     if (st === ST.spawn) spawnPose(this, B, T, time);
     if (st === ST.stagger) { add(B.chest, -25, 0, 15 * this.flinchDir); add(B.head, -35, 20 * this.flinchDir, 0); }
@@ -608,6 +703,7 @@ export const ANIM = {
     // the head bent all the way back, so it watches you upside down
     e(B.neck, 30, 0, 0); e(B.head, -95 + Math.sin(time * 6 + this.seed) * 8, Math.sin(time * 2.1 + this.seed) * 22 * (1 - run * 0.5), Math.sin(time * 9 + this.seed) * 10);
     e(B.jaw, 45 + Math.max(0, Math.sin(time * 5 + this.seed)) * 25, 0, 0);
+    spasm(this, B, time, dt, 0.5);
     // diagonal pairs scuttle; knees and elbows jut up
     for (const [k, sg, off] of [['R', -1, 0], ['L', 1, 0.5]]) {
       const pa = (ph + off) % 1, la = Math.max(0, Math.sin(pa * TAU)) * run, sa = Math.cos(pa * TAU) * run;
@@ -637,6 +733,7 @@ export const ANIM = {
     arms(B, ph, run, time, this.seed, 'hang');
     e(B.uArmL, -70 + Math.sin(time * 3 + this.seed) * 10, -10, 16); e(B.fArmL, -20, 0, 0); e(B.handL, -40 + Math.sin(time * 11) * 10, 0, 0);
     e(B.head, -10, 0, 25 + (this.h ? this.h.tilt * 0.5 : 0)); e(B.jaw, 20 + Math.sin(time * 1.3 + this.seed) * 10, 0, 0);
+    spasm(this, B, time, dt, 0.6);
     if (st === ST.windup) { const w = smooth(clamp(T / 0.6, 0, 1)); for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['uArm' + k], -150 * w, 0, sg * 30 * w); e(B['fArm' + k], -30, 0, 0); e(B['hand' + k], 40 * w, 0, 0); } e(B.head, -45 * w, 0, 0); e(B.jaw, 70 * w, 0, 0); }
     if (st === ST.strike) { const k = smooth(clamp(T / 0.15, 0, 1)); for (const [k2, sg] of [['R', -1], ['L', 1]]) { e(B['uArm' + k2], -150 + 80 * k, 0, sg * 30); } e(B.jaw, 70, 0, 0); }
     if (st === ST.spawn) spawnPose(this, B, T, time);
@@ -653,6 +750,7 @@ export const ANIM = {
     legs(B, ph, run, { crouch: 10, stride: 0.7, wide: 10 });
     arms(B, ph, run, time, this.seed, 'reach');
     e(B.head, -10 + Math.sin(time * 2 + this.seed) * 8, Math.sin(time * 1.1 + this.seed) * 20, Math.sin(time * 1.7) * 10); e(B.jaw, 35, 0, 0);
+    spasm(this, B, time, dt, 0.45);
     const swell = st === ST.special ? 1 + smooth(clamp(T / 1.1, 0, 1)) * 0.35 + Math.sin(time * 40) * 0.03 * T : 1;
     B.spine.scale.set(swell, 1 + (swell - 1) * 0.6, swell);
     if (st === ST.special) { add(B.head, -30, Math.sin(time * 25) * 30, 0); e(B.jaw, 75, 0, 0); for (const [k, sg] of [['R', -1], ['L', 1]]) e(B['uArm' + k], -40, 0, sg * 60); }
@@ -669,6 +767,7 @@ export const ANIM = {
     legs(B, ph, run, { crouch: 18, stride: 0.9, wide: 6 });
     arms(B, ph, run, time, this.seed, 'swing');
     e(B.head, -18, Math.sin(time * 0.6 + this.seed) * 20, 0); e(B.jaw, 15 + Math.max(0, Math.sin(time * 1.5)) * 20, 0, 0);
+    spasm(this, B, time, dt, 0.3);
     if (st === ST.special) { // paw, roar, charge
       if (T < 0.9) { const w = smooth(clamp(T / 0.4, 0, 1)); add(B.chest, -30 * w, 0, 0); e(B.head, -50 * w, 0, 0); e(B.jaw, 75 * w, 0, 0); for (const [k, sg] of [['R', -1], ['L', 1]]) e(B['uArm' + k], -40 * w, 0, sg * 70 * w); }
       else { add(B.spine, 30, 0, 0); add(B.chest, 20, 0, 0); e(B.head, -30, 0, 0); e(B.jaw, 60, 0, 0); }
@@ -693,6 +792,7 @@ export const ANIM = {
     legs(B, ph, run, { crouch: 26, stride: 1.0 });
     arms(B, ph, run, time, this.seed, 'reach');
     e(B.head, -20, Math.sin(time * 0.9 + this.seed) * 30 * (1 - run), this.h ? this.h.tilt * 0.6 : 0); e(B.jaw, 20 + Math.max(0, Math.sin(time * 3 + this.seed)) * 25, 0, 0);
+    spasm(this, B, time, dt, 0.55);
     let spread = 0;
     if (st === ST.windup) { spread = smooth(clamp(T / 0.5, 0, 1)); for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['uArm' + k], -100 * spread, 0, sg * 50 * spread); } e(B.head, -40 * spread, 0, 0); e(B.jaw, 75 * spread, 0, 0); }
     if (st === ST.strike) spread = 1 - smooth(clamp(T / 0.5, 0, 1));
@@ -709,8 +809,9 @@ export const ANIM = {
     const ph = this.phase, run = clamp(s / 6, 0, 1);
     torso(B, ph, run, 22, time, this.seed, { drop: 0.06 });
     legs(B, ph, run, { crouch: 16, stride: 1.2 });
-    arms(B, ph, run, time, this.seed, 'trail');
+    arms(B, ph, run, time, this.seed, run > 0.4 ? 'grasp' : 'trail');
     e(B.head, -12, Math.sin(time * 0.7 + this.seed) * 20, 0); e(B.jaw, 10 + Math.max(0, Math.sin(time * 2.2)) * 20, 0, 0);
+    spasm(this, B, time, dt, 0.35);
     let spread = 0.15 + run * 0.25;
     if (st === ST.windup || st === ST.flee) { const w = smooth(clamp(T / 0.5, 0, 1)); spread = 1; add(B.chest, -25 * w, 0, 0); e(B.head, -45 * w, 0, 0); e(B.jaw, 80 * w, 0, 0); for (const [k, sg] of [['R', -1], ['L', 1]]) e(B['uArm' + k], -60 * w, 0, sg * 75 * w); }
     if (st === ST.strike || st === ST.leap) { spread = 0.8; attackPose(this, B, Math.min(T, 0.3)); }

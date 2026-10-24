@@ -139,16 +139,16 @@ const RENDER = {
     return normalize(await ctx.startRendering(), 0.85);
   },
   // one choir note: twelve voices, each with its own drift, vibrato and breath
-  async choir(note, vowel) {
-    const dur = 4.2; const ctx = off(dur);
+  async choir(note, vowel, voices = 12) {
+    const dur = 4.2; const ctx = off(dur); const solo = voices < 4;
     const out = ctx.createGain(); out.gain.value = 0.3; out.connect(ctx.destination);
     const V = VOWELS[vowel]; const high = note >= 55;
     const fBank = V.map(([f, a]) => { const b = bp(ctx, f * (high ? 1.15 : 1), high ? 7 : 8); const g = ctx.createGain(); g.gain.value = a * 3; b.connect(g).connect(out); return b; });
-    for (let v = 0; v < 12; v++) {
+    for (let v = 0; v < voices; v++) {
       const o = ctx.createOscillator(); o.type = 'sawtooth';
-      const f = midi(note) * (1 + (R() - 0.5) * 0.012);
+      const f = midi(note) * (1 + (R() - 0.5) * (solo ? 0.004 : 0.012));
       o.frequency.setValueAtTime(f * (1 - 0.01 * R()), 0); o.frequency.linearRampToValueAtTime(f, 0.3 + R() * 0.4);
-      const vib = ctx.createOscillator(); vib.frequency.value = 4.2 + R() * 1.6; const vg = ctx.createGain(); vg.gain.value = f * 0.006 * (0.5 + R()); vib.connect(vg).connect(o.frequency);
+      const vib = ctx.createOscillator(); vib.frequency.value = 4.2 + R() * 1.6; const vg = ctx.createGain(); vg.gain.value = f * (solo ? 0.011 : 0.006) * (0.5 + R()); vib.connect(vg).connect(o.frequency);
       const drift = ctx.createOscillator(); drift.frequency.value = 0.2 + R() * 0.3; const dg = ctx.createGain(); dg.gain.value = f * 0.003; drift.connect(dg).connect(o.frequency);
       const amp = gainEnv(ctx, [[0, 0], [0.5 + R() * 0.4, 0.7 + R() * 0.3], [dur - 0.3, 0.7], [dur, 0]]);
       o.connect(amp); for (const b of fBank) amp.connect(b);
@@ -373,6 +373,8 @@ export class AudioEngine {
     tasks.push(async () => { L.drums.taiko = await RENDER.drum(39); }, async () => { L.drums.snare = await RENDER.snare(); }, async () => { L.drums.swell = await RENDER.cymbal(true); }, async () => { L.drums.crash = await RENDER.cymbal(false); });
     L.horn = {}; for (let n = 50; n <= 65; n += 3) tasks.push(async () => { L.horn[n] = await RENDER.brass(n); });
     for (let n = 38; n <= 74; n += 3) for (const v of ['ah', 'oo']) tasks.push(async () => { L.choir[v + n] = await RENDER.choir(n, v); });
+    // the cantor: one man's voice (two, close together), for the chant and the responsory
+    L.cantor = {}; for (let n = 44; n <= 65; n += 3) tasks.push(async () => { L.cantor['oh' + n] = await RENDER.choir(n, 'oh', 2); });
     for (let n = 26; n <= 50; n += 3) { tasks.push(async () => { L.strings[n] = await RENDER.strings(n, false); }); tasks.push(async () => { L.spic[n] = await RENDER.strings(n, true); }); }
     for (let n = 29; n <= 47; n += 3) tasks.push(async () => { L.brass[n] = await RENDER.brass(n); });
     // render a few at a time so the page stays responsive
@@ -607,6 +609,29 @@ const FINAL_THEME = [
   [[0, 60, 3], [3, 58, 1], [4, 55, 2], [6, 57, 2]],
 ];
 const FINAL_BRIDGE_THEME = [[[0, 58, 4], [4, 62, 4]], [[0, 62, 3], [3, 58, 1], [4, 55, 4]], [[0, 57, 4], [4, 61, 4]], [[0, 64, 4], [4, 61, 2], [6, 57, 2]]];
+// Prayer: four pieces, chosen in turn with a little chance, so the knights do not kneel to the same music twice
+// running. Each lasts as long as the prayer does, looping its phrases over the prayer progression (D Dorian).
+//  chant       — plainchant: one line of men's voices over a drone, the fifth below joining it (organum)
+//  motet       — four voices weaving in imitation, Renaissance style
+//  responsory  — a lone cantor sings a verse; the whole choir answers
+//  cathedral   — slow chords far off in a great stone nave, a bell tolling the hours
+const PRAYER_PIECES = ['chant', 'motet', 'responsory', 'cathedral'];
+// plainchant neumes in D Dorian: [note, beats]
+const CHANT = [
+  [[50, 1], [52, 1], [53, 2], [55, 1], [53, 1], [52, 1], [50, 1]],
+  [[53, 1], [55, 1], [57, 2], [57, 1], [55, 1], [53, 1], [55, 1]],
+  [[57, 1], [59, 1], [60, 1], [57, 1], [55, 2], [53, 1], [52, 1]],
+  [[53, 1], [52, 1], [50, 1], [48, 1], [50, 4]],
+];
+// the cantor's verse (answered by the choir on the next chord)
+const VERSE = [[[57, 1], [57, 1], [57, 1], [59, 1], [57, 2], [55, 2]], [[55, 1], [57, 1], [53, 2], [52, 1], [50, 3]], [[50, 1], [53, 1], [55, 1], [57, 1], [57, 2], [55, 1], [57, 1]], [[60, 2], [59, 1], [57, 1], [55, 2], [57, 2]]];
+// a motet's four voices: each a line of half- and whole-notes, imitating one another a beat apart
+const MOTET = [
+  [[62, 2], [64, 2], [65, 3], [64, 1], [62, 2], [60, 2], [62, 4]],
+  [[57, 3], [59, 1], [60, 2], [62, 2], [57, 4], [55, 2], [57, 2]],
+  [[50, 4], [53, 2], [55, 2], [53, 3], [52, 1], [50, 4]],
+  [[38, 4], [43, 4], [41, 4], [38, 4]],
+];
 class Score {
   constructor(a) {
     this.a = a; this.ctx = a.ctx; this.mood = 'dread'; this.intensity = 0; this.targetIntensity = 0;
@@ -616,6 +641,60 @@ class Score {
     this.chord = PROG.dread[0]; this.stems = null;
     // the choir has its own fader: hymns belong to prayer alone, and fade the moment the knights rise
     this.choirOut = this.ctx.createGain(); this.choirOut.gain.value = 0; this.choirOut.connect(this.out);
+    // and a send of its own into the hall, deeper for the far-off cathedral
+    this.choirRev = this.ctx.createGain(); this.choirRev.gain.value = 0.4; this.choirOut.connect(this.choirRev); this.choirRev.connect(a.revSend);
+    this.prayerN = Math.floor(R() * PRAYER_PIECES.length); this.piece = null;
+  }
+  // a voice from a sample bank, starting into the sustained part of the note so a short note still speaks at once
+  voice(bank, note, prefix, when, gain, dur, attack = 0.08, skip = 0.7) {
+    const s = this.a.sampleFor(bank, note, prefix); if (!s) return;
+    const b = this.ctx.createBufferSource(); b.buffer = s.buf; b.playbackRate.value = s.rate;
+    const g = this.ctx.createGain(); g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(gain, when + attack);
+    const len = Math.min(dur, s.buf.duration / s.rate - skip - 0.1);
+    g.gain.setValueAtTime(gain, when + Math.max(attack, len - 0.18)); g.gain.linearRampToValueAtTime(0, when + len);
+    b.connect(g).connect(this.choirOut); b.start(when, skip); b.stop(when + len + 0.1);
+  }
+  // which prayer piece: in turn, sometimes skipping one; the rare dark variant when the fear is on them
+  pickPrayer() {
+    this.prayerN += R() < 0.3 ? 2 : 1;
+    this.piece = PRAYER_PIECES[this.prayerN % PRAYER_PIECES.length];
+    this.phrase = 0;
+    const fear = Math.max(this.a.dread ?? 0, (this.a.terror ?? 0) * 0.6);
+    this.falter = R() < 0.08 + fear * 0.5;   // something else is singing with them
+    this.choirRev.gain.setTargetAtTime(this.piece === 'cathedral' ? 1.4 : this.piece === 'chant' ? 0.7 : 0.45, this.ctx.currentTime, 0.5);
+  }
+  // one chord's worth (eight beats) of the prayer piece, starting at `bar`
+  prayerBar(L, bar, spb, len) {
+    const [root, fifth, oct, third] = this.chord, P = this.piece, ph = this.phrase++;
+    const line = (notes, bank, prefix, gain, octave = 0, t0 = bar) => { let b = 0; for (const [n, d] of notes) { this.voice(bank, n + octave, prefix, t0 + b * spb, gain, d * spb + 0.12); b += d; } };
+    if (P === 'chant') {
+      // the drone on the final and its fifth, hummed; the chant above it, and from the second verse the organum a fifth below
+      this.sample(L.choir, root + 12, 'oo', bar, 0.3, len, 1.2, this.choirOut);
+      this.sample(L.choir, fifth + 12, 'oo', bar, 0.18, len, 1.6, this.choirOut);
+      const c = CHANT[ph % CHANT.length];
+      line(c, L.choir, 'ah', 0.5); if (ph % 8 >= 2) line(c, L.choir, 'oo', 0.26, -7);
+      if (ph % 8 >= 4) line(c, L.choir, 'ah', 0.16, 12);   // the boys, an octave up, in the last verses
+    } else if (P === 'motet') {
+      // the voices enter one by one, then weave
+      MOTET.forEach((v, i) => { if (ph >= i || ph > 3) line(v.map(([n, d]) => [n + ((ph >> 2) % 2 ? -2 : 0), d]), L.choir, i === 3 ? 'oo' : 'ah', i === 3 ? 0.34 : 0.3, 0, bar + (ph < 4 ? 0 : i * spb * 0.5)); });
+    } else if (P === 'responsory') {
+      if (ph % 2 === 0) { // the cantor's verse, alone but for the drone
+        this.sample(L.choir, root + 12, 'oo', bar, 0.16, len, 1.5, this.choirOut);
+        line(VERSE[(ph >> 1) % VERSE.length], L.cantor, 'oh', 0.62);
+      } else {             // the choir's answer: the full chord, swelling
+        for (const n of [root + 12, oct, third + 12, fifth + 12]) this.sample(L.choir, n, 'ah', bar + R() * 0.05, 0.44, len, 0.9, this.choirOut);
+        this.sample(L.choir, oct + 12, 'ah', bar + spb * 2, 0.2, len - spb * 2, 1.4, this.choirOut);
+      }
+    } else { // cathedral: slow chords far down the nave, the bell tolling, a boy's voice high above
+      for (const n of [oct, third + 12, fifth + 12, oct + 12]) this.sample(L.choir, n, 'oo', bar + R() * 0.1, 0.32, len, 2.2, this.choirOut);
+      this.sample(L.choir, oct + 24, 'ah', bar + spb * 2, 0.12, len - spb * 2, 2.5, this.choirOut);
+      if (ph % 2 === 0) this.one(L.bells.low, bar, 0.22, Math.pow(2, (root + 12 - 45) / 12));
+    }
+    // the rare dark variant: one voice slips a semitone off the chord and will not come back, and something whispers under it
+    if (this.falter && ph >= 2) {
+      this.sample(L.choir, oct + 1, 'oo', bar + spb * 3, 0.12 + Math.min(0.12, ph * 0.015), len - spb * 3, 2.5, this.choirOut);
+      if (R() < 0.6) setTimeout(() => this.a.whisper(null, 2.2, 0.16), Math.max(0, (bar - this.ctx.currentTime + spb * 2) * 1000));
+    }
   }
   start() { this.started = true; this.nextBar = this.ctx.currentTime + 0.2; this.nextBeat = this.nextBar; }
   setMood(m) { if (PROG[m] && m !== this.mood) { this.mood = m; this.moodChanged = true; } }
@@ -652,6 +731,7 @@ class Score {
     const bpm = mood === 'boss' ? 96 : mood === 'combat' ? 88 : 72; const spb = 60 / bpm;
     if (this.nextBar < now - 0.5) { this.nextBar = now + 0.1; this.nextBeat = this.nextBar; }
     const hymn = mood === 'prayer';
+    if (!hymn && this.piece) this.piece = null;   // the next prayer gets the next piece
     this.choirOut.gain.setTargetAtTime(hymn ? 1 : 0, now, hymn ? 0.8 : 0.35);
     // a chord per two bars
     while (this.nextBar < now + 0.3) {
@@ -662,9 +742,9 @@ class Score {
       // drone strings, always: in the dark they sit low, with a semitone rubbing beneath
       this.sample(L.strings, root - 12, '', bar, dark ? 0.5 : 0.55, len + 1, 1.2);
       this.sample(L.strings, dark ? root - 11 : fifth - 12, '', bar + (dark ? spb * 3 : 0), dark ? 0.16 : 0.35, len + 1, dark ? 3 : 1.5);
-      if (hymn) { // the hymn, and the angelic answer above it
-        for (const n of [oct, third + 12, fifth + 12, oct + 12]) this.sample(L.choir, n, 'ah', bar + R() * 0.05, 0.42 * (n > 60 ? 0.8 : 1), len, 1.4, this.choirOut);
-        for (const n of [oct + 24, third + 24]) this.sample(L.choir, n, 'ah', bar + 0.2, 0.18, len, 2.0, this.choirOut);
+      if (hymn) { // the prayer piece for this prayer
+        if (!this.piece) this.pickPrayer();
+        this.prayerBar(L, bar, spb, len);
       }
       if (fight) { // war: the strings take the tune up high, brass hammers the downbeats
         this.sample(L.strings, oct, '', bar, 0.22 + I * 0.18, len, 0.25); this.sample(L.strings, third + 12, '', bar + spb * 4, 0.16 + I * 0.14, len - spb * 4, 0.25);
