@@ -109,7 +109,7 @@ export async function loadPeople(url = 'models/people.json') {
       geo.setAttribute('hairAmt', new THREE.BufferAttribute(dec(v.hair, Uint8Array), 1, true));
       geo.setIndex(new THREE.BufferAttribute(dec(v.index, Uint32Array), 1));
       geo.computeBoundingSphere();
-      out[name] = { geo, bind: v.bind };
+      out[name] = { geo, bind: v.bind, eyes: v.eyes };
     }
     PEOPLE = out;
   } catch (e) { console.warn('people model', e); }
@@ -119,7 +119,7 @@ let EYE_TEX = null;
 function personMat(look) {
   if (!EYE_TEX) { EYE_TEX = new THREE.TextureLoader().load('models/eye.png'); EYE_TEX.colorSpace = THREE.SRGBColorSpace; }
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 });
-  const U = { uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
+  const U = { uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float region;\nattribute float hairAmt;\nflat varying float vReg;\nvarying float vHair;\nvarying vec2 vUv0;\nvarying vec3 vObj;')
@@ -127,17 +127,43 @@ function personMat(look) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         flat varying float vReg; varying float vHair; varying vec2 vUv0; varying vec3 vObj;
-        uniform vec3 uSkin, uHair, uCloth, uShoe; uniform sampler2D uEye;
+        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge;
         float ph(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
         float pn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(ph(i), ph(i+vec3(1,0,0)), f.x), mix(ph(i+vec3(0,1,0)), ph(i+vec3(1,1,0)), f.x), f.y),
                      mix(mix(ph(i+vec3(0,0,1)), ph(i+vec3(1,0,1)), f.x), mix(ph(i+vec3(0,1,1)), ph(i+vec3(1,1,1)), f.x), f.y), f.z); }
-        float isR(float k){ return step(abs(vReg - k), 0.4); }`)
+        float isR(float k){ return step(abs(vReg - k), 0.4); }
+        // the lines of an old face, worked out round the eyes: furrowed brow, frown lines, crow's feet, bags under
+        // the eyes, deep folds from nose to mouth, a creased neck
+        float wrinkle(vec3 p){
+          vec3 ec = (uEyeL + uEyeR) * 0.5; vec3 q = p - ec; float w = 0.0;
+          float front = smoothstep(-0.02, 0.01, q.z);
+          float fh = smoothstep(0.028, 0.042, q.y) * (1.0 - smoothstep(0.075, 0.09, q.y)) * (1.0 - smoothstep(0.045, 0.065, abs(q.x))) * front;
+          w += fh * pow(0.5 + 0.5 * sin(q.y * 470.0 + sin(q.x * 55.0) * 1.6), 4.0) * 0.75;
+          w += smoothstep(0.004, 0.0, abs(abs(q.x) - 0.007)) * smoothstep(0.01, 0.018, q.y) * (1.0 - smoothstep(0.035, 0.045, q.y)) * front * 0.5;
+          for (int i = 0; i < 2; i++) {
+            vec3 e = i == 0 ? uEyeL : uEyeR; float s = sign(e.x - ec.x);
+            vec3 d = p - (e + vec3(s * 0.021, 0.0, -0.012)); float r = length(d.xy); float a = atan(d.y, d.x * s);
+            w += smoothstep(0.02, 0.008, r) * smoothstep(0.003, 0.008, r) * smoothstep(-0.002, 0.004, d.x * s) * pow(0.5 + 0.5 * sin(a * 11.0), 4.0) * 0.5;
+            vec3 b = p - e; w += smoothstep(0.005, 0.0, abs(b.y + 0.017 + b.x * b.x * 9.0)) * (1.0 - smoothstep(0.012, 0.022, abs(b.x))) * front * 0.6;
+          }
+          float nl = abs(abs(q.x) - (0.021 + (-0.032 - q.y) * 0.38));
+          w += smoothstep(0.007, 0.0, nl) * smoothstep(-0.03, -0.04, q.y) * (1.0 - smoothstep(-0.075, -0.088, q.y)) * front * 0.7;
+          // hollow cheeks under the cheekbones, and jowls
+          w += smoothstep(0.03, 0.045, abs(q.x)) * (1.0 - smoothstep(0.055, 0.07, abs(q.x))) * smoothstep(-0.025, -0.04, q.y) * (1.0 - smoothstep(-0.065, -0.08, q.y)) * front * 0.35;
+          float nk = smoothstep(-0.11, -0.13, q.y) * (1.0 - smoothstep(-0.2, -0.22, q.y)) * smoothstep(-0.08, -0.03, q.z);
+          w += nk * smoothstep(0.55, 1.0, sin(q.y * 300.0 + q.x * 25.0)) * 0.8;
+          return clamp(w, 0.0, 1.0);
+        }`)
       .replace('#include <map_fragment>', `
         float rS0 = isR(0.0), rShoe = isR(3.0), rE = isR(4.0), rC = isR(6.0);
         // skin: blotchy, ruddier on the cheeks, nose and knuckles, pores
         float blot = pn(vObj * 38.0) * 0.6 + pn(vObj * 110.0) * 0.4;
         vec3 skin = uSkin * (0.86 + 0.24 * blot);
+        float wr = uAge > 0.0 ? wrinkle(vObj) * uAge : 0.0;
+        skin *= 1.0 - 0.25 * wr;
+        // liver spots on an old man's scalp, temples and hands
+        skin = mix(skin, skin * vec3(0.72, 0.6, 0.5), smoothstep(0.78, 0.86, pn(vObj * 55.0 + 9.0)) * uAge * 0.8);
         skin = mix(skin, skin * vec3(1.12, 0.86, 0.82), smoothstep(0.55, 0.85, pn(vObj * 14.0 + 3.0)) * 0.6);
         // hair: fine strands running down the head
         float strand = pn(vec3(vObj.x * 420.0, vObj.y * 30.0, vObj.z * 420.0));
@@ -147,12 +173,20 @@ function personMat(look) {
         vec3 shoe = uShoe * (0.8 + 0.4 * pn(vObj * 60.0));
         vec3 eye = texture2D(uEye, vUv0).rgb;
         diffuseColor.rgb = skin * rS + hair * rH + shoe * rShoe + eye * rE + cloth * rC;`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        if (uAge > 0.0 && rS > 0.5) {
+          float hw = wrinkle(vObj) * uAge;
+          vec3 sx = normalize(dFdx(-vViewPosition)), sy = normalize(dFdy(-vViewPosition));
+          vec3 R1 = cross(sy, normal), R2 = cross(normal, sx); float det = dot(sx, R1);
+          vec3 grad = sign(det) * (dFdx(hw) * R1 + dFdy(hw) * R2) * 0.55;
+          normal = normalize(abs(det) * normal + grad);
+        }`)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = 0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS;')
       // light through the skin: a warm wrap where it turns from the light
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02);`);
   };
-  mat.customProgramCacheKey = () => 'personSkin';
+  mat.customProgramCacheKey = () => 'personSkin-v2';
   return mat;
 }
 function personMesh(rig, P, look) {
@@ -167,17 +201,34 @@ function personMesh(rig, P, look) {
   return mesh;
 }
 
+// put something (a hat) on the top of the head: find the crown of the skinned head in the head bone's own frame
+function seatOnCrown(obj, mesh, rig, sink) {
+  const hi = JOINTS.indexOf('head');
+  if (!mesh) { obj.position.set(0, 0.2, 0); return; }
+  const inv = mesh.skeleton.boneInverses[hi]; const g = mesh.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight;
+  const U = new THREE.Vector3(0, 1, 0).transformDirection(inv), F = new THREE.Vector3(0, 0, 1).transformDirection(inv);
+  const v = new THREE.Vector3(); let top = -1e9; const pts = [];
+  for (let i = 0; i < P.count; i++) if (SI.getX(i) === hi && SW.getX(i) > 0.9) { v.fromBufferAttribute(P, i).applyMatrix4(inv); const h = v.dot(U); pts.push([v.clone(), h]); if (h > top) top = h; }
+  const c = new THREE.Vector3(); let n = 0; for (const [p, h] of pts) if (h > top - 0.05) { c.add(p); n++; } c.divideScalar(n || 1);
+  c.addScaledVector(U, top - sink - c.dot(U));
+  const Fz = F.clone().addScaledVector(U, -F.dot(U)).normalize(), X = new THREE.Vector3().crossVectors(U, Fz);
+  obj.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, U, Fz)); obj.position.copy(c);
+}
+
 // kind: 'sutler' (sits on the box seat, felt hat and russet cloak) or 'priest' (stands, black cassock, tonsure)
 export function makePerson(kind, quality) {
   const rig = new Rig(1);
   const sutler = kind === 'sutler';
   const P = PEOPLE?.[kind];
-  if (P) personMesh(rig, P, sutler ? { skin: 0xb88a6c, hair: 0x3a2618, cloth: 0x6a5a44 } : { skin: 0xb8968a, hair: 0x8a8580, cloth: 0x1c1a18 });
-  else dressBody(rig, sutler ? [84, 62, 40] : [30, 26, 26], quality);
+  const body = P ? personMesh(rig, P, sutler ? { skin: 0xb88a6c, hair: 0x3a2618, cloth: 0x6a5a44, eyes: P.eyes } : { skin: 0xb59a8c, hair: 0xd8d2c8, cloth: 0x1c1a18, eyes: P.eyes, age: 1 }) : null;
+  if (!P) dressBody(rig, sutler ? [84, 62, 40] : [30, 26, 26], quality);
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a221c, roughness: 0.9 });
-  if (sutler) {   // a felt hat
-    const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.108, 0.085, 18), dark); hat.position.set(0, 0.15, -0.04); rig.j.head.add(hat);
-    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.165, 0.01, 22), dark); brim.position.set(0, 0.112, -0.035); brim.rotation.x = -0.12; rig.j.head.add(brim);
+  if (sutler) {   // a broad felt hat, set down on his crown (found from the head of the mesh itself)
+    const prof = [[0.18, -0.004], [0.178, 0.008], [0.112, 0.012], [0.104, 0.022], [0.1, 0.075], [0.088, 0.105], [0.05, 0.12], [0.0, 0.123]];
+    const hg = lathe(prof, 28, (v, a) => { const rr = Math.hypot(v.x, v.z); if (rr > 0.11) v.y -= Math.cos(a) ** 2 * 0.022 * (rr - 0.11) / 0.07; if (rr < 0.1 && v.y > 0.09) v.y -= Math.cos(a * 2) * 0.006; });
+    const hat = new THREE.Mesh(hg, new THREE.MeshStandardMaterial({ color: 0x2c231c, roughness: 0.95, side: THREE.DoubleSide })); hat.castShadow = true;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.1085, 0.109, 0.018, 24, 1, true), new THREE.MeshStandardMaterial({ color: 0x5a2a1a, roughness: 0.8 })); band.position.y = 0.03; hat.add(band);
+    seatOnCrown(hat, body, rig, 0.058); rig.j.head.add(hat);
   }
   const mat = sutler ? clothMat([110, 70, 44], 'sutlercloak') : clothMat([20, 18, 18], 'cassock');
   robe(rig, mat, { length: sutler ? 0.95 : 1.42, flare: sutler ? 0.3 : 0.4, seated: sutler });
@@ -194,8 +245,8 @@ export function makePerson(kind, quality) {
   if (sutler) {   // sitting on the box, forearms on his knees, head a little bowed
     e('spine', 12, 0, 0); e('chest', 8, 0, 0); e('neck', 6, 0, 0); e('head', 6, -15, 0);
     for (const [k, s] of [['R', -1], ['L', 1]]) { e('thigh' + k, -88, 0, s * 6); e('shin' + k, 82, 0, 0); e('foot' + k, 6, 0, 0); e('uArm' + k, -38, 0, s * 8); e('fArm' + k, -62, 0, 0); e('hand' + k, 10, 0, 0); }
-  } else {        // standing, hands folded before him
-    e('head', 6, 0, 0);
+  } else {        // an old man, a little stooped, hands folded before him
+    e('spine', 6, 0, 0); e('chest', 9, 0, 0); e('neck', 14, 0, 0); e('head', -8, 0, 0);
     for (const [k, s] of [['R', -1], ['L', 1]]) { e('uArm' + k, -14, 0, s * 4); e('fArm' + k, -85, -s * 32, 0); e('hand' + k, 0, -s * 15, 0); }
   }
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });

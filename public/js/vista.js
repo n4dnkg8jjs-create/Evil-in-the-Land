@@ -4,6 +4,7 @@
 // they are drawn without it and hazed by hand, like a painted backdrop. Each
 // chapter the city falls further behind and the mountain draws nearer.
 import * as THREE from 'three';
+import { PEAK_SPIRE } from './world.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { stoneTextures, cloudTexture } from './textures.js';
 import { rng, makeNoise, clamp, lerp, smooth, TAU } from './util.js';
@@ -47,7 +48,13 @@ export class Vista {
     const kind = ch.terrain.kind;
     if (kind !== 'peak') this.buildCity(kind === 'mountain' ? 3300 : 1500 + chIdx * 280, kind === 'mountain' ? -300 : null);
     if (kind !== 'peak') this.buildMountain(kind === 'mountain' ? 1500 : 2700 - chIdx * 330, kind === 'mountain' ? 260 : 0);
-    else this.storm = this.buildStorm(new THREE.Vector3(0, 60, 0), 900, 160, true);
+    else {
+      // on the Peak the storm is all round and close: cloud boils up the faces from below, and the lightning
+      // strikes the arêtes and the summit fang, lighting the whole mountain top
+      this.storm = this.buildStorm(new THREE.Vector3(0, -40, 0), 900, 160, true, true);
+      this.boltLight = new THREE.DirectionalLight(0xc0c8ff, 0); engine.scene.add(this.boltLight); engine.scene.add(this.boltLight.target);
+      this.peak = true;
+    }
   }
 
   // ---------------------------------------------------------------- the city
@@ -187,7 +194,7 @@ export class Vista {
     this.storm = this.buildStorm(new THREE.Vector3(cx, y0 + Hm * 1.02, cz), 1300, Hm * 0.28, false);
     this.peakPos = new THREE.Vector3(cx, y0 + Hm, cz);
   }
-  buildStorm(centre, radius, thick, around) {
+  buildStorm(centre, radius, thick, around, close = false) {
     // The thunderhead as a volume: a stack of slices across the view, each one cutting through a 3-D noise field
     // shaped like a storm cell (a ring hugging the summit that spreads into an anvil above it, or, on the peak
     // itself, a wall of cloud all round). Lightning lights the cloud from inside, near where it strikes.
@@ -195,14 +202,15 @@ export class Vista {
     const U = {
       uCentre: { value: centre.clone() }, uTime: { value: 0 }, uFlash: { value: 0 }, uStrike: { value: centre.clone() },
       uHaze: this.haze.color, uAround: { value: around ? 1 : 0 }, uAlpha: { value: (around ? 3.2 : 5.5) / n },
-      uR0: { value: around ? 520 : radius * 0.18 }, uR1: { value: around ? 1500 : radius * 1.45 },
-      uH0: { value: around ? -260 : -thick * 1.9 }, uH1: { value: around ? 170 : thick * 1.6 },
+      uR0: { value: close ? 48 : around ? 520 : radius * 0.18 }, uR1: { value: close ? 1300 : around ? 1500 : radius * 1.45 },
+      uH0: { value: close ? -170 : around ? -260 : -thick * 1.9 }, uH1: { value: close ? 75 : around ? 170 : thick * 1.6 },
+      uRamp: { value: close ? 70 : 220 }, uScale: { value: close ? 170 : 420 },
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: U, transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
       vertexShader: 'varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
       fragmentShader: `
-        uniform vec3 uCentre, uStrike, uHaze; uniform float uTime, uFlash, uAround, uAlpha, uR0, uR1, uH0, uH1;
+        uniform vec3 uCentre, uStrike, uHaze; uniform float uTime, uFlash, uAround, uAlpha, uR0, uR1, uH0, uH1, uRamp, uScale;
         varying vec3 vW;
         float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
         float noise(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
@@ -215,16 +223,16 @@ export class Vista {
           float band = smoothstep(0.0, 0.18, k) * (1.0 - smoothstep(0.8, 1.0, k));
           float rIn = uAround > 0.5 ? uR0 : uR0 * (1.0 - 0.85 * smoothstep(0.35, 0.75, k));   // low down it rings the summit; high up it closes over it
           float rOut = uR1 * (uAround > 0.5 ? 1.0 : mix(0.7, 1.35, smoothstep(0.45, 0.95, k)));   // and spreads into an anvil
-          float shape = band * smoothstep(rIn, rIn + 220.0, r) * (1.0 - smoothstep(rOut * 0.7, rOut, r));
+          float shape = band * smoothstep(rIn, rIn + uRamp, r) * (1.0 - smoothstep(rOut * 0.7, rOut, r));
           if (shape < 0.02) discard;
-          vec3 w = q / 420.0 + vec3(uTime * 0.012, -uTime * 0.004, uTime * 0.007);
+          vec3 w = q / uScale + vec3(uTime * 0.012, -uTime * 0.004, uTime * 0.007);
           float n = fbm(w + 0.6 * vec3(fbm(w * 0.7 + 4.0), 0.0, fbm(w * 0.7 + 8.0)));     // warped: billows, not blobs
           float dens = smoothstep(0.3, 0.62, n * (0.6 + 0.65 * shape));
           if (dens < 0.01) discard;
           // dark, heavy undersides; tops faintly catching what light there is
           vec3 col = mix(vec3(0.016, 0.015, 0.02), vec3(0.075, 0.072, 0.085), k * (0.4 + 0.6 * n));
           col *= 0.7 + 0.6 * smoothstep(0.45, 0.8, n);
-          float lit = uFlash * exp(-length(vW - uStrike) / 520.0);
+          float lit = uFlash * exp(-length(vW - uStrike) / (uScale * 1.25));
           col += vec3(0.55, 0.6, 0.85) * lit * (0.5 + 1.6 * (1.0 - dens));
           col = mix(col, uHaze * 0.75, 0.3);
           gl_FragColor = vec4(col, clamp(dens * uAlpha * (0.6 + 0.4 * shape), 0.0, 0.95));
@@ -237,7 +245,7 @@ export class Vista {
     // the bolt is a camera-facing ribbon rather than GL lines: lines are a single pixel wide on most GPUs and some drivers choke on them
     const bolt = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 0.85, 1.0).multiplyScalar(6), toneMapped: false, fog: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     bolt.frustumCulled = false; this.group.add(bolt);
-    return { centre, radius, thick, around, slices, U, mat, bolt, span: around ? [300, 1900] : [radius * 1.6, radius * 1.6] };
+    return { centre, radius, thick, around, close, slices, U, mat, bolt, span: close ? [30, 1400] : around ? [300, 1900] : [radius * 1.6, radius * 1.6] };
   }
   // lay the slices across the view, back to front, each just big enough to fill the frame at its distance
   placeSlices() {
@@ -249,7 +257,7 @@ export class Vista {
     else { const dc = f.dot(new THREE.Vector3().subVectors(S.centre, cp)); d0 = Math.max(60, dc - S.span[0]); d1 = Math.max(d0 + 200, dc + S.span[1]); }
     const n = S.slices.length, th = Math.tan(cam.fov * Math.PI / 360) * 1.15;
     S.slices.forEach((m, i) => {
-      const d = d1 - (d1 - d0) * (i / (n - 1));                   // far first
+      const t = 1 - i / (n - 1); const d = S.close ? d0 * Math.pow(d1 / d0, t) : d1 - (d1 - d0) * (1 - t);   // far first (close storms: spaced out geometrically, dense near)
       m.position.copy(cp).addScaledVector(f, d); m.quaternion.copy(cam.quaternion);
       m.scale.set(d * th * 2 * cam.aspect, d * th * 2, 1); m.renderOrder = -5 + i * 0.01;
     });
@@ -257,26 +265,42 @@ export class Vista {
   strike() {
     const S = this.storm; if (!S) return;
     const r = Math.random;
+    if (S.close) return this.strikePeak();
     const a = r() * TAU, d = S.radius * (0.15 + r() * 0.5);
     const top = new THREE.Vector3(S.centre.x + Math.cos(a) * d, S.centre.y + S.thick * 0.2, S.centre.z + Math.sin(a) * d * (S.around ? 1 : 0.6));
     const target = this.peakPos && r() < 0.6 ? this.peakPos.clone().add(new THREE.Vector3((r() - 0.5) * 400, -r() * 500, (r() - 0.5) * 300)) : new THREE.Vector3(top.x + (r() - 0.5) * 200, S.centre.y - S.thick * (S.around ? 1.2 : 1.6), top.z + (r() - 0.5) * 200);
-    const segs = [];
+    this.drawBolt(top, target);
+  }
+  // on the Peak: a bolt out of the cloud ceiling onto a crest, a spire or the summit fang, close enough to light
+  // the knights and the dragon, the thunder hard on its heels
+  strikePeak() {
+    const r = Math.random; let x, z;
+    if (r() < 0.3) { x = PEAK_SPIRE[0] + (r() - 0.5) * 8; z = PEAK_SPIRE[1] + (r() - 0.5) * 8; }
+    else { const a = r() * TAU, d = 45 + r() * 170; x = Math.cos(a) * d; z = Math.sin(a) * d; }
+    const target = new THREE.Vector3(x, Math.max(-160, this.groundAt(x, z)), z);
+    const top = new THREE.Vector3(x + (r() - 0.5) * 120, 230 + r() * 60, z + (r() - 0.5) * 120);
+    this.drawBolt(top, target);
+    const L = this.boltLight; if (L) { L.position.copy(top); L.target.position.copy(target).multiplyScalar(0.3); this.boltPower = 1; }
+    this.lastStrike = target;
+  }
+  drawBolt(top, target) {
+    const S = this.storm, r = Math.random, segs = [];
     const branch = (p0, p1, jag, depth) => {
-      const n = 14; let prev = p0.clone();
+      const n = S.close ? 34 : 14; let prev = p0.clone();
       for (let i = 1; i <= n; i++) {
         const t = i / n; const p = p0.clone().lerp(p1, t);
         if (i < n) p.add(new THREE.Vector3((r() - 0.5) * jag, (r() - 0.5) * jag * 0.4, (r() - 0.5) * jag));
         segs.push([prev, p, depth]);
-        if (depth < 2 && r() < 0.18) branch(p.clone(), p.clone().add(new THREE.Vector3((r() - 0.5) * jag * 4, -jag * (2 + r() * 3), (r() - 0.5) * jag * 4)), jag * 0.6, depth + 1);
+        if (depth < 2 && r() < (S.close ? 0.1 : 0.18)) branch(p.clone(), p.clone().add(new THREE.Vector3((r() - 0.5) * jag * 4, -jag * (2 + r() * 3), (r() - 0.5) * jag * 4)), jag * 0.6, depth + 1);
         prev = p;
       }
     };
-    branch(top, target, top.distanceTo(target) * 0.08, 0);
+    branch(top, target, top.distanceTo(target) * (S.close ? 0.05 : 0.08), 0);
     const cam0 = this.engine.camera.position, pos = [], dir = new THREE.Vector3(), toCam = new THREE.Vector3(), side = new THREE.Vector3();
     for (const [a0, a1, dp] of segs) {
       dir.subVectors(a1, a0); toCam.subVectors(cam0, a0);
       side.crossVectors(dir, toCam); if (side.lengthSq() < 1e-6) continue;
-      side.normalize().multiplyScalar((dp === 0 ? 4.5 : dp === 1 ? 2.4 : 1.4) * Math.max(1, toCam.length() / 1800));
+      side.normalize().multiplyScalar(S.close ? (dp === 0 ? 0.9 : dp === 1 ? 0.45 : 0.25) * Math.max(1, toCam.length() / 260) : (dp === 0 ? 4.5 : dp === 1 ? 2.4 : 1.4) * Math.max(1, toCam.length() / 1800));
       pos.push(a0.x - side.x, a0.y - side.y, a0.z - side.z, a0.x + side.x, a0.y + side.y, a0.z + side.z, a1.x + side.x, a1.y + side.y, a1.z + side.z,
         a0.x - side.x, a0.y - side.y, a0.z - side.z, a1.x + side.x, a1.y + side.y, a1.z + side.z, a1.x - side.x, a1.y - side.y, a1.z - side.z);
     }
@@ -290,7 +314,8 @@ export class Vista {
     this.time += dt;
     // lightning: bursts of strikes, sometimes double
     this.nextStrike -= dt;
-    if (this.nextStrike <= 0) { this.strike(); this.nextStrike = Math.random() < 0.25 ? 0.12 + Math.random() * 0.2 : 2.5 + Math.random() * 6; }
+    if (this.nextStrike <= 0) { this.strike(); this.nextStrike = Math.random() < 0.3 ? 0.12 + Math.random() * 0.2 : this.peak ? 1.4 + Math.random() * 4 : 2.5 + Math.random() * 6; }
+    if (this.boltLight) { this.boltPower = Math.max(0, (this.boltPower || 0) - dt * 3.2); const f = this.boltT > 0 ? (Math.sin(this.time * 60) > -0.3 ? 1 : 0.35) : 0.4; this.boltLight.intensity = this.boltPower * this.boltPower * 9 * f; }
     if (this.boltT > 0) { this.boltT -= dt; const S = this.storm; if (S) { S.bolt.visible = this.boltT > 0 && Math.sin(this.time * 90) > -0.6; } }
     this.flash = Math.max(0, this.flash - dt * 4.5);
     this.haze.flash.value = this.flash * this.flash;

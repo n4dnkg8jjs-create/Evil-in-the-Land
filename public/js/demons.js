@@ -100,14 +100,17 @@ function buildTemplate(joints, parts) {
     world[i] = j.parent ? world[idx[j.parent]].clone().multiply(local) : local;
   });
   const geos = [];
+  const withRegion = parts.some((p) => p.geo.attributes.region);   // an optional per-vertex material region, kept if any part has one
   for (const part of parts) {
-    const g = part.geo; for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n);
+    const g = part.geo; for (const n in g.attributes) if (!['position', 'normal', 'uv', ...(withRegion ? ['region'] : [])].includes(n)) g.deleteAttribute(n);
+    if (withRegion && !g.attributes.region) g.setAttribute('region', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(part.region || 0), 1));
     if (!g.index) { const a = []; for (let i = 0; i < g.attributes.position.count; i++) a.push(i); g.setIndex(a); }
     const ji = idx[part.joint]; const pj = joints[ji].parent ? idx[joints[ji].parent] : ji;
     const n = g.attributes.position.count;
     const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
     for (let v = 0; v < n; v++) {
       const y = g.attributes.position.getY(v);
+      if (part.weights) { const [a, wa, b, wb] = part.weights[v]; si[v * 4] = idx[a]; si[v * 4 + 1] = idx[b] ?? idx[a]; sw[v * 4] = wa; sw[v * 4 + 1] = wb; continue; }
       if (part.skin) { // explicit two-bone weights: [nameA, wA, nameB, wB]
         const [a, wa, b, wb] = part.skin(g.attributes.position.getX(v), y, g.attributes.position.getZ(v));
         si[v * 4] = idx[a]; si[v * 4 + 1] = idx[b] ?? idx[a]; sw[v * 4] = wa; sw[v * 4 + 1] = wb; continue;

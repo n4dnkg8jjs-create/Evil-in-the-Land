@@ -8,6 +8,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildTemplate, instantiate, limb, blob, cone, horn, place, lumpyG, demonMaterial } from './demons.js';
 import { scaleTextures, demonTextures } from './textures.js';
 import { buildHorror, tickRobes } from './horror.js';
+import { buildDragonModel, dragonHideMaterial, dragonWingMaterial, dragonEyes } from './dragon_model.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, TAU } from './util.js';
 
 const D2R = Math.PI / 180, R = Math.random;
@@ -689,9 +690,12 @@ export class Dragon extends Boss {
     super(scene, 'dragon');
     this.fx = fx;
     this.name = 'The Great Dragon'; this.title = 'Draco Magnus Rufus';
-    const tpl = buildDragon(); this.mat = dragonMaterial();
-    const { mesh, B } = instantiate(tpl, this.mat); this.mesh = mesh; this.B = B; scene.add(mesh); mesh.scale.setScalar(1.35);
-    B.head.add(staringEyes([[-0.42, 0.32, 0.75], [0.42, 0.32, 0.75]], 0.14, 0xffa020));
+    const { body, wings } = buildDragonModel(); this.mat = dragonHideMaterial(); this.wingMat = dragonWingMaterial();
+    const { mesh, B } = instantiate(body, this.mat); this.mesh = mesh; this.B = B;
+    const wm = new THREE.SkinnedMesh(wings.geo, this.wingMat); wm.castShadow = true; wm.frustumCulled = false; mesh.add(wm); wm.updateMatrixWorld(true); wm.bind(mesh.skeleton, wm.matrixWorld); this.wingMesh = wm;
+    scene.add(mesh); mesh.scale.setScalar(1.35); mesh.receiveShadow = true;
+    B.head.add(dragonEyes());
+    this.sun = scene.children.find((o) => o.isDirectionalLight && o.castShadow);
     this.maxHp = this.hp = 5200 + 1900 * Math.max(0, partySize - 1);
     this.alt = 0; this.ph = 0; this.flap = 0; this.fly = 0; this.breath = 0; this.wardsDone = 0;
     this.spheres = [
@@ -816,8 +820,12 @@ export class Dragon extends Boss {
   snap() { return [...this.baseSnap(), +this.fly.toFixed(2), this.breath, this.wardsDone, this.firePatches.map((f) => [+f.x.toFixed(1), +f.z.toFixed(1), +f.t.toFixed(1)])]; }
   applySnap(s, dt) { super.applySnap(s, dt); this.fly = s[11]; this.breath = s[12]; this.wardsDone = s[13]; this.firePatches = (s[14] || []).map(([x, z, t]) => ({ x, z, t, r: 2.4 })); }
   animate(dt, time, fx) {
-    this.hitFlash = Math.max(0, this.hitFlash - dt * 4); this.mat.userData.u.uHit.value = this.hitFlash * 0.5;
+    this.hitFlash = Math.max(0, this.hitFlash - dt * 4); this.mat.userData.u.uHit.value = this.hitFlash * 0.5; this.wingMat.userData.u.uHit.value = this.hitFlash * 0.3;
     const B = this.B, st = this.state, T = this.t;
+    // the heat in his throat builds as he draws breath, and burns while he breathes fire
+    const heat = st === 'breath' ? (T < 1 ? smooth(T) : this.breath ? 1 : 0.3) : this.breath ? 1 : 0;
+    this.mat.userData.u.uBreath.value = damp(this.mat.userData.u.uBreath.value, heat, 4, dt);
+    if (this.sun) this.wingMat.userData.u.uLightDir.value.copy(this.sun.position).sub(this.sun.target.position).normalize();
     this.mesh.position.set(this.pos.x, this.pos.y + this.alt, this.pos.z); this.mesh.rotation.y = this.yaw;
     const fly = this.fly; const sp = Math.hypot(this.vel.x, this.vel.z);
     this.ph += dt * (sp / 6) * (1 - fly); const ph = this.ph * TAU;

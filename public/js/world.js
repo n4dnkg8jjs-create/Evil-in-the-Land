@@ -10,6 +10,9 @@ import { Vista } from './vista.js';
 import { buildFallen } from './battlefield.js';
 
 const HALF = 150, N = 257, CELL = (HALF * 2) / (N - 1);
+// the Peak: arêtes running out from the summit [angle, is it the knights' way up], and the true summit [x, z, height]
+const PEAK_RIDGES = [[-Math.PI / 2, true], [0.35, false], [1.05, false], [2.3, false], [3.0, false], [-2.35, false], [-0.75, false]];
+export const PEAK_SPIRE = [8, 56, 40];
 const PI = Math.PI;
 
 function xf(g, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) {
@@ -23,6 +26,22 @@ function lumpy(g, amt, seed) { // perturb a rock along its normals
   const n = makeNoise(seed); const p = g.attributes.position; const v = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); const k = 1 + n.fbm(v.x * 1.7 + seed, v.y * 1.7 + v.z * 1.3, 4) * amt; v.multiplyScalar(k); p.setXYZ(i, v.x, v.y, v.z); }
   g.computeVertexNormals(); return g;
+}
+
+// A fractured rock: a lump cut by a few random planes (flat cleavage faces, sharp edges), tapered toward the top
+// if it is a spire, roughened, and shaded flat so every facet catches the light on its own.
+function jaggedRock(seed, taper = 0) {
+  const r = rng(seed); let g = icoSmooth(3); const p = g.attributes.position; const v = new THREE.Vector3();
+  const planes = []; for (let k = 0; k < 9; k++) { const nrm = new THREE.Vector3(r() - 0.5, (r() - 0.5) * 1.2, r() - 0.5).normalize(); planes.push([nrm, 0.55 + r() * 0.35]); }
+  const nz = makeNoise(seed);
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    v.multiplyScalar(1 + nz.ridge(v.x * 2.1 + seed, v.y * 2.1 + v.z * 1.7, 3) * 0.22);
+    for (const [nrm, d] of planes) { const e = v.dot(nrm) - d; if (e > 0) v.addScaledVector(nrm, -e * 0.92); }
+    if (taper) { const t = (v.y + 1) / 2; v.x *= 1 - taper * t * t; v.z *= 1 - taper * t * t; }
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g = g.toNonIndexed(); g.computeVertexNormals(); return g;
 }
 
 export class World {
@@ -93,9 +112,28 @@ export class World {
       case 'fen': h = n.fbm(x * 0.012, z * 0.012, 5) * T.amp - 0.4 + n.fbm(x * 0.05, z * 0.05, 3) * 0.6; break;
       case 'mountain': h = n.ridge(x * 0.012, z * 0.012, 5) * T.amp * 2.2 + n.fbm(x * 0.03, z * 0.03, 4) * 4; break;
       case 'peak': {
-        const r = Math.hypot(x, z);
-        h = n.fbm(x * 0.05, z * 0.05, 3) * 0.6;
-        if (r > 34) h -= (r - 34) * 1.8 + 50 * smooth(clamp((r - 36) / 30, 0, 1)) + n.ridge(x * 0.03, z * 0.03, 4) * 14 * smooth(clamp((r - 34) / 10, 0, 1));
+        // the summit: a rough saddle of broken rock, ringed by a lip of outcrops; arêtes run out and down from it
+        // between sheer faces, the knights' ridge climbs in from the south, and behind the arena the true summit
+        // stands up as a fang of black rock. Everything else falls away into the storm.
+        const r = Math.hypot(x, z), a = Math.atan2(z, x);
+        h = n.fbm(x * 0.06, z * 0.06, 4) * 1.1 + n.ridge(x * 0.12, z * 0.12, 3) * 0.45;
+        const out = Math.max(0, r - 29);
+        let rf = 0, path = 0;
+        for (const [ra, isPath] of PEAK_RIDGES) {
+          const wob = n.fbm(r * 0.025 + ra * 3, ra * 7, 2) * 0.25;
+          let da = a - ra - wob; da = Math.atan2(Math.sin(da), Math.cos(da));
+          const k = Math.exp(-(((da * r) / (isPath ? 6 : 4 + r * 0.06)) ** 2));
+          if (isPath) path = Math.max(path, k); else rf = Math.max(rf, k);
+        }
+        const face = 1 - Math.max(rf, path);
+        h -= out * (0.5 + 1.6 * face) + Math.pow(out, 1.4) * 0.06 * face + out * 0.25 * rf;
+        h += (n.ridge(x * 0.032, z * 0.032, 5) - 0.45) * 26 * smooth(clamp(out / 14, 0, 1)) * (1 - path * 0.85);   // broken faces and buttresses
+        h += rf * smooth(clamp(out / 5, 0, 1)) * (2 + n.ridge(x * 0.07, z * 0.07, 4) * 6);                     // the arêtes' jagged crests
+        // a lip of outcrops round the arena (not across the knights' ridge)
+        h += smooth(clamp((r - 25) / 4, 0, 1)) * (1 - smooth(clamp((r - 30) / 5, 0, 1))) * (1 + n.ridge(x * 0.11, z * 0.11, 3) * 3) * (1 - path);
+        // the true summit
+        const sd = Math.hypot(x - PEAK_SPIRE[0], z - PEAK_SPIRE[1]);
+        h = Math.max(h, PEAK_SPIRE[2] * Math.exp(-((sd / 13) ** 1.6)) * (0.7 + 0.5 * n.ridge(x * 0.09, z * 0.09, 4)) - 6);
         return h;
       }
       default: h = n.fbm(x * 0.009, z * 0.009, 5) * T.amp + n.ridge(x * 0.02, z * 0.02, 4) * T.amp * 0.25;
@@ -141,7 +179,8 @@ export class World {
       // flatten altar sites
       for (const a of altars) {
         const d = Math.hypot(x - a.x, z - a.z);
-        if (d < 18) { const ah = this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - 9) / 9, 0, 1))); }
+        const fr = T.kind === 'peak' ? 5.5 : 9;
+        if (d < fr * 2) { const ah = this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - fr) / fr, 0, 1))); }
       }
       H[j * N + i] = h;
     }
@@ -211,8 +250,8 @@ export class World {
     const uniforms = {
       tDead: { value: tt.dead }, tDeadN: { value: tt.deadN }, tAlive: { value: tt.alive }, tAliveN: { value: tt.aliveN },
       tRock: { value: tt.rock }, tRockN: { value: tt.rockN }, tSnow: { value: tt.snow }, tMask: { value: this.mask },
-      uSize: { value: HALF * 2 }, uTile: { value: 0.22 }, uSnowLine: { value: T.kind === 'mountain' ? 85 : T.kind === 'peak' ? -6 : 9999 },
-      uWater: { value: T.water !== undefined ? 0.0 : -9999 }, uEmber: { value: this.ch.id === 'peak' || this.ch.id === 'field' ? 1.6 : 0.9 }, uNStr: { value: 1.0 },
+      uSize: { value: HALF * 2 }, uTile: { value: 0.22 }, uSnowLine: { value: T.kind === 'mountain' ? 85 : 9999 },
+      uWater: { value: T.water !== undefined ? 0.0 : -9999 }, uEmber: { value: this.ch.id === 'peak' ? 0.5 : this.ch.id === 'field' ? 1.6 : 0.9 }, uNStr: { value: 1.0 }, uRockAll: { value: T.kind === 'peak' ? 0.75 : 0 },
       uDeadTint: { value: new THREE.Color(T.kind === 'fen' ? 0x8a8a78 : T.kind === 'mountain' || T.kind === 'peak' ? 0x9a9090 : 0xffffff) },
       uAliveTint: { value: new THREE.Color(T.kind === 'mountain' ? 0x9aa080 : 0xffffff) },
     };
@@ -225,7 +264,7 @@ export class World {
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
         varying vec3 vWPos; varying vec3 vWNorm;
         uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask;
-        uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr; uniform vec3 uDeadTint, uAliveTint;`)
+        uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll; uniform vec3 uDeadTint, uAliveTint;`)
         .replace('#include <map_fragment>', `
         vec2 wuv = vWPos.xz * uTile;
         vec2 muv = vWPos.xz / uSize + 0.5;
@@ -239,6 +278,7 @@ export class World {
         float aliveMix = smoothstep(0.35, 0.65, life + (grass.a - dead.a) * 0.25);
         vec3 ground = mix(deadCol, mix(grass.rgb, grass2.rgb, 0.4) * uAliveTint, aliveMix);
         float rockMix = smoothstep(0.30, 0.52, slope + (rock.a - 0.5) * 0.18);
+        rockMix = max(rockMix, uRockAll * smoothstep(0.25, 0.6, rock.a + dead2.a * 0.4));   // the summit: bare broken rock with grit in the hollows
         vec3 tcol = mix(ground, rock.rgb * mix(0.62, 1.0, aliveMix), rockMix);
         float snow = smoothstep(uSnowLine, uSnowLine + 10.0, vWPos.y + rock.a * 5.0) * (1.0 - rockMix * 0.5);
         tcol = mix(tcol, texture2D(tSnow, wuv).rgb, snow);
@@ -539,9 +579,23 @@ export class World {
       const rocks = []; for (let v = 0; v < 5; v++) rocks.push(lumpy(icoSmooth(2), 0.35, 30 + v));
       const lists = rocks.map(() => []);
       this.scatter(P.rocks || 0, (x, z) => this.okSpot(x, z, 4, 11), (x, z, y) => { const s = r.range(0.4, 1.6); lists[r.int(0, 4)].push({ x, y: y - s * 0.3, z, s, sy: s * r.range(0.6, 1), ry: r() * TAU }); if (s > 0.9) this.addCollider(x, z, s * 0.8); });
-      if (P.crags) this.scatter(P.crags, (x, z) => kind === 'peak' ? Math.hypot(x, z) > 30 && Math.hypot(x, z) < 50 : this.okSpot(x, z, 11, 14), (x, z, y) => { const s = r.range(2.5, 6); lists[r.int(0, 4)].push({ x, y: y + s * 0.4, z, s, sy: s * r.range(1.4, 2.6), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }); this.addCollider(x, z, s * 0.85); });
-      if (kind === 'peak') { // ring of spires around the summit arena
-        for (let k = 0; k < 22; k++) { const a = (k / 22) * TAU + r.range(-0.1, 0.1); const d = r.range(34, 40); const x = Math.cos(a) * d, z = Math.sin(a) * d; const s = r.range(2, 4.5); lists[k % 5].push({ x, y: this.heightAt(x, z) + s * 0.8, z, s, sy: s * r.range(2, 3.5), ry: r() * TAU, rx: r.range(-0.15, 0.15) }); }
+      if (P.crags && kind !== 'peak') this.scatter(P.crags, (x, z) => this.okSpot(x, z, 11, 14), (x, z, y) => { const s = r.range(2.5, 6); lists[r.int(0, 4)].push({ x, y: y + s * 0.4, z, s, sy: s * r.range(1.4, 2.6), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }); this.addCollider(x, z, s * 0.85); });
+      if (kind === 'peak') {
+        // fractured outcrops on the lip of the arena and along the arêtes, leaning spires of black rock, the summit fang
+        const jag = [], spires = []; for (let v = 0; v < 4; v++) { jag.push(jaggedRock(500 + v)); spires.push(jaggedRock(600 + v, 0.75)); }
+        const jl = jag.map(() => []), sl = spires.map(() => []);
+        for (let k = 0; k < 46; k++) {
+          const a = r() * TAU; let da = a + Math.PI / 2; da = Math.atan2(Math.sin(da), Math.cos(da)); if (Math.abs(da) < 0.28) continue;   // keep the way up clear
+          const d = r.range(27, 34), x = Math.cos(a) * d, z = Math.sin(a) * d, s = r.range(0.8, 2.6);
+          jl[k % 4].push({ x, y: this.heightAt(x, z) + s * 0.25, z, s, sy: s * r.range(0.7, 1.5), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) }); if (s > 1.4) this.addCollider(x, z, s * 0.8);
+        }
+        for (let k = 0; k < 60; k++) {   // out on the faces and crests, where the lightning strikes
+          const a = r() * TAU, d = r.range(36, 120), x = Math.cos(a) * d, z = Math.sin(a) * d; const s = r.range(3, 9);
+          (k % 3 ? jl : sl)[k % 4].push({ x, y: this.heightAt(x, z) + s * 0.2, z, s, sy: s * r.range(1.2, 3.2), ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.25, 0.25) });
+        }
+        for (let k = 0; k < 7; k++) { const a = r() * TAU, d = r.range(0, 12), x = PEAK_SPIRE[0] + Math.cos(a) * d, z = PEAK_SPIRE[1] + Math.sin(a) * d; const s = r.range(4, 8); sl[k % 4].push({ x, y: this.heightAt(x, z) + s * 0.5, z, s, sy: s * r.range(2.5, 4), ry: r() * TAU, rx: r.range(-0.15, 0.15), rz: r.range(-0.15, 0.15) }); }
+        const dark = stoneMat.clone(); dark.color = new THREE.Color(0x4a4648); dark.flatShading = true;
+        jag.forEach((g, i) => this.instanced(g, dark, jl[i])); spires.forEach((g, i) => this.instanced(g, dark, sl[i]));
       }
       rocks.forEach((g, i) => this.instanced(g, stoneMat, lists[i]));
     }
@@ -1024,7 +1078,7 @@ export class World {
     const g = new THREE.PlaneGeometry(2400, 2400, 1, 1); g.rotateX(-PI / 2);
     const uT = { value: 0 }; this.cloudTime = uT;
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uTime: uT, c1: { value: new THREE.Color(0x5a2418) }, c2: { value: new THREE.Color(0xd06a3a) }, fogC: { value: new THREE.Color(this.ch.atmos.fog) } },
+      uniforms: { uTime: uT, c1: { value: new THREE.Color(0x07070a) }, c2: { value: new THREE.Color(0x3a140c) }, fogC: { value: new THREE.Color(this.ch.atmos.fog) } },
       vertexShader: `varying vec3 vW; void main(){ vW = (modelMatrix * vec4(position,1.0)).xyz; gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0); }`,
       fragmentShader: `uniform float uTime; uniform vec3 c1, c2, fogC; varying vec3 vW;
         float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
@@ -1035,7 +1089,7 @@ export class World {
           gl_FragColor = vec4(col, 1.0); }`,
       fog: false,
     });
-    const m = new THREE.Mesh(g, mat); m.position.y = -62; this.group.add(m);
+    const m = new THREE.Mesh(g, mat); m.position.y = -150; this.group.add(m);
   }
 
   // ---------------------------------------------------------------- the land heals

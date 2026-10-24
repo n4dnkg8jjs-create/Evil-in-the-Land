@@ -87,10 +87,10 @@ export const CHAPTERS = [
   },
   {
     id: 'peak', title: 'The Peak', latin: 'Culmen', seed: 7757, altars: 3, prayer: 30,
-    intro: ['Above the clouds the air is thin and burning.', 'Lucifer, the Old Serpent, the great Dragon.', 'Exsurgat Deus.'],
+    intro: ['Above the clouds, in the heart of the storm.', 'Lucifer, the Old Serpent, the great Dragon.', 'Exsurgat Deus.'],
     outro: [],
     terrain: { kind: 'peak', amp: 6, hill: 0, edge: 0 },
-    atmos: A({ skyTop: 0x05040a, skyMid: 0x3a0e0c, skyBottom: 0x6a2010, sunColor: 0xff4010, cloud: 0x2a0c0a, cloudLit: 0xb03a10, glow: 0x9a2a0a, cover: 0.5, sunDir: [-0.3, 0.05, -0.95], sunLight: 0xff8050, sunIntensity: 2.0, hemiSky: 0x6a4040, hemiGround: 0x3a1408, hemiIntensity: 0.65, fog: 0x3a1610, fogDensity: 0.006, exposure: 1.05, fillColor: 0x7060a0, fillIntensity: 0.35 }),
+    atmos: A({ skyTop: 0x030407, skyMid: 0x0e1016, skyBottom: 0x241612, sunColor: 0x8a4a30, cloud: 0x0c0d12, cloudLit: 0x2e3040, glow: 0x4a140a, cover: 0.97, sunDir: [-0.45, 0.5, -0.75], sunLight: 0xa0a8c0, sunIntensity: 2.0, hemiSky: 0x5a6378, hemiGround: 0x30201a, hemiIntensity: 1.25, fog: 0x262832, fogDensity: 0.0038, exposure: 1.55, fillColor: 0x8a3018, fillIntensity: 0.35 }),
     props: { rocks: 70, crags: 40 },
     pool: { shade: 1.0, crawler: 0.8, wraith: 0.2, herald: 0.08 }, density: 1.0,
     ambient: 'embers', wind: [2.2, 0.4],

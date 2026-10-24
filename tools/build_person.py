@@ -19,7 +19,7 @@ B.SRC = SRC
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public', 'models')
 VARIANTS = {
     # an old priest, thin and a little stooped by the years
-    'priest': {'height': 1.74, 'targets': [('universal-male-old-minmuscle-minweight.target', 0.9)], 'hair': 'tonsure'},
+    'priest': {'height': 1.74, 'targets': [('universal-male-old-minmuscle-minweight.target', 1.0)], 'hair': 'tonsure'},
     # a well-fed camp trader in his prime, cropped hair and a beard
     'sutler': {'height': 1.72, 'targets': [('universal-male-young-averagemuscle-maxweight.target', 0.75), ('male-young-averagemuscle-averageweight-idealproportions.target', 0.5)], 'hair': 'crop'},
 }
