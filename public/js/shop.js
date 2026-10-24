@@ -38,7 +38,7 @@ function wagonModel() {
   for (const s of [-1, 1]) { add(new THREE.BoxGeometry(0.08, 0.5, 3.6), wood, [s * 0.88, 1.25, 0]); add(new THREE.BoxGeometry(1.8, 0.5, 0.08), wood, [0, 1.25, s * 1.76]); }
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) add(new THREE.TorusGeometry(0.55, 0.07, 6, 16), wood, [sx * 1.0, 0.55, sz * 1.15], [0, Math.PI / 2, 0]);
   // the canvas tilt over hoops
-  const tilt = new THREE.CylinderGeometry(1.0, 1.0, 3.4, 16, 1, true, -Math.PI / 2, Math.PI); add(tilt, canvasM, [0, 1.55, 0], [Math.PI / 2, 0, 0]);
+  const tilt = new THREE.CylinderGeometry(0.95, 0.95, 3.4, 16, 1, true, -Math.PI / 2, Math.PI); add(tilt, canvasM, [0, 1.45, 0], [-Math.PI / 2, 0, 0]);   // an arch over the bed
   add(new THREE.BoxGeometry(0.1, 0.1, 2.6), wood, [0, 0.62, 2.9], [0.2, 0, 0]);         // the shafts
   // a rack of arms and a hanging lantern at the tailboard
   add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.0]);
