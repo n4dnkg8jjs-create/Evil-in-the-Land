@@ -4,6 +4,7 @@
 // What a knight owns and has had tempered is kept between pilgrimages.
 import * as THREE from 'three';
 import { WEAPONS } from './weapons.js';
+import { clothTextures } from './textures.js';
 import { TAU } from './util.js';
 
 const KEY = 'evil.armoury';
@@ -30,15 +31,41 @@ export function upgradesFor(a, weapon) { return { edge: (a.up['edge:' + weapon] 
 function wagonModel() {
   const g = new THREE.Group();
   const wood = new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 0.9 });
-  const canvasM = new THREE.MeshStandardMaterial({ color: 0x9a8a6a, roughness: 0.95, side: THREE.DoubleSide });
+  const ct = clothTextures([150, 136, 106], false, 256, 'tilt');
+  const canvasM = new THREE.MeshStandardMaterial({ map: ct.map, normalMap: ct.normalMap, color: 0xd8ccb0, roughness: 0.95, side: THREE.DoubleSide });
   const iron = new THREE.MeshStandardMaterial({ color: 0x5a5650, metalness: 0.8, roughness: 0.5 });
   const steel = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 1, roughness: 0.3 });
   const add = (geo, m, p, r = [0, 0, 0]) => { const o = new THREE.Mesh(geo, m); o.position.set(...p); o.rotation.set(...r); o.castShadow = o.receiveShadow = true; g.add(o); return o; };
   add(new THREE.BoxGeometry(1.8, 0.14, 3.6), wood, [0, 0.95, 0]);                       // bed
   for (const s of [-1, 1]) { add(new THREE.BoxGeometry(0.08, 0.5, 3.6), wood, [s * 0.88, 1.25, 0]); add(new THREE.BoxGeometry(1.8, 0.5, 0.08), wood, [0, 1.25, s * 1.76]); }
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) add(new THREE.TorusGeometry(0.55, 0.07, 6, 16), wood, [sx * 1.0, 0.55, sz * 1.15], [0, Math.PI / 2, 0]);
-  // the canvas tilt over hoops
-  const tilt = new THREE.CylinderGeometry(0.95, 0.95, 3.4, 16, 1, true, -Math.PI / 2, Math.PI); add(tilt, canvasM, [0, 1.45, 0], [-Math.PI / 2, 0, 0]);   // an arch over the bed
+  // spoked wheels: iron tyre on a felloe, twelve spokes, a stout hub; and the axles under the bed
+  const wheel = () => {
+    const parts = [new THREE.TorusGeometry(0.55, 0.055, 6, 28), new THREE.TorusGeometry(0.585, 0.022, 4, 28), new THREE.CylinderGeometry(0.1, 0.12, 0.28, 12).rotateX(Math.PI / 2)];
+    for (let k = 0; k < 12; k++) { const sp = new THREE.CylinderGeometry(0.022, 0.03, 0.46, 6); sp.translate(0, 0.32, 0); sp.rotateZ((k / 12) * Math.PI * 2); parts.push(sp); }
+    const gw = new THREE.Group(); parts.forEach((pg, k) => { const o = new THREE.Mesh(pg, k === 1 ? iron : wood); o.castShadow = true; gw.add(o); }); return gw;
+  };
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = wheel(); w.position.set(sx * 1.02, 0.6, sz * 1.15); w.rotation.y = Math.PI / 2; w.rotation.z = sz * 0.3; g.add(w); }
+  for (const sz of [-1, 1]) add(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 8), wood, [0, 0.6, sz * 1.15], [0, 0, Math.PI / 2]);
+  // the tilt: canvas over five bows, sagging between them, creased, gathered and puckered at each end by its cord
+  { const NU = 40, NV = 60, pos = [], uv = [], idx = [];
+    const hn = (x, y) => { const t = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return t - Math.floor(t); };
+    const vn = (x, y) => { const i = Math.floor(x), j = Math.floor(y), f = x - i, e = y - j, u = f * f * (3 - 2 * f), v = e * e * (3 - 2 * e); return (hn(i, j) * (1 - u) + hn(i + 1, j) * u) * (1 - v) + (hn(i, j + 1) * (1 - u) + hn(i + 1, j + 1) * u) * v; };
+    for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+      const a = (i / NU - 0.5) * Math.PI * 1.04, zf = j / NV, z = (zf - 0.5) * 3.5;
+      const bow = Math.abs(Math.sin(zf * Math.PI * 4));
+      let r = 0.99 - 0.07 * bow * (0.4 + 0.6 * Math.cos(a) ** 2);
+      const ends = Math.max(0, 1 - Math.min(zf, 1 - zf) * 14);
+      r *= 1 - ends * 0.22;
+      r += (vn(a * 5, zf * 18) - 0.5) * 0.035 + Math.sin(a * 18 + zf * 9) * 0.008 * bow;
+      r += ends * Math.sin(a * 22) * 0.025;
+      pos.push(Math.sin(a) * r, 1.05 + Math.cos(a) * r * 1.25, z);
+      uv.push(i / NU * 2, zf * 4);
+    }
+    for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) { const p0 = j * (NU + 1) + i, p1 = p0 + 1, p2 = p0 + NU + 1, p3 = p2 + 1; idx.push(p0, p2, p1, p1, p2, p3); }
+    const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); tg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); tg.setIndex(idx); tg.computeVertexNormals();
+    const tilt = new THREE.Mesh(tg, canvasM); tilt.castShadow = tilt.receiveShadow = true; g.add(tilt);
+    for (let k = 0; k <= 4; k++) { const b = add(new THREE.TorusGeometry(0.94, 0.025, 5, 20, Math.PI * 1.04), wood, [0, 1.05, -1.68 + k * 0.84], [0, 0, -Math.PI * 0.02]); b.scale.y = 1.25; }
+  }
   add(new THREE.BoxGeometry(0.1, 0.1, 2.6), wood, [0, 0.62, 2.9], [0.2, 0, 0]);         // the shafts
   // a rack of arms and a hanging lantern at the tailboard
   add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.0]);

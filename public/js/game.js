@@ -75,6 +75,7 @@ export class Game {
     this.layOutFallen(ch);
     this.shop.build(this.world);
     if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
+    this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
     if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); if (ch.devil.army) this.watcher.mode = 'army'; }

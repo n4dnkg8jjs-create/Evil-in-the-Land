@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildTemplate, instantiate, limb, blob, cone, horn, place, lumpyG, demonMaterial } from './demons.js';
 import { scaleTextures, demonTextures } from './textures.js';
-import { buildHorror } from './horror.js';
+import { buildHorror, tickRobes } from './horror.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, TAU } from './util.js';
 
 const D2R = Math.PI / 180, R = Math.random;
@@ -104,7 +104,7 @@ export class Watcher {
     const want = this.state === 'appear' ? smooth(clamp(this.t / 1.5, 0, 1)) : this.state === 'vanish' ? 1 - smooth(clamp(this.t / 1.2, 0, 1)) : 1;
     this.fade = want;
     this.mat.userData.u.uDissolve.value = (1 - want) * 0.98;
-    this.mat.userData.u.uTime.value = time;
+    this.mat.userData.u.uTime.value = time; tickRobes(time);
     if (this.fx && (this.state === 'appear' || this.state === 'vanish') && R() < 0.6) this.fx.wisp(new THREE.Vector3(this.pos.x, this.pos.y + R() * 3.5, this.pos.z), 1.0);
     this.mesh.position.copy(this.pos); this.mesh.rotation.y = this.yaw;
     // the head tracks the nearest knight with sudden, unnatural snaps

@@ -677,6 +677,8 @@ export class World {
           walls.push(xf(new THREE.BoxGeometry(sw, 0.5, 0.5), P(lx, 2.35, 0), [0, rot, 0]));
           timber.push(xf(new THREE.BoxGeometry(sw + 0.3, 0.22, 0.56), P(lx, 2.1, 0), [0, rot, 0]));
           dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
+          // the door itself, boarded, hanging open on one hinge (or gone)
+          if (r() < 0.75) { const sw2 = sw - 0.25, open = r.range(0.5, 1.5); const hx = lx - sw2 / 2; const [dx, , dz] = P(hx + Math.cos(open) * sw2 / 2, 0, 0.28 + Math.sin(open) * sw2 / 2); timber.push(xf(new THREE.BoxGeometry(sw2, 1.95, 0.06), [dx, 1.0, dz], [0, rot - open, r.range(-0.04, 0.04)])); }
           continue;
         }
         const win = !ruin && sg % 2 === 1 && r() < 0.7;
@@ -687,6 +689,13 @@ export class World {
           timber.push(xf(new THREE.BoxGeometry(sw * 0.9, 0.16, 0.58), P(lx, 1.95, 0), [0, rot, 0]));
           for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.08, 0.95, 0.56), P(lx + sx * sw * 0.34, 1.48, 0), [0, rot, 0]));
           dark.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
+          // shutters: thrown open, one hanging by a hinge, one sometimes fallen
+          for (const sx of [-1, 1]) {
+            const fate = r(); if (fate < 0.2) continue;
+            const hw = sw * 0.32, ang = fate < 0.4 ? 0.35 : 1.35;
+            const [sx0, , sz0] = P(lx + sx * (sw * 0.31 + Math.cos(ang) * hw / 2), 0, 0.3 + Math.sin(ang) * hw / 2);
+            timber.push(xf(new THREE.BoxGeometry(hw, 0.9, 0.04), [sx0, fate < 0.4 ? 1.35 : 1.48, sz0], [0, rot - sx * ang, fate < 0.4 ? sx * 0.35 : 0]));
+          }
         } else {
           // rough courses: the top of a broken wall is ragged
           walls.push(xf(new THREE.BoxGeometry(sw + 0.02, top, 0.52), P(lx, top / 2, 0), [0, rot, 0]));
@@ -803,11 +812,47 @@ export class World {
     add(xf(new THREE.BoxGeometry(W + 1.4, foot, L + 1.4), [0, -foot / 2 + 0.15, 0]));
     add(xf(new THREE.BoxGeometry(5.4, foot, 5.4), [0, -foot / 2 + 0.15, L / 2 + 2.2]));
     for (const s2 of [-1, 1]) for (let k = 0; k < 6; k++) { add(xf(new THREE.BoxGeometry(0.9, Hh * 0.8, 1.2), [s2 * (W / 2 + 0.6), Hh * 0.4, -L / 2 + 1.5 + k * 3.4])); add(xf(new THREE.BoxGeometry(0.9, 1.4, 1.2), [s2 * (W / 2 + 0.35), Hh * 0.8 + 0.3, -L / 2 + 1.5 + k * 3.4], [0, 0, s2 * 0.5])); }
-    for (const s of [-1, 1]) for (let k = 0; k < 10; k++) { if (k === 4 && s > 0) continue; const h = r() < 0.25 ? r.range(2, 4) : Hh; add(xf(new THREE.BoxGeometry(0.7, h, 2.0), [s * W / 2, h / 2, -L / 2 + 1 + k * 2])); }
-    add(xf(new THREE.BoxGeometry(W, Hh, 0.7), [0, Hh / 2, -L / 2]));
+    // the nave walls, broken in places, with tall pointed windows between the buttresses
+    const dark = [];
+    for (const s of [-1, 1]) for (let k = 0; k < 10; k++) {
+      if (k === 4 && s > 0) continue;                                   // the breach in the south wall
+      const zc = -L / 2 + 1 + k * 2, broken = r() < 0.22;
+      if (broken) { const h = r.range(2, 4); add(xf(new THREE.BoxGeometry(0.7, h, 2.0), [s * W / 2, h / 2, zc])); continue; }
+      if (k % 2 === 1) {
+        add(xf(new THREE.BoxGeometry(0.7, 2.6, 2.0), [s * W / 2, 1.3, zc]));                          // under the sill
+        add(xf(new THREE.BoxGeometry(0.7, Hh - 5.6, 2.0), [s * W / 2, (Hh + 5.6) / 2, zc]));           // over the arch
+        for (const e of [-1, 1]) { add(xf(new THREE.BoxGeometry(0.7, 3.0, 0.6), [s * W / 2, 4.1, zc + e * 0.7])); add(xf(new THREE.BoxGeometry(0.72, 0.9, 0.22), [s * W / 2, 5.15, zc + e * 0.27], [e * 0.62, 0, 0])); }   // jambs and the pointed head
+        add(xf(new THREE.BoxGeometry(0.9, 0.14, 1.0), [s * (W / 2 + 0.1), 2.62, zc]));                 // the sill
+        for (let m = 0; m < 3; m++) dark.push(xf(new THREE.BoxGeometry(0.04, 0.03, 0.8), [s * W / 2, 3.2 + m * 0.75, zc + (r() - 0.5) * 0.1], [0.2 * (r() - 0.5), 0, 0]));   // what is left of the leading
+      } else add(xf(new THREE.BoxGeometry(0.7, Hh, 2.0), [s * W / 2, Hh / 2, zc]));
+    }
+    // the east wall and its great window
+    add(xf(new THREE.BoxGeometry(W, 2.4, 0.7), [0, 1.2, -L / 2])); add(xf(new THREE.BoxGeometry(W, Hh - 6.4, 0.7), [0, (Hh + 6.4) / 2, -L / 2]));
+    for (const e of [-1, 1]) { add(xf(new THREE.BoxGeometry((W - 1.8) / 2, 4.0, 0.7), [e * (W / 4 + 0.45), 4.4, -L / 2])); add(xf(new THREE.BoxGeometry(0.8, 1.2, 0.72), [e * 0.42, 5.9, -L / 2], [0, 0, -e * 0.6])); }
+    add(xf(new THREE.BoxGeometry(0.16, 3.6, 0.3), [0, 4.3, -L / 2]));   // the mullion
     // west front with doorway, and the bell tower
     add(xf(new THREE.BoxGeometry(3, Hh, 0.7), [-3, Hh / 2, L / 2])); add(xf(new THREE.BoxGeometry(3, Hh, 0.7), [3, Hh / 2, L / 2])); add(xf(new THREE.BoxGeometry(3, 2.5, 0.7), [0, Hh - 1.25, L / 2]));
-    add(xf(new THREE.BoxGeometry(4, 15, 4), [0, 7.5, L / 2 + 2.2])); add(xf(new THREE.ConeGeometry(3.1, 5, 4), [0, 17.5, L / 2 + 2.2], [0, PI / 4, 0]));
+    // the west tower: the door in its foot, slit windows up the shaft, an open belfry with the bell hanging in it, and a spire
+    const TZ = L / 2 + 2.7, TW = 5.4, TT = 0.8, SH = 14, BH = 5;
+    const twall = (face, y0, y1, gaps) => {   // one face of the tower between heights, with openings [x0, x1, ya, yb]
+      const along = (u, v, w2, h2, yc) => face === 'w' ? xf(new THREE.BoxGeometry(w2, h2, TT), [u, yc, TZ + TW / 2 - TT / 2]) : face === 'n' ? xf(new THREE.BoxGeometry(TT, h2, w2), [-TW / 2 + TT / 2, yc, TZ + u]) : face === 's' ? xf(new THREE.BoxGeometry(TT, h2, w2), [TW / 2 - TT / 2, yc, TZ + u]) : xf(new THREE.BoxGeometry(w2, h2, TT), [u, yc, TZ - TW / 2 + TT / 2]);
+      if (!gaps.length) { add(along(0, 0, TW, y1 - y0, (y0 + y1) / 2)); return; }
+      const [x0, x1, ya, yb] = gaps[0];
+      add(along((-TW / 2 + x0) / 2, 0, x0 + TW / 2, y1 - y0, (y0 + y1) / 2)); add(along((x1 + TW / 2) / 2, 0, TW / 2 - x1, y1 - y0, (y0 + y1) / 2));
+      if (ya > y0) add(along((x0 + x1) / 2, 0, x1 - x0, ya - y0, (y0 + ya) / 2)); if (yb < y1) add(along((x0 + x1) / 2, 0, x1 - x0, y1 - yb, (yb + y1) / 2));
+    };
+    twall('w', 0, SH, [[-0.85, 0.85, 0, 3.4]]); twall('n', 0, SH, []); twall('s', 0, SH, []); twall('e', 3.6, SH, []);
+    for (const [fx, fz, rot] of [[0, TZ + TW / 2 + 0.01, 0], [-TW / 2 - 0.01, TZ, PI / 2], [TW / 2 + 0.01, TZ, PI / 2]]) for (const yy of [7.2, 10.6]) dark.push(xf(new THREE.BoxGeometry(0.34, 1.7, 0.06), [fx, yy, fz], [0, rot, 0]));   // slit windows
+    add(xf(new THREE.BoxGeometry(2.2, 0.35, 0.3), [0, 3.55, TZ + TW / 2 + 0.05]));   // the hood-mould over the door
+    for (const yy of [7, SH]) add(xf(new THREE.BoxGeometry(TW + 0.3, 0.28, TW + 0.3), [0, yy, TZ]));   // string courses
+    // the belfry: corner piers and a mullion on each face, open between them
+    for (const cx2 of [-1, 1]) for (const cz2 of [-1, 1]) add(xf(new THREE.BoxGeometry(1.1, BH, 1.1), [cx2 * (TW / 2 - 0.55), SH + BH / 2, TZ + cz2 * (TW / 2 - 0.55)]));
+    for (const [mx, mz, w2, d2] of [[0, TZ + TW / 2 - 0.4, 0.4, 0.8], [0, TZ - TW / 2 + 0.4, 0.4, 0.8], [TW / 2 - 0.4, TZ, 0.8, 0.4], [-TW / 2 + 0.4, TZ, 0.8, 0.4]]) {
+      add(xf(new THREE.BoxGeometry(w2, BH - 1.2, d2), [mx, SH + (BH - 1.2) / 2, mz]));
+      add(xf(new THREE.BoxGeometry(mx === 0 ? TW : 0.8, 1.2, mx === 0 ? 0.8 : TW), [mx, SH + BH - 0.6, mz]));   // the heads of the openings
+    }
+    add(xf(new THREE.BoxGeometry(TW + 0.5, 0.4, TW + 0.5), [0, SH + BH + 0.2, TZ]));   // cornice
+    add(xf(new THREE.ConeGeometry(TW * 0.62, 10, 8), [0, SH + BH + 5.4, TZ], [0, PI / 8, 0]));   // the spire
     // before the west door: the village well under its little roof, and a preaching cross on its steps
     const gyC = (lx, lz) => this.heightAt(x + lx * C0 + lz * S0, z - lx * S0 + lz * C0) - y;
     { const wx = -6, wz = L / 2 + 9, wy = gyC(wx, wz);
@@ -819,6 +864,19 @@ export class World {
       this.addCollider(x + wx * C0 + wz * S0, z - wx * S0 + wz * C0, 1.2); this.addCollider(x + cx * C0 + cz * S0, z - cx * S0 + cz * C0, 1.0);
       this.wellTop = [wx, wy, wz]; }
     const m = new THREE.Mesh(merge(parts), brickMat); m.castShadow = m.receiveShadow = true; g.add(m);
+    const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
+    if (dark.length) g.add(new THREE.Mesh(merge(dark), voidMat));
+    // the bell: bronze, hung from its headstock on a beam across the belfry; it swings when it rings
+    { const bronze = new THREE.MeshStandardMaterial({ color: 0x8a6a34, metalness: 1, roughness: 0.38 });
+      const prof = [[0.02, 0], [0.16, 0.0], [0.24, -0.06], [0.27, -0.3], [0.31, -0.6], [0.42, -0.86], [0.56, -1.0], [0.6, -1.05], [0.55, -1.06], [0.5, -1.0]].map(([rr, yy]) => new THREE.Vector2(rr, yy));
+      const bg = new THREE.LatheGeometry(prof, 28);
+      const pivot = new THREE.Group(); pivot.position.set(0, SH + BH - 1.5, TZ);
+      const bell = new THREE.Mesh(bg, bronze); bell.castShadow = true; pivot.add(bell);
+      const clapper = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.8, 6), bronze); clapper.position.y = -0.5; const ball = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), bronze); ball.position.y = -0.92; pivot.add(clapper, ball);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.6), charMat); stock.position.y = 0.12; pivot.add(stock);
+      g.add(pivot); this.bellPivot = pivot; this.bellSwing = 0;
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(TW - 1.2, 0.3, 0.3), charMat); beam.position.set(0, SH + BH - 1.25, TZ); g.add(beam);
+      const floorB = new THREE.Mesh(new THREE.BoxGeometry(TW - 1.4, 0.2, TW - 1.4), charMat); floorB.position.set(0, SH + 0.1, TZ); g.add(floorB); }
     const trusses = [];
     { const [wx, wy, wz] = this.wellTop;   // the well's roof on two posts, the windlass and a bucket
       for (const sx of [-1, 1]) trusses.push(xf(new THREE.BoxGeometry(0.14, 2.3, 0.14), [wx + sx * 0.95, wy + 1.15, wz]));
@@ -846,9 +904,10 @@ export class World {
     for (let k = 0; k < 10; k++) for (const s of [-1, 1]) { if (k === 4 && s > 0) continue; const [cx, cz] = toW(s * W / 2, -L / 2 + 1 + k * 2); this.addCollider(cx, cz, 1.0); }
     for (let k = -4; k <= 4; k++) { const [cx, cz] = toW(k, -L / 2); this.addCollider(cx, cz, 0.6); }
     for (const lx of [-4, -3, -2, 2, 3, 4]) { const [cx, cz] = toW(lx, L / 2); this.addCollider(cx, cz, 0.6); }
-    { const [cx, cz] = toW(0, L / 2 + 2.2); this.addCollider(cx, cz, 2.6); }
-    const bf = toW(0, L / 2 + 2.2);
-    this.belfry = new THREE.Vector3(bf[0], y + 13, bf[1]);
+    for (const [ox, oz] of [[-2.2, 2.2], [2.2, 2.2], [-2.2, -2.2], [2.2, -2.2]]) { const [cx, cz] = toW(ox, L / 2 + 2.7 + oz); this.addCollider(cx, cz, 0.9); }
+    this.church = { x, y, z, yaw, toW };
+    const bf = toW(0, L / 2 + 2.7);
+    this.belfry = new THREE.Vector3(bf[0], y + 17.5, bf[1]);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
   }
 
@@ -971,6 +1030,7 @@ export class World {
   cleanse(i, instant = false) {
     const a = this.altars[i]; if (!a || a.state === 'cleansed') return;
     a.state = 'cleansed'; a.progress = 1;
+    if (this.bellPivot && (i === 1 || this.altars.length === 1)) this.bellSwing = 1;   // the bell of Saint Aldric rings again
     a.candles.visible = true;
     this.healAnims.push({ a, t: instant ? 99 : 0 });
     this.healedFrac = this.altars.filter((x) => x.state === 'cleansed').length / this.altars.length;
@@ -979,6 +1039,7 @@ export class World {
   update(dt, camPos) {
     this.time += dt;
     if (this.vista) this.vista.update(dt, camPos);
+    if (this.bellPivot && this.bellSwing > 0.002) { this.bellSwing = Math.max(0, this.bellSwing - dt * 0.05); this.bellPivot.rotation.z = Math.sin(this.time * 2.4) * 0.6 * this.bellSwing; const sg = Math.sign(Math.sin(this.time * 2.4)); if (sg !== this._toll) { this._toll = sg; if (this.onToll && this.bellSwing > 0.2) this.onToll(this.belfry); } }
     if (this.swayMats) for (const m of this.swayMats) m.userData.uTime.value = this.time;
     if (this.waterTime) this.waterTime.value = this.time;
     if (this.cloudTime) this.cloudTime.value = this.time;

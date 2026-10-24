@@ -252,6 +252,38 @@ class Cape {
 const _wq = new THREE.Quaternion(), _hq = new THREE.Quaternion(), _rq = new THREE.Quaternion();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3(), _u = new THREE.Vector3();
 
+// The knight's own head, inside the helmet: a weathered face under a quilted arming cap, eyes that catch the
+// light through the sights. The body model stops at the neck (the helmet replaces it), but every helmet has
+// openings, and without this there was nothing behind them.
+let _headParts = null;
+function knightHead() {
+  if (!_headParts) {
+    const skin = new THREE.MeshStandardMaterial({ color: 0x6e564a, roughness: 0.66 });   // weathered, and in the helmet's shadow
+    const beard = new THREE.MeshStandardMaterial({ color: 0x2e241e, roughness: 0.95 });
+    const cap = new THREE.MeshStandardMaterial({ color: 0x5a5046, roughness: 0.95 });
+    const eye = new THREE.MeshStandardMaterial({ color: 0xd8d2c8, roughness: 0.15 });
+    const iris = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.2 });
+    const geo = (g, p, s = [1, 1, 1], r = [0, 0, 0]) => { g.scale(...s); g.rotateX(r[0]); g.rotateY(r[1]); g.rotateZ(r[2]); g.translate(...p); return g; };
+    // skull and face: an egg, longer front to back, narrowing to the jaw
+    const face = new THREE.SphereGeometry(1, 24, 18); const fp = face.attributes.position;
+    for (let i = 0; i < fp.count; i++) { const y = fp.getY(i), z = fp.getZ(i); const jaw = Math.max(0, -y); fp.setX(i, fp.getX(i) * (1 - jaw * 0.28)); if (z > 0.3 && Math.abs(y) < 0.35) fp.setZ(i, z * 1.04); }
+    geo(face, [0, 0.085, 0.012], [0.074, 0.104, 0.094]); face.computeVertexNormals();
+    const nose = geo(new THREE.ConeGeometry(0.014, 0.04, 6), [0, 0.07, 0.104], [1, 1, 0.8], [Math.PI / 2 + 0.35, 0, 0]);
+    const brow = geo(new THREE.CylinderGeometry(0.011, 0.011, 0.085, 8), [0, 0.103, 0.086], [1, 1, 1], [0, 0, Math.PI / 2]);
+    const capG = geo(new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), [0, 0.098, 0.004], [0.081, 0.112, 0.1], [-0.18, 0, 0]);
+    // a short beard along the jaw and the line of the mouth
+    const bd = geo(new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.45), [0, 0.085, 0.016], [0.078, 0.108, 0.098]);
+    const mouth = geo(new THREE.BoxGeometry(0.036, 0.005, 0.01), [0, 0.035, 0.1]);
+    _headParts = [[face, skin], [nose, skin], [brow, skin], [capG, cap], [bd, beard], [mouth, beard]];
+    for (const s2 of [-1, 1]) {
+      _headParts.push([geo(new THREE.SphereGeometry(0.0125, 10, 8), [s2 * 0.03, 0.088, 0.09]), eye]);
+      _headParts.push([geo(new THREE.SphereGeometry(0.006, 8, 6), [s2 * 0.03, 0.088, 0.1015]), iris]);
+    }
+  }
+  const g = new THREE.Group(); for (const [geo, m] of _headParts) { const o = new THREE.Mesh(geo, m); o.castShadow = false; g.add(o); }
+  return g;
+}
+
 export class Knight {
   constructor(scene, quality, loadout, opts = {}) {
     this.scene = scene; this.loadout = loadout;
@@ -262,6 +294,7 @@ export class Knight {
     this.dress = dressRig(this.rig, loadout.style, loadout.finish, quality, { cloth: her.cloth, plume: loadout.plume === false ? null : her.plume });
     this.group = this.rig.root;
     this.body = dressBody(this.rig, her.cloth, quality);
+    this.rig.j.head.add(knightHead());   // a man inside the helmet: seen through the sights and the gap above the bevor
     scene.add(this.group);
     this.weapon = buildWeapon(loadout.weapon, quality);
     scene.add(this.weapon);

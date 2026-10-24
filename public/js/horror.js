@@ -4,7 +4,7 @@
 // screams with the jaw unhinged, twitches, stop-motion stutters, and the
 // crawler's belly-up spider-walk.
 import * as THREE from 'three';
-import { demonTextures } from './textures.js';
+import { demonTextures, clothTextures } from './textures.js';
 import { clamp, lerp, smooth, TAU } from './util.js';
 
 const D2R = Math.PI / 180, PI = Math.PI;
@@ -326,52 +326,102 @@ export function buildHorror(kind, def) {
 // A deep hood over a pale, human face; a robe that pools on the ground; long sleeves the
 // white hands hang out of; ram horns rooted in the skull, breaking out through the cloth.
 // Built at rest (bones unrotated, so every bone frame is the model frame).
-const ROBE_MAT = new THREE.MeshStandardMaterial({ color: 0x0b0909, roughness: 0.97, side: THREE.DoubleSide });
+// heavy black wool: a coarse weave in the normal map, a faint sheen at grazing angles, and a slow stir of wind
+// that grows toward the hem (y below the garment's top, in its own space, scaled by uSway)
+let _robeMat = null;
+const ROBE_U = { uTime: { value: 0 } };
+function robeMat(sway, top) {
+  const ct = clothTextures([26, 22, 24], false, 256, 'devilwool');
+  const m = new THREE.MeshPhysicalMaterial({ color: 0x0d0b0c, map: ct.map, normalMap: ct.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.92, sheen: 0.5, sheenRoughness: 0.75, sheenColor: new THREE.Color(0x2a2630), side: THREE.DoubleSide });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = ROBE_U.uTime; sh.uniforms.uSway = { value: sway }; sh.uniforms.uTop = { value: top };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        float hang = max(0.0, uTop - position.y); float w = hang * hang * uSway;
+        float ang = atan(position.x, position.z);
+        transformed.x += w * (sin(uTime * 0.9 + ang * 2.0 + position.y * 1.3) * 0.6 + sin(uTime * 2.3 + ang * 5.0) * 0.25);
+        transformed.z += w * (cos(uTime * 0.7 + ang * 3.0 + position.y * 1.1) * 0.5);`);
+  };
+  m.customProgramCacheKey = () => 'robe' + sway + '_' + top.toFixed(2);
+  return m;
+}
+export function tickRobes(time) { ROBE_U.uTime.value = time; }
 function lathe(profile, segs, shape) {
   const g = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), segs);
   const p = g.attributes.position, v = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); shape(v, Math.atan2(v.x, v.z)); p.setXYZ(i, v.x, v.y, v.z); }
   g.computeVertexNormals(); return g;
 }
+// a little value noise for wrinkles
+const wn = (x, y) => { const i = Math.floor(x), j = Math.floor(y), f = x - i, g2 = y - j; const h = (a, b) => { const t = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return t - Math.floor(t); }; const u = f * f * (3 - 2 * f), v = g2 * g2 * (3 - 2 * g2); return (h(i, j) * (1 - u) + h(i + 1, j) * u) * (1 - v) + (h(i, j + 1) * (1 - u) + h(i + 1, j + 1) * u) * v; };
 function dressDevil(B, K, def) {
   const chestY = B.chest.getWorldPosition(new THREE.Vector3()).y;   // mesh is at the origin, at rest
   const neckTop = B.neck.position.y;                                    // neck base, in the chest's frame
   const L = chestY - 0.02;                                              // to the ground
-  // the robe: narrow at the throat, broad over the shoulders, falling straight and heavy to a ragged hem
-  const prof = [[0.15, neckTop + 0.03], [0.36, neckTop - 0.07], [0.54, 0.17], [0.52, 0.03], [0.41, -0.2], [0.4, -0.5], [0.44, -0.8], [0.52, -1.25], [0.68, -1.85], [0.86, -L]];
-  const robe = new THREE.Mesh(lathe(prof, 40, (v, a) => {
+  // the robe: gathered at the throat, broad over the shoulders, then falling in deep pleats to a hem that pools and drags
+  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.42, -0.2], [0.41, -0.5], [0.45, -0.8], [0.54, -1.25], [0.7, -1.85], [0.9, -L + 0.06], [0.98, -L]];
+  const pts = []; for (let i = 0; i < prof.length - 1; i++) for (let k = 0; k < 4; k++) { const t = k / 4; pts.push([lerp(prof[i][0], prof[i + 1][0], t), lerp(prof[i][1], prof[i + 1][1], t)]); } pts.push(prof[prof.length - 1]);
+  const robeGeo = lathe(pts, 96, (v, a) => {
     const t = clamp(-v.y / L, 0, 1);
-    const r = Math.hypot(v.x, v.z) * (1 + Math.sin(a * 9 + 0.7) * 0.05 * t + Math.sin(a * 4 + 2) * 0.04 * t);
-    v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.07;
-    if (t > 0.93) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.18;
-  }), ROBE_MAT);
-  robe.castShadow = true; B.chest.add(robe);
-  // sleeves: wide and long, the hands hang out of them
+    // pleats: few and soft at the shoulders, deep and many below the waist, each one wandering
+    const pleat = Math.sin(a * 11 + Math.sin(v.y * 2.1 + a) * 0.9) * (0.012 + 0.06 * t) + Math.sin(a * 5 + 1.3 + v.y * 0.7) * 0.035 * t;
+    // wrinkles where the cloth breaks over the shoulders and bunches at the waist
+    const wr = (wn(a * 6, v.y * 9) - 0.5) * 0.03 * (Math.exp(-(((v.y - 0.12) / 0.12) ** 2)) + Math.exp(-(((v.y + 0.45) / 0.15) ** 2)));
+    const r = Math.hypot(v.x, v.z) + pleat + wr;
+    v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.82 + 0.07;
+    if (t > 0.96) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.1 - 0.02;   // the hem, uneven, dragging
+  });
+  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop)); robe.castShadow = true; B.chest.add(robe);
+  // sleeves: wide and long, falling in folds, the hands hang out of them
   for (const k of ['R', 'L']) {
     const ul = Math.abs(B['fArm' + k].position.y), fl = Math.abs(B['hand' + k].position.y);
-    const up = new THREE.Mesh(lathe([[0.15, 0.06], [0.155, -ul * 0.5], [0.16, -ul - 0.02]], 14, (v, a) => { v.x += Math.sin(a * 5) * 0.008; }), ROBE_MAT); B['uArm' + k].add(up);
-    const lo = new THREE.Mesh(lathe([[0.155, 0.02], [0.18, -fl * 0.5], [0.27, -fl * 0.86], [0.28, -fl * 0.9]], 14, (v, a) => { const t = -v.y / fl; if (t > 0.8) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06; }), ROBE_MAT);
+    const up = new THREE.Mesh(lathe([[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul - 0.02]], 24, (v, a) => { const r = Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * 0.012 + (wn(a * 4, v.y * 12) - 0.5) * 0.02; v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), robeMat(0.0, 0)); B['uArm' + k].add(up);
+    const lo = new THREE.Mesh(lathe([[0.16, 0.02], [0.19, -fl * 0.4], [0.27, -fl * 0.75], [0.31, -fl * 0.88], [0.3, -fl * 0.92]], 28, (v, a) => {
+      const t = -v.y / fl; const r = Math.hypot(v.x, v.z) + Math.sin(a * 7 + v.y * 3) * 0.018 * t + (wn(a * 5, v.y * 10) - 0.5) * 0.02;
+      v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
+    }), robeMat(0.06, 0));
     B['fArm' + k].add(lo); up.castShadow = lo.castShadow = true;
   }
-  // the hood: a deep cowl open at the front, peaked at the back, its skirt spreading onto the shoulders
+  // the hood. It rests on the skull and comes down over the brow, so the face is a pale shape in its shadow:
+  // a little of the eyes beneath the edge, the cheekbones, the mouth. Below the jaw the cowl falls onto the shoulders.
   // (the skull runs about ±0.17 across, -0.15..0.28 up and -0.09..0.31 front to back of the head joint)
-  const cx = 0, cy = 0.08, cz = 0.07;
-  const hood = new THREE.SphereGeometry(0.15, 28, 18, Math.PI * 0.5 + 0.62, Math.PI * 2 - 1.24, 0, Math.PI * 0.78);
-  { const p = hood.attributes.position, v = new THREE.Vector3();
-    for (let i = 0; i < p.count; i++) {
-      v.fromBufferAttribute(p, i);
-      const th = Math.acos(clamp(v.y / 0.15, -1, 1)) / Math.PI;            // 0 at the crown
-      v.x *= 1.62; v.y *= 1.75; v.z *= 2.0;
-      if (v.z < 0 && v.y > 0) { v.y += -v.z * 0.45 * (v.y / 0.26); v.z -= v.y * 0.25; }   // the peak
-      if (th > 0.55) { const f = (th - 0.55) / 0.23; v.x *= 1 + f * 0.75; v.z = v.z * (1 + f * 0.45) - f * 0.04; v.y -= f * 0.14; }  // onto the shoulders
-      p.setXYZ(i, v.x + cx, v.y + cy, v.z + cz);
+  const NU = 56, NV = 30, pos = [], idx = [];
+  const C = [0, 0.07, 0.035], RX = 0.215, RY = 0.27, RZ = 0.255;
+  const openW = (t) => t < 0.52 ? -1 : 0.36 + (t - 0.52) * 0.55;          // half-width of the face opening (radians) by depth
+  for (let j = 0; j <= NV; j++) {
+    const t = j / NV, ph = t * Math.PI * 0.86;
+    for (let i = 0; i <= NU; i++) {
+      const a = (i / NU) * Math.PI * 2 - Math.PI;                          // 0 = straight ahead
+      let rx = RX, rz = RZ, y = C[1] + Math.cos(ph) * RY;
+      const sp = Math.sin(ph);
+      // the brow: the front edge of the cowl overhangs the eyes
+      const front = Math.max(0, Math.cos(a)) ** 3, brim = Math.exp(-(((t - 0.52) / 0.09) ** 2));
+      rz += front * brim * 0.06; y -= front * brim * 0.025;
+      // the peak at the back, and the cowl sagging there in a long fold
+      const back = Math.max(0, -Math.cos(a));
+      if (t < 0.45) y += back * back * (0.45 - t) * 0.12;
+      // below the jaw it spreads over the shoulders
+      if (t > 0.68) { const f = (t - 0.68) / 0.32; rx *= 1 + f * 0.9; rz *= 1 + f * 0.55; y -= f * f * 0.12; }
+      // folds and creases: radial ripples that deepen toward the bottom, a crumple at the nape
+      const fold = Math.sin(a * 9 + t * 4) * 0.012 * t + (wn(a * 5 + 3, t * 8) - 0.5) * 0.03 * t + Math.exp(-(((a - Math.PI) / 0.5) ** 2 + ((t - 0.6) / 0.12) ** 2)) * 0.03;
+      const r = 1 + fold / 0.22;
+      pos.push(C[0] + Math.sin(a) * sp * rx * r, y, C[2] + Math.cos(a) * sp * rz * r);
     }
-    hood.computeVertexNormals(); }
-  const hm = new THREE.Mesh(hood, ROBE_MAT); hm.castShadow = true; B.head.add(hm);
+  }
+  for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+    const t = (j + 0.5) / NV, a = ((i + 0.5) / NU) * Math.PI * 2 - Math.PI;
+    if (Math.abs(a) < openW(t)) continue;                                  // the opening for the face
+    const p0 = j * (NU + 1) + i, p1 = p0 + 1, p2 = p0 + NU + 1, p3 = p2 + 1;
+    idx.push(p0, p2, p1, p1, p2, p3);
+  }
+  const hood = new THREE.BufferGeometry(); hood.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  const uv = []; for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) uv.push(i / NU * 3, j / NV * 2); hood.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  hood.setIndex(idx); hood.computeVertexNormals();
+  const hm = new THREE.Mesh(hood, robeMat(0.02, 0.0)); hm.castShadow = true; B.head.add(hm);
   // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
   if (def.horns) for (const s of [-1, 1]) {
     const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), HORN_MAT); h.castShadow = true;
-    h.position.set(s * 0.1, 0.2, 0.08); h.rotation.set(-0.35, s * 0.45, -s * 0.7);
+    h.position.set(s * 0.11, 0.19, 0.05); h.rotation.set(-0.15, s * 0.75, -s * 1.15);   // out to the sides, then back and down round the hood, a ram's curl
     B.head.add(h);
   }
 }
