@@ -4,6 +4,12 @@ Anno Domini 1523. The land is dead, and something walks the hills watching.
 
 A cooperative action game for one to five knights in 16th-century plate. Fight the demonic swarm, kneel at the blighted altars and pray while your brothers hold the line, and win back the land piece by piece. The road climbs through seven chapters to the mountain's peak, where the Devil waits in his final shape. A full pilgrimage takes about an hour to an hour and a half.
 
+## Play in your browser
+
+**https://n4dnkg8jjs-create.github.io/Evil-in-the-Land/**
+
+Ride alone with up to four companion knights, nothing to install. To play with friends using lobby codes, run the game yourself as described below.
+
 ## Start the game
 
 You need **Node.js 18 or newer**, free from https://nodejs.org (the "LTS" download).

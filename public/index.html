@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
-{ "imports": { "three": "/vendor/three/build/three.module.min.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
 </script>
 </head>
 <body>
@@ -208,7 +208,7 @@
   setTimeout(function () {
     if (!window.__bootProgress) {
       var m = document.getElementById('bootMsg');
-      if (m) m.textContent = 'The 3D engine could not be loaded. If you run the server yourself, the host computer needs internet the first time so it can download Three.js; check the server window for details.';
+      if (m) m.textContent = 'The 3D engine could not be loaded. Check your internet connection and reload. If you run the local server, the host computer needs internet the first time so it can download Three.js; check the server window for details.';
     }
   }, 15000);
 </script>
