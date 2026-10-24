@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildTemplate, instantiate, limb, blob, cone, horn, place, lumpyG, demonMaterial } from './demons.js';
 import { scaleTextures, demonTextures } from './textures.js';
+import { buildHorror } from './horror.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, TAU } from './util.js';
 
 const D2R = Math.PI / 180, R = Math.random;
@@ -49,45 +50,18 @@ function dragonMaterial() {
 }
 
 // ================================================================ WATCHER
-function buildWatcher() {
-  const j = [
-    { name: 'hips', parent: null, pos: S(0, 1.55, 0) }, { name: 'spine', parent: 'hips', pos: S(0, 0.22, 0) }, { name: 'chest', parent: 'spine', pos: S(0, 0.42, 0) },
-    { name: 'neck', parent: 'chest', pos: S(0, 0.42, 0.02) }, { name: 'head', parent: 'neck', pos: S(0, 0.22, 0.02) },
-    ...sym((s, k) => [{ name: 'uArm' + k, parent: 'chest', pos: S(s * 0.3, 0.32, 0) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.62, 0) }, { name: 'hand' + k, parent: 'fArm' + k, pos: S(0, -0.6, 0) }]),
-  ];
-  const robe = new THREE.CylinderGeometry(0.28, 0.7, 2.0, 18, 10, true); robe.translate(0, -0.6, 0);
-  const rp = robe.attributes.position; for (let i = 0; i < rp.count; i++) { const y = rp.getY(i); if (y < -1.3) rp.setY(i, y + Math.abs(Math.sin(i * 3.7)) * 0.3); }
-  lumpyG(robe, 0.08, 201);
-  const p = [
-    { joint: 'hips', geo: robe },
-    { joint: 'spine', geo: place(blob(0.2, 0.3, 0.16, 0.2, 202), [0, 0.2, 0]), blend: 0.12 },
-    { joint: 'chest', geo: place(blob(0.32, 0.3, 0.2, 0.25, 203), [0, 0.18, 0]), blend: 0.12 },
-    { joint: 'chest', geo: place(new THREE.CylinderGeometry(0.42, 0.32, 0.8, 16, 2, true), [0, 0.1, 0]) }, // mantle
-    { joint: 'neck', geo: place(limb(0.07, 0.06, 0.24, 8, 0.1, 204), [0, 0.22, 0]), blend: 0.06 },
-    // goat skull: long face, heavy brow
-    { joint: 'head', geo: place(blob(0.15, 0.18, 0.16, 0.12, 205), [0, 0.1, 0.0]) },
-    { joint: 'head', geo: place(blob(0.08, 0.08, 0.2, 0.15, 206), [0, -0.03, 0.17], [0.4, 0, 0]) },
-    { joint: 'head', geo: place(horn(0.9, 0.06, 3.6), [-0.11, 0.2, -0.02], [0, -0.5, 0.2]) },
-    { joint: 'head', geo: place(horn(0.9, 0.06, 3.6), [0.11, 0.2, -0.02], [0, 0.5, -0.2]) },
-    ...[0, 1, 2, 3, 4, 5, 6].map((i) => ({ joint: 'head', geo: place(cone(0.018, 0.16 + (i === 3 ? 0.1 : 0), 4), [(i - 3) * 0.045, 0.26, 0.03], [-0.25, 0, (i - 3) * -0.2]) })), // crown of thorns
-    ...sym((s, k) => [
-      { joint: 'uArm' + k, geo: limb(0.06, 0.045, 0.62, 7, 0.15, 210 + s), blend: 0.08 },
-      { joint: 'uArm' + k, geo: place(new THREE.CylinderGeometry(0.1, 0.22, 0.9, 10, 2, true), [0, -0.5, 0]) },
-      { joint: 'fArm' + k, geo: limb(0.045, 0.03, 0.6, 7, 0.15, 211 + s), blend: 0.06 },
-      ...[0, 1, 2, 3].map((i) => ({ joint: 'hand' + k, geo: place(limb(0.012, 0.004, 0.42, 4, 0.1, 212 + i), [(i - 1.5) * 0.025, -0.04, 0.0], [0.15, 0, (i - 1.5) * 0.08]) })),
-    ]),
-  ];
-  return buildTemplate(j, p);
-}
+// Him, on the hills: a figure far too tall and thin, arms hanging past the
+// knee, ram horns, a ragged cloak, and two wide white eyes that never blink.
+// He stands perfectly still. Only the head moves, in sudden snaps, and at the
+// end it turns all the way round before he is gone.
+const WATCHER_DEF = { rim: 0x5a0806, skin: 0x0c0a0a, horns: [0.95, 0.07, 3.8], cloak: 2.9, eyeScale: 1.55 };
 
 export class Watcher {
   constructor(scene, fx) {
     this.scene = scene; this.fx = fx;
-    const tpl = buildWatcher();
-    this.mat = demonMaterial(0x8a0a08); this.mat.userData.u.uRimPow.value = 3.5;
-    const { mesh, B } = instantiate(tpl, this.mat);
-    this.mesh = mesh; this.B = B; mesh.visible = false; scene.add(mesh);
-    this.eyes = staringEyes([[-0.065, 0.12, 0.13], [0.065, 0.12, 0.13]], 0.055); B.head.add(this.eyes);
+    const body = buildHorror('devil', WATCHER_DEF);
+    this.mat = body.mat; this.mesh = body.mesh; this.B = body.B;
+    this.mesh.visible = false; scene.add(this.mesh);
     this.pos = new THREE.Vector3(); this.yaw = 0; this.headYaw = 0; this.headTarget = 0; this.headRoll = 0; this.retarget = 0;
     this.state = 'hidden'; this.t = 0; this.fade = 0; this.mode = 'watch'; this.cool = 6; this.spotIdx = -1; this.seenT = 0;
   }
@@ -97,27 +71,28 @@ export class Watcher {
     const spots = world.devilSpots; if (!spots.length) return;
     if (this.state === 'hidden') {
       this.cool -= dt; if (this.cool > 0 || phase === 'cinematic') return;
-      // pick a spot ahead of the party, far enough that he is only a silhouette
-      let best = -1, bs = 1e9;
+      // a spot far from every knight, so he is only ever a silhouette on a ridge
+      let best = -1, bs = -1;
       spots.forEach((s, i) => {
         if (i === this.spotIdx) return;
         let dmin = 1e9; for (const k of knights) dmin = Math.min(dmin, Math.hypot(k.pos.x - s.x, k.pos.z - s.z));
-        if (dmin < 45 || dmin > 120) return;
-        if (dmin < bs) { bs = dmin; best = i; }
+        if (dmin < 85 || dmin > 175) return;
+        const score = -Math.abs(dmin - 115) + Math.random() * 20;
+        if (score > bs) { bs = score; best = i; }
       });
       if (best < 0) { this.cool = 3; return; }
       this.spotIdx = best; const s = spots[best];
-      this.pos.set(s.x, s.y, s.z); this.state = 'appear'; this.t = 0; this.stay = 35 + R() * 25;
+      this.pos.set(s.x, s.y, s.z); this.state = 'appear'; this.t = 0; this.stay = 30 + R() * 25;
       return 'appear';
     }
     let dmin = 1e9, nearest = null; for (const k of knights) { const d = Math.hypot(k.pos.x - this.pos.x, k.pos.z - this.pos.z); if (d < dmin) { dmin = d; nearest = k; } }
     if (nearest) { this.yaw = dampAngle(this.yaw, Math.atan2(nearest.pos.x - this.pos.x, nearest.pos.z - this.pos.z), 0.3, dt); }
     if (this.state === 'appear' && this.t > 1.6) { this.state = 'watch'; this.t = 0; }
     if (this.state === 'watch') {
-      if ((dmin < 30 && this.mode !== 'army') || this.t > this.stay) { this.state = 'turn'; this.t = 0; return 'turn'; }
+      if (dmin < 60 || this.t > this.stay) { this.state = 'turn'; this.t = 0; return 'turn'; }
     }
     if (this.state === 'turn' && this.t > 2.4) { this.state = 'vanish'; this.t = 0; return 'vanish'; }
-    if (this.state === 'vanish' && this.t > 1.4) { this.state = 'hidden'; this.cool = 18 + R() * 20; }
+    if (this.state === 'vanish' && this.t > 1.4) { this.state = 'hidden'; this.cool = 20 + R() * 20; }
   }
   netState() { return [this.state, +this.pos.x.toFixed(1), +this.pos.y.toFixed(1), +this.pos.z.toFixed(1), +this.yaw.toFixed(2), +this.t.toFixed(2), this.mode]; }
   applyNet(s) { const [st, x, y, z, yaw, t, mode] = s; if (st !== this.state) this.t = t; this.state = st; this.pos.set(x, y, z); this.yaw = yaw; this.mode = mode; }
@@ -129,28 +104,32 @@ export class Watcher {
     const want = this.state === 'appear' ? smooth(clamp(this.t / 1.5, 0, 1)) : this.state === 'vanish' ? 1 - smooth(clamp(this.t / 1.2, 0, 1)) : 1;
     this.fade = want;
     this.mat.userData.u.uDissolve.value = (1 - want) * 0.98;
-    if (this.fx && (this.state === 'appear' || this.state === 'vanish') && R() < 0.6) this.fx.wisp(new THREE.Vector3(this.pos.x, this.pos.y + R() * 3, this.pos.z), 0.9);
-    this.mesh.position.copy(this.pos); this.mesh.rotation.y = this.yaw; this.mesh.scale.setScalar(1.12);
+    this.mat.userData.u.uTime.value = time;
+    if (this.fx && (this.state === 'appear' || this.state === 'vanish') && R() < 0.6) this.fx.wisp(new THREE.Vector3(this.pos.x, this.pos.y + R() * 3.5, this.pos.z), 1.0);
+    this.mesh.position.copy(this.pos); this.mesh.rotation.y = this.yaw;
     // the head tracks the nearest knight with sudden, unnatural snaps
     this.retarget -= dt;
     if (this.retarget <= 0) {
-      this.retarget = 0.5 + R() * 1.2;
+      this.retarget = 0.6 + R() * 1.8;
       let best = null, bd = 1e9; for (const k of knights || []) { const d = k.pos.distanceTo(this.pos); if (d < bd) { bd = d; best = k; } }
       const look = best ? angleDiff(this.yaw, Math.atan2(best.pos.x - this.pos.x, best.pos.z - this.pos.z)) : 0;
-      this.headTarget = clamp(look, -1.8, 1.8); this.rollTarget = (R() - 0.5) * 0.7;
+      this.headTarget = clamp(look, -1.8, 1.8); this.rollTarget = (R() - 0.5) * 0.9;
     }
     let hy = this.headTarget;
     if (this.state === 'turn') hy = this.headTarget + Math.sign(this.headTarget || 1) * Math.PI * smooth(clamp(this.t / 2.0, 0, 1)); // the owl-turn, all the way round
-    this.headYaw = dampAngle(this.headYaw, hy, this.state === 'turn' ? 3 : 22, dt);
-    this.headRoll = damp(this.headRoll, this.rollTarget || 0, 2, dt);
-    const sway = Math.sin(time * 0.6) * 2;
-    e(B.hips, 0, 0, sway * 0.5); e(B.spine, 6, 0, 0); e(B.chest, 4 + Math.sin(time * 0.9) * 1.2, 0, 0);
-    B.neck.rotation.set(-0.1, this.headYaw * 0.15, 0); B.head.rotation.set(0.12, this.headYaw * 0.85, this.headRoll, 'YXZ');
+    this.headYaw = dampAngle(this.headYaw, hy, this.state === 'turn' ? 3 : 26, dt);
+    this.headRoll = damp(this.headRoll, this.rollTarget || 0, 3, dt);
+    // utterly still; a slow breath and nothing else
+    const breath = Math.sin(time * 0.5) * 1.2;
+    e(B.hips, 0, 0, 0); e(B.spine, 4, 0, 0); e(B.chest, 6 + breath, 0, 0); e(B.neck, 8, this.headYaw * 0.12 * 57.3, 0);
+    B.head.rotation.set(-0.05, this.headYaw * 0.88, this.headRoll, 'YXZ');
+    e(B.jaw, 4, 0, 0);
+    for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['clav' + k], 0, 0, 0); e(B['thigh' + k], 0, 0, sg * 3); e(B['shin' + k], 2, 0, 0); e(B['foot' + k], 0, 0, 0); }
     if (this.mode === 'army') { // arms raised, presenting his legion
-      e(B.uArmR, -150 + Math.sin(time * 0.7) * 6, 0, -30); e(B.uArmL, -150 + Math.cos(time * 0.7) * 6, 0, 30); e(B.fArmR, -10, 0, 0); e(B.fArmL, -10, 0, 0);
+      e(B.uArmR, -155 + Math.sin(time * 0.7) * 5, 0, -28); e(B.uArmL, -155 + Math.cos(time * 0.7) * 5, 0, 28); e(B.fArmR, -8, 0, 0); e(B.fArmL, -8, 0, 0); e(B.handR, 10, 0, 0); e(B.handL, 10, 0, 0);
     } else {
-      e(B.uArmR, -8, 0, -6); e(B.uArmL, -8, 0, 6); e(B.fArmR, -20 + Math.sin(time * 1.3) * 4, 0, 0); e(B.fArmL, -20 + Math.cos(time * 1.1) * 4, 0, 0);
-      e(B.handR, -20 + Math.sin(time * 3.1) * 15, 0, 0); e(B.handL, -20 + Math.sin(time * 2.7) * 15, 0, 0); // fingers drum the air
+      e(B.uArmR, -3, 0, -4); e(B.uArmL, -3, 0, 4); e(B.fArmR, -6, 0, 0); e(B.fArmL, -6, 0, 0);
+      e(B.handR, -10 + Math.max(0, Math.sin(time * 2.3)) * 25, 0, 0); e(B.handL, -10 + Math.max(0, Math.sin(time * 1.9 + 1)) * 25, 0, 0); // the long fingers curl and uncurl
     }
   }
 }

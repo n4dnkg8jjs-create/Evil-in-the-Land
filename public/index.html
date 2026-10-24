@@ -125,6 +125,7 @@
     <label class="field"><span>Mouse sensitivity</span><input id="setSens" type="range" min="0.2" max="3" step="0.05" value="1"></label>
     <label class="field"><span>Field of view</span><input id="setFov" type="range" min="50" max="90" step="1" value="62"></label>
     <label class="field check"><input id="setInvert" type="checkbox"><span>Invert vertical look</span></label>
+    <label class="field"><span>Shift lock key (face where you look)</span><select id="setLockKey"><option value="ctrl">Ctrl</option><option value="caps">Caps Lock</option><option value="tab">Tab</option></select></label>
     <label class="field"><span>Master volume</span><input id="setVol" type="range" min="0" max="1" step="0.01" value="0.8"></label>
     <label class="field"><span>Music</span><input id="setMusic" type="range" min="0" max="1" step="0.01" value="0.65"></label>
     <label class="field"><span>Effects</span><input id="setSfx" type="range" min="0" max="1" step="0.01" value="0.9"></label>
@@ -149,6 +150,7 @@
           <tr><td>Q (hold)</td><td>Guard. Raise it just before a blow lands to parry.</td></tr>
           <tr><td>Space</td><td>Roll</td></tr>
           <tr><td>Shift</td><td>Run</td></tr>
+          <tr><td>Ctrl</td><td>Shift lock: your knight faces where you look (key can be changed in Settings)</td></tr>
           <tr><td>E (hold)</td><td>Kneel and pray at an altar, or raise a fallen knight</td></tr>
           <tr><td>R</td><td>Use your relic</td></tr>
           <tr><td>Mouse wheel</td><td>Camera distance</td></tr>
@@ -207,6 +209,7 @@
   <div class="prompt" id="prompt" hidden></div>
   <div class="counter" id="counter"></div>
   <div class="crosshair" id="crosshair"></div>
+  <div class="lock-ind" id="lockInd" hidden>Shift Lock</div>
   <div class="toast" id="toast"></div>
 </section>
 

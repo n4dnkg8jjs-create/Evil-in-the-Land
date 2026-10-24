@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { icoSmooth } from './demons.js';
 import { CHAPTERS, HEALED } from './chapters.js';
-import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures } from './textures.js';
+import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture } from './textures.js';
 import { rng, makeNoise, pathSampler, clamp, lerp, smooth, SpatialHash, TAU } from './util.js';
+import { Vista } from './vista.js';
 
 const HALF = 150, N = 257, CELL = (HALF * 2) / (N - 1);
 const PI = Math.PI;
@@ -16,6 +17,7 @@ function xf(g, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) {
 }
 function clean(g) { for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n); if (!g.index) { const a = []; for (let i = 0; i < g.attributes.position.count; i++) a.push(i); g.setIndex(a); } return g; }
 function merge(list) { return mergeGeometries(list.map(clean)); }
+function uvScale(g, su, sv) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv); return g; }
 function lumpy(g, amt, seed) { // perturb a rock along its normals
   const n = makeNoise(seed); const p = g.attributes.position; const v = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); const k = 1 + n.fbm(v.x * 1.7 + seed, v.y * 1.7 + v.z * 1.3, 4) * amt; v.multiplyScalar(k); p.setXYZ(i, v.x, v.y, v.z); }
@@ -35,6 +37,7 @@ export class World {
     this.buildPath();
     this.buildHeights();
     this.buildTerrain();
+    if (this.ch.terrain.kind !== 'peak') this.buildFarTerrain();
     this.buildAltars();
     this.buildProps();
     this.buildGrass();
@@ -42,6 +45,7 @@ export class World {
     if (this.ch.terrain.kind === 'peak') this.buildCloudSea();
     engine.setAtmosphere(this.ch.atmos);
     this.baseAtmos = this.ch.atmos;
+    this.vista = new Vista(engine, chapterIdx, this.ch, (x, z) => this.groundAt(x, z));
   }
 
   // ---------------------------------------------------------------- layout
@@ -71,9 +75,13 @@ export class World {
       const t = (i + 0.6) / (w + 0.4);
       const p = this.path.at(t), q = this.path.at(Math.min(1, t + 0.01));
       let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
-      const side = i % 2 ? 1 : -1; const off = this.ch.devil.close ? r.range(32, 42) : r.range(48, 66);
-      let x = clamp(p.x + nx * side * off, -HALF + 30, HALF - 30), z = clamp(p.z + nz * side * off, -HALF + 30, HALF - 30);
-      this.devilSpots.push({ x, z, t, hill: this.ch.terrain.hill });
+      const side = i % 2 ? 1 : -1; const off = this.ch.devil.close ? r.range(80, 100) : r.range(95, 135);
+      // ahead of the party as often as beside it: he watches them come
+      const ahead = r.range(10, 50);
+      const q2 = this.path.at(Math.min(1, t + 0.06));
+      let fx = q2.x - p.x, fz = q2.z - p.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
+      const x = p.x + nx * side * off + fx * ahead, z = p.z + nz * side * off + fz * ahead;
+      this.devilSpots.push({ x, z, t, hill: this.ch.terrain.hill * 1.4 });
     }
   }
 
@@ -91,8 +99,7 @@ export class World {
       }
       default: h = n.fbm(x * 0.009, z * 0.009, 5) * T.amp + n.ridge(x * 0.02, z * 0.02, 4) * T.amp * 0.25;
     }
-    for (const s of this.devilSpots) { const d2 = (x - s.x) ** 2 + (z - s.z) ** 2; h += s.hill * Math.exp(-d2 / (2 * 16 * 16)); }
-    if (T.edge) { const e = Math.max(Math.abs(x), Math.abs(z)); h += smooth(clamp((e - (HALF - T.edge)) / T.edge, 0, 1)) * 55 + (e > HALF - T.edge ? n.ridge(x * 0.03, z * 0.03, 3) * 10 : 0); }
+    for (const s of this.devilSpots) { const d2 = (x - s.x) ** 2 + (z - s.z) ** 2; h += s.hill * Math.exp(-d2 / (2 * 24 * 24)); }
     return h;
   }
 
@@ -133,7 +140,7 @@ export class World {
       H[j * N + i] = h;
     }
     for (const a of altars) a.y = this.heightAt(a.x, a.z);
-    for (const s of this.devilSpots) s.y = this.heightAt(s.x, s.z);
+    for (const s of this.devilSpots) s.y = this.groundAt(s.x, s.z);
   }
   altarHeightGuess(a) {
     const T = this.ch.terrain;
@@ -148,6 +155,21 @@ export class World {
     const H = this.H;
     const a = H[j * N + i], b = H[j * N + i + 1], c = H[(j + 1) * N + i], d = H[(j + 1) * N + i + 1];
     return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+  }
+  // ground height anywhere, including the open land beyond the battlefield
+  groundAt(x, z) {
+    const ax = Math.abs(x), az = Math.abs(z);
+    if (ax <= HALF && az <= HALF) return this.heightAt(x, z);
+    // blend from the battlefield's edge into the land beyond
+    const ex = clamp(x, -HALF, HALF), ez = clamp(z, -HALF, HALF);
+    const k = smooth(clamp(Math.max(ax - HALF, az - HALF) / 40, 0, 1));
+    return lerp(this.heightAt(ex, ez), this.farHeight(x, z), k);
+  }
+  farHeight(x, z) {
+    const n = this.noise, T = this.ch.terrain;
+    let h = this.baseHeight(x, z) * 0.9 + n.fbm(x * 0.0018, z * 0.0018, 4) * 38;
+    if (T.kind === 'mountain') h += (z + 150) * 0.45;  // the mountainside keeps climbing ahead
+    return h;
   }
   normalAt(x, z, out = new THREE.Vector3()) {
     const e = 0.8; const hx = this.heightAt(x + e, z) - this.heightAt(x - e, z), hz = this.heightAt(x, z + e) - this.heightAt(x, z - e);
@@ -218,8 +240,49 @@ export class World {
     const mesh = new THREE.Mesh(g, mat);
     mesh.receiveShadow = true; mesh.castShadow = this.ch.terrain.kind === 'mountain';
     this.group.add(mesh); this.terrain = mesh;
+    // the knights set out from living land: green behind them, the blight ahead
+    if (T.kind !== 'peak') {
+      const S = this.maskSize;
+      for (let j = 0; j < S; j++) {
+        const z = (j / S - 0.5) * HALF * 2;
+        for (let i = 0; i < S; i++) {
+          const x = (i / S - 0.5) * HALF * 2;
+          const edge = -112 + this.noise.n2(x * 0.03, 7.7) * 10 + this.noise.n2(x * 0.11, 3.1) * 4;
+          const v = smooth(clamp((edge - z) / 16, 0, 1));
+          const k = (j * S + i) * 4; this.maskData[k] = Math.max(this.maskData[k], v * 255);
+        }
+      }
+      this.mask.needsUpdate = true;
+    }
+  }
+  // open country beyond the battlefield, out to the horizon
+  buildFarTerrain() {
+    const R = 2600, rings = 46, segs = 96;
+    const pos = [];
+    const radii = []; for (let i = 0; i <= rings; i++) radii.push(HALF * 0.92 + (R - HALF * 0.92) * Math.pow(i / rings, 2.2));
+    for (let i = 0; i <= rings; i++) for (let j = 0; j <= segs; j++) {
+      const a = (j / segs) * TAU; const r0 = radii[i];
+      // square near the battlefield, round far away
+      const sq = 1 / Math.max(Math.abs(Math.cos(a)), Math.abs(Math.sin(a)));
+      const rr = r0 * lerp(sq, 1, clamp((r0 - HALF) / 400, 0, 1));
+      const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+      let y = this.groundAt(x, z);
+      if (Math.abs(x) < HALF - 2 && Math.abs(z) < HALF - 2) y -= 3;   // tucked under the battlefield
+      pos.push(x, y, z);
+    }
+    const idx = [];
+    for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) { const a = i * (segs + 1) + j, b = a + segs + 1; idx.push(a, a + 1, b, a + 1, b + 1, b); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+    const m = new THREE.Mesh(g, this.terrain.material); m.receiveShadow = true; this.group.add(m); this.farTerrain = m;
   }
 
+  // how alive the land is here, 0..1 (beyond the battlefield, as at its edge)
+  lifeAt(x, z) {
+    if (!this.maskData) return 0;
+    const S = this.maskSize;
+    const i = clamp(Math.floor((x / (HALF * 2) + 0.5) * S), 0, S - 1), j = clamp(Math.floor((z / (HALF * 2) + 0.5) * S), 0, S - 1);
+    return this.maskData[(j * S + i) * 4] / 255;
+  }
   // paint life into the mask (world coords), returns true if anything changed
   paintLife(x, z, radius, amount) {
     const S = this.maskSize, d = this.maskData;
@@ -249,7 +312,7 @@ export class World {
       const a = this.altarT[i];
       const g = new THREE.Group(); g.position.set(a.x, a.y, a.z);
       // octagonal steps
-      for (let s = 0; s < 3; s++) { const m = new THREE.Mesh(new THREE.CylinderGeometry(3.2 - s * 0.6, 3.3 - s * 0.6, 0.26, 8), stone); m.position.y = 0.13 + s * 0.26; m.receiveShadow = m.castShadow = true; g.add(m); }
+      for (let s = 0; s < 3; s++) { const cg = new THREE.CylinderGeometry(3.2 - s * 0.6, 3.3 - s * 0.6, 0.26, 8); uvScale(cg, (3.25 - s * 0.6) * TAU / 1.6, 0.26 / 1.6 * 5); const m = new THREE.Mesh(cg, stone); m.position.y = 0.13 + s * 0.26; m.receiveShadow = m.castShadow = true; g.add(m); }
       // wayside cross with a pitched cap
       const crossG = merge([
         xf(new THREE.BoxGeometry(0.34, 3.2, 0.34), [0, 2.38, 0]),
@@ -322,7 +385,7 @@ export class World {
       const dx = p.x - c.x, dz = p.z - c.z; const d = Math.hypot(dx, dz); const m = c.r + radius;
       if (d < m && d > 1e-4) { p.x = c.x + dx / d * m; p.z = c.z + dz / d * m; }
     }
-    const lim = HALF - (this.ch.terrain.edge ? this.ch.terrain.edge * 0.55 : 4);
+    const lim = HALF - 8;
     if (this.ch.terrain.kind === 'peak') { const r = Math.hypot(p.x, p.z); if (r > 33) { p.x *= 33 / r; p.z *= 33 / r; } }
     else if (this.ch.terrain.kind === 'mountain') {
       // stay in the ravine
@@ -357,33 +420,57 @@ export class World {
   }
 
   treeGeometry(seed, style = 'oak') {
+    // a gnarled tree: a leaning trunk with flared roots, limbs that fork four
+    // times down to bare twigs; bark scaled to each limb's length
     const r = rng(seed); const parts = []; const tips = [];
+    const pine = style === 'pine';
     const branch = (start, dir, len, rad, depth) => {
+      const segs = depth === 0 ? 7 : 5;
       const pts = [start.clone()]; let p = start.clone(), d = dir.clone();
-      const segs = 4;
-      for (let s = 0; s < segs; s++) { d.add(new THREE.Vector3(r.range(-0.35, 0.35), r.range(-0.1, 0.2), r.range(-0.35, 0.35))).normalize(); p = p.clone().addScaledVector(d, len / segs); pts.push(p); }
+      const wander = depth === 0 ? 0.16 : 0.32;
+      for (let s = 0; s < segs; s++) {
+        d.add(new THREE.Vector3(r.range(-wander, wander), r.range(-0.12, 0.18) - (depth > 1 ? 0.06 : 0), r.range(-wander, wander))).normalize();
+        p = p.clone().addScaledVector(d, len / segs); pts.push(p);
+      }
       const curve = new THREE.CatmullRomCurve3(pts);
-      const tg = new THREE.TubeGeometry(curve, 6, rad, depth === 0 ? 7 : 5, false);
-      // taper
-      const pos = tg.attributes.position; const v = new THREE.Vector3();
+      const radial = depth === 0 ? 9 : depth === 1 ? 7 : 5, tub = depth === 0 ? 14 : 6;
+      const tg = new THREE.TubeGeometry(curve, tub, rad, radial, false);
+      const pos = tg.attributes.position, uv = tg.attributes.uv; const v = new THREE.Vector3();
       for (let i = 0; i < pos.count; i++) {
-        const ring = Math.floor(i / ((depth === 0 ? 7 : 5) + 1)); const t = ring / 6; const c = curve.getPoint(t);
-        v.fromBufferAttribute(pos, i).sub(c).multiplyScalar(1 - t * 0.6).add(c); pos.setXYZ(i, v.x, v.y, v.z);
+        const ring = Math.floor(i / (radial + 1)); const t = ring / tub; const c = curve.getPoint(t);
+        let k = 1 - t * 0.68;
+        if (depth === 0 && t < 0.12) { // root flare: buttresses between the roots
+          const ang = (i % (radial + 1)) / radial * TAU; k *= 1 + (1 - t / 0.12) ** 2 * (0.7 + 0.5 * Math.max(0, Math.sin(ang * 4 + seed)));
+        }
+        v.fromBufferAttribute(pos, i).sub(c).multiplyScalar(k).add(c); pos.setXYZ(i, v.x, v.y, v.z);
+        uv.setXY(i, uv.getX(i) * len / 1.6, uv.getY(i) * Math.max(1, rad * 12));
       }
       tg.computeVertexNormals(); parts.push(tg);
-      if (depth >= (style === 'pine' ? 3 : 3) || rad < 0.03) { tips.push(p.clone()); return; }
-      const kids = style === 'pine' ? 0 : r.int(2, 3);
+      const maxDepth = pine ? 1 : 4;
+      if (depth >= maxDepth || rad < 0.014) { tips.push(p.clone()); return; }
+      const kids = pine ? 0 : depth === 0 ? r.int(3, 4) : r.int(2, 3);
       for (let k = 0; k < kids; k++) {
-        const t = r.range(0.45, 1.0); const sp = curve.getPoint(t);
-        const nd = d.clone().add(new THREE.Vector3(r.range(-1, 1), r.range(-0.2, 0.6), r.range(-1, 1))).normalize();
-        branch(sp, nd, len * r.range(0.5, 0.75), rad * 0.55, depth + 1);
+        const t = depth === 0 ? r.range(0.45, 0.95) : r.range(0.35, 1.0); const sp = curve.getPoint(t);
+        const spread = depth === 0 ? 1.0 : 0.8;
+        const nd = d.clone().add(new THREE.Vector3(r.range(-spread, spread), r.range(-0.15, 0.55), r.range(-spread, spread))).normalize();
+        branch(sp, nd, len * r.range(0.48, 0.72), rad * r.range(0.45, 0.6), depth + 1);
       }
-      if (style === 'pine' && depth === 0) {
-        for (let k = 0; k < 14; k++) { const t = 0.25 + (k / 14) * 0.7; const sp = curve.getPoint(t); const a = k * 2.4; const nd = new THREE.Vector3(Math.cos(a), -0.2, Math.sin(a)); branch(sp, nd, (1 - t) * 3 + 0.6, 0.035, 3); }
+      if (pine && depth === 0) {
+        for (let k = 0; k < 22; k++) { const t = 0.2 + (k / 22) * 0.75; const sp = curve.getPoint(t); const a = k * 2.4; const nd = new THREE.Vector3(Math.cos(a), -0.25 + t * 0.2, Math.sin(a)); branch(sp, nd, (1 - t) * 3.4 + 0.5, 0.035 * (1.2 - t), 2); }
       }
     };
-    const H = style === 'pine' ? r.range(9, 14) : r.range(6, 10);
-    branch(new THREE.Vector3(0, -0.3, 0), new THREE.Vector3(0, 1, 0), H * (style === 'pine' ? 1 : 0.55), style === 'pine' ? 0.22 : 0.3, 0);
+    const H = pine ? r.range(10, 15) : r.range(7, 11);
+    const lean = new THREE.Vector3(r.range(-0.12, 0.12), 1, r.range(-0.12, 0.12)).normalize();
+    branch(new THREE.Vector3(0, -0.4, 0), lean, H * (pine ? 1 : 0.5), pine ? 0.24 : 0.34, 0);
+    // a few surface roots snaking away from the base
+    if (!pine) for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * TAU + r.range(-0.4, 0.4); const pts = [];
+      for (let s = 0; s <= 5; s++) { const t = s / 5; pts.push(new THREE.Vector3(Math.cos(a + t * 0.3) * (0.15 + t * 1.6), -0.05 - t * 0.3 + Math.sin(t * 7) * 0.04, Math.sin(a + t * 0.3) * (0.15 + t * 1.6))); }
+      const c = new THREE.CatmullRomCurve3(pts); const tg = new THREE.TubeGeometry(c, 8, 0.09, 5, false);
+      const pos = tg.attributes.position, v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) { const t = Math.floor(i / 6) / 8; const cc = c.getPoint(t); v.fromBufferAttribute(pos, i).sub(cc).multiplyScalar(1 - t * 0.8).add(cc); pos.setXYZ(i, v.x, v.y, v.z); }
+      tg.computeVertexNormals(); parts.push(tg);
+    }
     return { geo: merge(parts), tips };
   }
 
@@ -401,24 +488,28 @@ export class World {
     // --- trees (dead) with hidden leaf crowns that grow back when the land heals
     if (P.deadTrees) {
       const variants = []; const style = P.pines ? 'pine' : 'oak';
-      for (let v = 0; v < 4; v++) variants.push(this.treeGeometry(this.ch.seed * 7 + v, v === 3 && P.pines ? 'oak' : style));
+      for (let v = 0; v < 6; v++) variants.push(this.treeGeometry(this.ch.seed * 7 + v, v >= 4 && P.pines ? 'oak' : style));
       const lists = variants.map(() => []);
       const leafList = [];
       const dense = kind === 'wood';
       this.scatter(P.deadTrees, (x, z) => this.okSpot(x, z, dense ? 7 : 9, 16) && (kind !== 'fen' || this.heightAt(x, z) > -0.3), (x, z, y) => {
-        const v = r.int(0, 3); const s = r.range(0.8, 1.35);
+        const v = r.int(0, 5); const s = r.range(0.8, 1.35);
         const it = { x, y: y - 0.1, z, ry: r() * TAU, s, rx: r.range(-0.06, 0.06), rz: r.range(-0.06, 0.06) };
         lists[v].push(it); this.addCollider(x, z, 0.45 * s);
-        for (const tip of variants[v].tips) if (r() < 0.6) {
+        for (const tip of variants[v].tips) if (r() < 0.45) {
           const c = Math.cos(it.ry), sn = Math.sin(it.ry);
-          leafList.push({ x: x + (tip.x * c + tip.z * sn) * s, y: y + tip.y * s, z: z + (-tip.x * sn + tip.z * c) * s, s: 0, target: r.range(1.0, 1.8) * s, ry: r() * TAU });
+          leafList.push({ x: x + (tip.x * c + tip.z * sn) * s, y: y + tip.y * s, z: z + (-tip.x * sn + tip.z * c) * s, s: 0, target: r.range(1.4, 2.3) * s, ry: r() * TAU });
         }
       });
       variants.forEach((v, i) => this.instanced(v.geo, barkMat, lists[i]));
       // foliage (hidden until healed)
-      const leafGeo = lumpy(icoSmooth(1), 0.3, 5);
-      const leafMat = new THREE.MeshStandardMaterial({ color: P.pines ? 0x2c4a2c : 0x4a6a2a, roughness: 0.9, flatShading: true });
-      this.leaves = { mesh: this.instanced(leafGeo, leafMat, leafList.map((l) => ({ ...l, s: 0.0001 }))), list: leafList };
+      // leaf clusters: three crossed cards carrying a painted spray of leaves
+      const cards = []; for (let k = 0; k < 3; k++) { const q = new THREE.PlaneGeometry(1.6, 1.6); q.rotateY((k / 3) * PI); q.rotateX(0.35 * (k - 1)); cards.push(q); }
+      const leafGeo = merge(cards);
+      const leafMat = new THREE.MeshStandardMaterial({ map: leafTexture(P.pines), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.85, color: P.pines ? 0x7a9a7a : 0xb0c890 });
+      this.swayMaterial(leafMat, 0.06);
+      for (const l of leafList) if (this.lifeAt(l.x, l.z) > 0.6) l.s = l.target;   // trees in leaf on the living land
+      this.leaves = { mesh: this.instanced(leafGeo, leafMat, leafList.map((l) => ({ ...l, s: l.s || 0.0001 }))), list: leafList };
     }
     // --- rocks & crags
     if (P.rocks || P.crags) {
@@ -549,28 +640,88 @@ export class World {
       x = p.x + nx / l * side * d; z = p.z + nz / l * side * d; ok = this.okSpot(x, z, 11, 18);
     }
     if (!ok) return;
-    const w = r.range(5, 8), dpt = r.range(4, 6), y = this.heightAt(x, z), yaw = r() * TAU;
-    const g = new THREE.Group(); g.position.set(x, y - 0.2, z); g.rotation.y = yaw;
-    const walls = [];
-    const wall = (len, cx, cz, rot) => {
-      const segs = Math.ceil(len / 1.0);
-      for (let s = 0; s < segs; s++) {
-        if (r() < 0.18) continue; // collapsed gap
-        const h = r() < 0.3 ? r.range(0.6, 1.6) : r.range(2.2, 3.4);
-        const b = new THREE.BoxGeometry(len / segs + 0.02, h, 0.42); xf(b, [-len / 2 + (s + 0.5) * len / segs, h / 2, 0]);
-        xf(b, [cx, 0, cz], [0, rot, 0]); walls.push(b);
-        const lx = -len / 2 + (s + 0.5) * len / segs; const c = Math.cos(rot), sn = Math.sin(rot);
-        const wx = cx + lx * c, wz = cz - lx * sn; const C = Math.cos(yaw), S = Math.sin(yaw);
-        this.addCollider(x + wx * C + wz * S, z - wx * S + wz * C, 0.6);
+    const w = r.range(6, 9), dpt = r.range(5, 7), yaw = r() * TAU;
+    // set the house on its lowest corner; a stone footing takes up the slope
+    const C = Math.cos(yaw), S = Math.sin(yaw);
+    const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
+    let lo = 1e9, hi = -1e9;
+    for (const [lx, lz] of [[-w / 2, -dpt / 2], [w / 2, -dpt / 2], [-w / 2, dpt / 2], [w / 2, dpt / 2], [0, 0]]) { const [px, pz] = toW(lx, lz); const h = this.heightAt(px, pz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    const y = hi + 0.15;              // the floor sits just above the highest ground
+    const footing = y - lo + 0.6;     // and the footing reaches below the lowest
+    const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
+    const walls = [], timber = [], plaster = [], dark = [];
+    walls.push(xf(new THREE.BoxGeometry(w + 0.7, footing, dpt + 0.7), [0, -footing / 2 + 0.12, 0]));
+    const intact = r() < 0.4;          // some still stand to the eaves
+    const eave = 4.8;
+    const wall = (len, cx, cz, rot, front) => {
+      const segs = Math.max(3, Math.round(len / 1.15)); const sw = len / segs;
+      const door = front ? Math.floor(segs / 2) : -1;
+      for (let sg = 0; sg < segs; sg++) {
+        const lx = -len / 2 + (sg + 0.5) * sw;
+        const P = (gx, gy, gz) => { const c = Math.cos(rot), s2 = Math.sin(rot); return [cx + gx * c + gz * s2, gy, cz - gx * s2 + gz * c]; };
+        const ruin = !intact && r() < 0.45;
+        const top = ruin ? r.range(0.5, 2.0) : intact ? 2.6 : r.range(2.0, 2.6);
+        if (sg === door) { // doorway with a heavy lintel
+          walls.push(xf(new THREE.BoxGeometry(sw, 0.5, 0.5), P(lx, 2.35, 0), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.3, 0.22, 0.56), P(lx, 2.1, 0), [0, rot, 0]));
+          dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
+          continue;
+        }
+        const win = !ruin && sg % 2 === 1 && r() < 0.7;
+        if (win) {
+          walls.push(xf(new THREE.BoxGeometry(sw + 0.02, 1.0, 0.5), P(lx, 0.5, 0), [0, rot, 0]));
+          walls.push(xf(new THREE.BoxGeometry(sw + 0.02, top - 2.0, 0.5), P(lx, 2.0 + (top - 2.0) / 2, 0), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw * 0.8, 0.12, 0.6), P(lx, 1.02, 0), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw * 0.9, 0.16, 0.58), P(lx, 1.95, 0), [0, rot, 0]));
+          for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.08, 0.95, 0.56), P(lx + sx * sw * 0.34, 1.48, 0), [0, rot, 0]));
+          dark.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
+        } else {
+          // rough courses: the top of a broken wall is ragged
+          walls.push(xf(new THREE.BoxGeometry(sw + 0.02, top, 0.52), P(lx, top / 2, 0), [0, rot, 0]));
+          if (ruin) for (let q = 0; q < 2; q++) walls.push(xf(new THREE.BoxGeometry(r.range(0.25, 0.5), r.range(0.15, 0.3), 0.48), P(lx + r.range(-sw / 3, sw / 3), top + 0.1, 0), [r.range(-0.2, 0.2), rot, r.range(-0.3, 0.3)]));
+        }
+        // the upper storey: timber frame with plaster panels, where it survives
+        if ((intact || (!ruin && r() < 0.5)) && top >= 2.5) {
+          const fy = 2.6, fh = eave - fy;
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, fy, 0.14), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, eave, 0.14), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(0.18, fh, 0.3), P(lx - sw / 2 + 0.09, fy + fh / 2, 0.14), [0, rot, 0]));
+          const diag = new THREE.BoxGeometry(0.14, Math.hypot(sw, fh) * 0.95, 0.28);
+          timber.push(xf(diag, P(lx, fy + fh / 2, 0.14), [0, rot, (sg % 2 ? 1 : -1) * Math.atan2(sw, fh)]));
+          plaster.push(xf(new THREE.BoxGeometry(sw, fh, 0.2), P(lx, fy + fh / 2, 0.02), [0, rot, 0]));
+        }
+        const C2 = Math.cos(yaw), S2 = Math.sin(yaw); const [wx, , wz] = P(lx, 0, 0);
+        this.addCollider(x + wx * C2 + wz * S2, z - wx * S2 + wz * C2, 0.6);
       }
     };
-    wall(w, 0, dpt / 2, 0); wall(w, 0, -dpt / 2, 0); wall(dpt, w / 2, 0, PI / 2); wall(dpt, -w / 2, 0, PI / 2);
-    const m = new THREE.Mesh(merge(walls), brickMat); m.castShadow = m.receiveShadow = true; g.add(m);
-    // charred roof beams and fallen rafters
-    const beams = [];
-    for (let k = 0; k < 5; k++) { const b = new THREE.BoxGeometry(0.18, 0.18, dpt + 1); xf(b, [-w / 2 + (k + 0.5) * w / 5, 3.0 + r.range(-0.3, 0.2), 0], [r.range(-0.3, 0.3), 0, r.range(-0.2, 0.2)]); if (r() < 0.7) beams.push(b); }
-    for (let k = 0; k < 3; k++) { const b = new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)); xf(b, [r.range(-w / 3, w / 3), r.range(0.3, 1.5), r.range(-dpt / 3, dpt / 3)], [r.range(-1, 1), r() * TAU, r.range(-1, 1)]); beams.push(b); }
-    const bm = new THREE.Mesh(merge(beams), charMat); bm.castShadow = true; g.add(bm);
+    wall(w, 0, dpt / 2, 0, true); wall(w, 0, -dpt / 2, 0, false); wall(dpt, w / 2, 0, PI / 2, false); wall(dpt, -w / 2, 0, PI / 2, false);
+    // quoins: dressed stones up each corner
+    for (const [cx, cz] of [[-w / 2, -dpt / 2], [w / 2, -dpt / 2], [-w / 2, dpt / 2], [w / 2, dpt / 2]]) {
+      const top = intact ? eave : r.range(1.2, 2.8);
+      for (let k = 0; k < top / 0.45; k++) walls.push(xf(new THREE.BoxGeometry(0.66 + (k % 2) * 0.12, 0.42, 0.66 - (k % 2) * 0.12), [cx, 0.21 + k * 0.45, cz]));
+    }
+    // gable ends and roof timbers
+    if (intact) {
+      for (const sz of [-1, 1]) { const gb = new THREE.BufferGeometry(); const hw = w / 2;
+        gb.setAttribute('position', new THREE.Float32BufferAttribute([-hw, eave, sz * dpt / 2, hw, eave, sz * dpt / 2, 0, eave + 2.6, sz * dpt / 2], 3)); gb.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0.5, 0.5], 2)); gb.setIndex([0, 1, 2]); gb.computeVertexNormals(); plaster.push(gb); }
+      timber.push(xf(new THREE.BoxGeometry(0.24, 0.24, dpt + 1.2), [0, eave + 2.6, 0]));
+    }
+    const rafters = intact ? 7 : 5;
+    for (let k = 0; k < rafters; k++) {
+      if (r() < (intact ? 0.25 : 0.4)) continue;
+      const lz = -dpt / 2 + (k + 0.5) * dpt / rafters;
+      for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, 3.6), [sx * w / 4, eave + 1.2 + r.range(-0.4, 0.1), lz], [0, PI / 2, sx * (0.62 + r.range(-0.2, 0.2))]));
+    }
+    // chimney stack at one end
+    if (r() < 0.7) { const cx = (r() < 0.5 ? -1 : 1) * (w / 2 - 0.5), ch = intact ? 8 : r.range(4, 7); walls.push(xf(new THREE.BoxGeometry(1.1, ch, 0.9), [cx, ch / 2, 0])); walls.push(xf(new THREE.BoxGeometry(1.3, 0.25, 1.1), [cx, ch, 0])); }
+    // fallen beams and rubble about the floor
+    for (let k = 0; k < 4; k++) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)), [r.range(-w / 3, w / 3), r.range(0.2, 1.2), r.range(-dpt / 3, dpt / 3)], [r.range(-1, 1), r() * TAU, r.range(-1, 1)]));
+    for (let k = 0; k < 14; k++) { const sz = r.range(0.2, 0.55); walls.push(xf(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), [r.range(-w / 2 - 1.2, w / 2 + 1.2), sz * 0.25, r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2)], [r() * 3, r() * 3, r() * 3])); }
+    const plasterMat = this.plasterMat || (this.plasterMat = new THREE.MeshStandardMaterial({ color: 0xa89a82, roughness: 0.95, side: THREE.DoubleSide }));
+    const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
+    for (const [list, m] of [[walls, brickMat], [timber, charMat], [plaster, plasterMat], [dark, voidMat]]) {
+      if (!list.length) continue; const mesh = new THREE.Mesh(merge(list), m); mesh.castShadow = mesh.receiveShadow = true; g.add(mesh);
+    }
     this.group.add(g);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
   }
@@ -580,12 +731,20 @@ export class World {
     const a = this.altarT[1] || this.altarT[0];
     const t = a.t; const p = this.path.at(t), q = this.path.at(Math.min(1, t + 0.01));
     let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
-    const x = a.x + nx * 22, z = a.z + nz * 22; const y = this.heightAt(x, z);
+    const x = a.x + nx * 22, z = a.z + nz * 22;
     const yaw = Math.atan2(nx, nz);
-    const g = new THREE.Group(); g.position.set(x, y - 0.3, z); g.rotation.y = yaw;
-    const parts = [];
     const W = 9, L = 20, Hh = 7;
+    const C0 = Math.cos(yaw), S0 = Math.sin(yaw);
+    let lo = 1e9, hi = -1e9;
+    for (const [lx, lz] of [[-W / 2, -L / 2], [W / 2, -L / 2], [-W / 2, L / 2 + 4.4], [W / 2, L / 2 + 4.4], [0, 0]]) { const h = this.heightAt(x + lx * C0 + lz * S0, z - lx * S0 + lz * C0); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    const y = hi + 0.2;
+    const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
+    const parts = [];
     const add = (geo) => parts.push(geo);
+    const foot = y - lo + 0.8;
+    add(xf(new THREE.BoxGeometry(W + 1.4, foot, L + 1.4), [0, -foot / 2 + 0.15, 0]));
+    add(xf(new THREE.BoxGeometry(5.4, foot, 5.4), [0, -foot / 2 + 0.15, L / 2 + 2.2]));
+    for (const s2 of [-1, 1]) for (let k = 0; k < 6; k++) { add(xf(new THREE.BoxGeometry(0.9, Hh * 0.8, 1.2), [s2 * (W / 2 + 0.6), Hh * 0.4, -L / 2 + 1.5 + k * 3.4])); add(xf(new THREE.BoxGeometry(0.9, 1.4, 1.2), [s2 * (W / 2 + 0.35), Hh * 0.8 + 0.3, -L / 2 + 1.5 + k * 3.4], [0, 0, s2 * 0.5])); }
     for (const s of [-1, 1]) for (let k = 0; k < 10; k++) { if (k === 4 && s > 0) continue; const h = r() < 0.25 ? r.range(2, 4) : Hh; add(xf(new THREE.BoxGeometry(0.7, h, 2.0), [s * W / 2, h / 2, -L / 2 + 1 + k * 2])); }
     add(xf(new THREE.BoxGeometry(W, Hh, 0.7), [0, Hh / 2, -L / 2]));
     // west front with doorway, and the bell tower
@@ -655,6 +814,7 @@ export class World {
       const x = r.range(-HALF + 20, HALF - 20), z = r.range(-HALF + 20, HALF - 20);
       if (kind === 'fen' && this.heightAt(x, z) < 0.05) continue;
       if (this.normalAt(x, z).y < 0.82) continue;
+      if (this.lifeAt(x, z) > 0.5) continue;
       dead.push({ x, y: this.heightAt(x, z) - 0.05, z, ry: r() * TAU, s: r.range(0.7, 1.3) });
     }
     this.instanced(geo, deadMat, dead, { shadow: false });
@@ -668,6 +828,15 @@ export class World {
         if (!this.inBounds(x, z) || (kind === 'fen' && this.heightAt(x, z) < 0.0)) continue;
         if (Math.hypot(x - a.x, z - a.z) < 3.2) continue;
         list.push({ x, y: this.heightAt(x, z) - 0.04, z, ry: r() * TAU, s: 0.0001, target: r.range(0.8, 1.5), d, altar: a });
+      }
+    }
+    // the living country the knights ride out from
+    if (kind !== 'peak') {
+      const n0 = list.length, want = Math.floor(5000 * this.q.grass);
+      for (let k = 0; k < want * 2 && list.length - n0 < want; k++) {
+        const x = r.range(-HALF + 6, HALF - 6), z = r.range(-HALF + 4, -95);
+        if (this.lifeAt(x, z) < 0.6 || this.normalAt(x, z).y < 0.8) continue;
+        const s = r.range(0.8, 1.5); list.push({ x, y: this.heightAt(x, z) - 0.04, z, ry: r() * TAU, s, target: s, d: 0, altar: null });
       }
     }
     this.aliveGrass = list;
@@ -723,6 +892,7 @@ export class World {
 
   update(dt, camPos) {
     this.time += dt;
+    if (this.vista) this.vista.update(dt, camPos);
     if (this.swayMats) for (const m of this.swayMats) m.userData.uTime.value = this.time;
     if (this.waterTime) this.waterTime.value = this.time;
     if (this.cloudTime) this.cloudTime.value = this.time;
@@ -791,6 +961,7 @@ export class World {
   get endPos() { return this.path.at(0.985); }
 
   dispose() {
+    if (this.vista) this.vista.dispose();
     this.scene.remove(this.group);
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) { const m = Array.isArray(o.material) ? o.material : [o.material]; m.forEach((x) => x.dispose()); } });
   }

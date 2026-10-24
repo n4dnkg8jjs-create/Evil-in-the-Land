@@ -2,7 +2,7 @@
 // canvases (hammer dents, etching, mail rings, quilting, cracked earth...)
 // and converted to colour / normal / roughness maps.
 import * as THREE from 'three';
-import { rng, makeTileNoise, clamp, lerp } from './util.js';
+import { rng, makeTileNoise, clamp, lerp, smooth } from './util.js';
 
 const tn = makeTileNoise(1337);
 
@@ -163,14 +163,15 @@ export function armorTextures(finishKey, size = 1024) {
     let cr = F.base[0], cg = F.base[1], cb = F.base[2];
     const vary = (temper - 0.5) * (finishKey === 'blued' ? 60 : 24);
     cr += vary * (finishKey === 'blued' ? 0.6 : 1); cg += vary * 0.8; cb += vary * (finishKey === 'blued' ? 1.4 : 0.9);
-    const dirt = clamp((grime - 0.55) * 2.2, 0, 1);
-    cr = lerp(cr, cr * 0.55, dirt); cg = lerp(cg, cg * 0.52, dirt); cb = lerp(cb, cb * 0.5, dirt);
+    const dirt = clamp((grime - 0.6) * 1.4, 0, 0.3);       // light oxidation, never blotches
+    const polish = (streak - 0.5) * 18;                       // lengthwise polishing lines
+    cr = lerp(cr, cr * 0.8, dirt) + polish; cg = lerp(cg, cg * 0.78, dirt) + polish; cb = lerp(cb, cb * 0.76, dirt) + polish;
     cr = lerp(cr, F.etch[0], etch); cg = lerp(cg, F.etch[1], etch); cb = lerp(cb, F.etch[2], etch);
     // bright scratches through dark finishes
     const scrC = finishKey === 'bright' ? 0 : sc * 0.6;
     cr = lerp(cr, 200, scrC); cg = lerp(cg, 200, scrC); cb = lerp(cb, 205, scrC);
     A[p] = clamp(cr, 0, 255); A[p + 1] = clamp(cg, 0, 255); A[p + 2] = clamp(cb, 0, 255); A[p + 3] = 255;
-    let rough = F.rough + (streak - 0.5) * 0.12 + dirt * 0.35 + sc * (finishKey === 'bright' ? 0.25 : -0.05);
+    let rough = F.rough + (streak - 0.5) * 0.14 + dirt * 0.4 + sc * (finishKey === 'bright' ? 0.25 : -0.05);
     rough = lerp(rough, F.etchRough, etch);
     const rv = clamp(rough, 0.04, 1) * 255;
     R[p] = 255; R[p + 1] = rv; R[p + 2] = 255; R[p + 3] = 255; // three reads roughness from G, metalness from B
@@ -293,11 +294,16 @@ export function terrainTextures(size = 512) {
   const crackCache = new Float32Array(s * s);
   for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) crackCache[y * s + x] = crack(x / s, y / s);
   const cAt = (u, v) => crackCache[Math.min(s - 1, Math.floor(v * s)) * s + Math.min(s - 1, Math.floor(u * s))];
+  // cracks only where the ground has baked hard; elsewhere ash, grit and dead soil
+  const crackMask = (u, v) => smooth(clamp((tn.fbm(u + 0.17, v + 0.61, 3, 3) - 0.48) * 4, 0, 1));
+  const fine = (u, v) => cAt((u * 2.3) % 1, (v * 2.3) % 1);
   const dead = make((u, v, h) => {
-    const n = tn.fbm(u, v, 8, 5); const c = cAt(u, v);
-    const base = 26 + n * 30; const ember = c < 0.08 ? (0.08 - c) * 6 : 0;
-    return [base * 1.05 + ember * 120, base * 0.95 + ember * 20, base * 0.9];
-  }, (u, v) => cAt(u, v) * 0.7 + tn.fbm(u, v, 16, 4) * 0.3, 2.5);
+    const n = tn.fbm(u, v, 8, 5), n2 = tn.fbm(u + 0.5, v + 0.2, 24, 3);
+    const m = crackMask(u, v); const c = lerp(1, Math.min(cAt(u, v), fine(u, v) + 0.25), m);
+    const base = 22 + n * 26 + n2 * 14; const ember = c < 0.06 && n > 0.55 ? (0.06 - c) * 7 : 0;
+    const ash = smooth(clamp((tn.fbm(u + 0.9, v, 5, 3) - 0.55) * 3, 0, 1)) * 26;
+    return [base * 1.05 + ash + ember * 120, base * 0.96 + ash * 0.97 + ember * 20, base * 0.9 + ash * 0.95];
+  }, (u, v) => { const m = crackMask(u, v); return lerp(0.75, Math.min(cAt(u, v), fine(u, v) + 0.25), m) * 0.55 + tn.fbm(u, v, 16, 4) * 0.3 + tn.fbm(u, v, 48, 2) * 0.15; }, 1.8);
   const alive = make((u, v) => {
     const n = tn.fbm(u, v, 8, 5), m = tn.fbm(u + 0.3, v, 3, 3);
     const flower = tn.noise(u * 96, v * 96, 96) > 0.93 ? 1 : 0;
@@ -321,24 +327,39 @@ export function terrainTextures(size = 512) {
 
 export function stoneTextures(size = 512, blocks = true) {
   const k = 'stone' + size + blocks; if (cache.has(k)) return cache.get(k);
-  const s = size; const hc = canvas(s); const hx = hc.getContext('2d', { willReadFrequently: true });
-  fillNoise(hx, s, s, 8, 5, (n) => { const v = 90 + n * 120; return [v, v, v]; });
-  if (blocks) {
-    hx.fillStyle = 'rgba(0,0,0,0.9)';
-    const rows = 6; const bh = s / rows;
-    for (let i = 0; i < rows; i++) {
-      hx.fillRect(0, i * bh, s, s / 90);
-      const off = (i % 2) * s / 6;
-      for (let j = 0; j < 4; j++) hx.fillRect(off + j * s / 3, i * bh, s / 90, bh);
+  const s = size; const r = rng(blocks ? 5151 : 6161);
+  const H = new Float32Array(s * s), A = new Float32Array(s * s * 3);
+  // ashlar courses: blocks of varying length, each its own tone; or rough fieldstone
+  const rows = blocks ? 5 : 1;
+  const rowsY = []; for (let i = 0; i <= rows; i++) rowsY.push(i / rows);
+  const cells = [];
+  for (let i = 0; i < rows; i++) { let x = r() * 0.3 - 0.3; const row = []; while (x < 1) { const w = blocks ? 0.18 + r() * 0.22 : 1.1; row.push([x, x + w, 0.85 + r() * 0.3, r()]); x += w; } cells.push(row); }
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s; const i = y * s + x;
+    const grain = tn.fbm(u, v, 32, 4), coarse = tn.fbm(u, v, 6, 4), pit = tn.noise(u * 128, v * 128, 128);
+    let h = 0.6 + grain * 0.25 + coarse * 0.15, tone = 1, hue = 0;
+    if (blocks) {
+      const ri = Math.min(rows - 1, Math.floor(v * rows)); const row = cells[ri];
+      const vy = (v * rows) % 1;
+      let cell = row[0]; for (const c of row) { const cx = ((u - c[0]) % 1 + 1) % 1; if (u >= c[0] && u < c[1]) { cell = c; break; } }
+      const lx = (u - cell[0]) / (cell[1] - cell[0]);
+      const edge = Math.min(lx, 1 - lx) * (cell[1] - cell[0]) * rows * 2.2, edgeY = Math.min(vy, 1 - vy);
+      const e = Math.min(edge, edgeY);
+      const mortar = 0.035;
+      if (e < mortar) h = 0.15 + grain * 0.1;                       // recessed joint
+      else h -= Math.max(0, 0.09 - (e - mortar)) * 2.5;             // chiselled, worn arris
+      tone = cell[2]; hue = cell[3];
     }
-    hx.filter = 'blur(1.5px)'; hx.drawImage(hc, 0, 0); hx.filter = 'none';
+    if (pit > 0.88) h -= 0.12;
+    H[i] = h;
+    const g = (blocks ? 112 : 96) * tone * (0.75 + grain * 0.45 + coarse * 0.2);
+    const lich = smooth(clamp((tn.fbm(u + 0.3, v, 5, 3) - 0.6) * 4, 0, 1)) * 0.25;   // a little lichen and soot
+    A[i * 3] = g * (0.97 + hue * 0.06) * (1 - lich * 0.3); A[i * 3 + 1] = g * (0.96 + hue * 0.03) * (1 - lich * 0.1); A[i * 3 + 2] = g * 0.9 * (1 - lich * 0.35);
+    if (h < 0.3) { A[i * 3] *= 0.55; A[i * 3 + 1] *= 0.55; A[i * 3 + 2] *= 0.55; }
   }
-  const H = readHeight(hc); const nC = normalFromHeight(H, s, s, 3);
+  const nC = normalFromHeight(H, s, s, 3.2);
   const aC = canvas(s); const ax = aC.getContext('2d'); const img = ax.createImageData(s, s);
-  for (let i = 0; i < H.length; i++) {
-    const p = i * 4, h = H[i]; const n = tn.fbm((i % s) / s, Math.floor(i / s) / s, 3, 3);
-    img.data[p] = 70 + h * 80 + n * 20; img.data[p + 1] = 68 + h * 76 + n * 16; img.data[p + 2] = 64 + h * 70 + n * 10; img.data[p + 3] = 255;
-  }
+  for (let i = 0; i < s * s; i++) { img.data[i * 4] = clamp(A[i * 3], 0, 255); img.data[i * 4 + 1] = clamp(A[i * 3 + 1], 0, 255); img.data[i * 4 + 2] = clamp(A[i * 3 + 2], 0, 255); img.data[i * 4 + 3] = 255; }
   ax.putImageData(img, 0, 0);
   const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }) }; cache.set(k, out); return out;
 }
@@ -446,4 +467,64 @@ export function spriteTextures() {
     x.fillStyle = gg; x.fillRect(s * 3, 0, s, s);
   }
   const t = tex(c, { repeat: false }); cache.set('sprites', t); return t;
+}
+
+// Ostrich feather: a pale shaft with long, soft, drooping barbs. White in the
+// texture; the plume material tints it. Alpha carries the wispy edge.
+export function featherTexture(size = 256) {
+  if (cache.has('feather' + size)) return cache.get('feather' + size);
+  const w = size, h = size * 2; const c = canvas(w, h); const x = c.getContext('2d');
+  x.clearRect(0, 0, w, h);
+  const R = rngLocal(7);
+  for (let i = 0; i < 900; i++) {
+    const t = R(); const y0 = t * h * 0.97;
+    const side = R() < 0.5 ? -1 : 1;
+    const len = w * (0.32 + 0.16 * Math.sin(t * Math.PI)) * (0.7 + R() * 0.3) * (t > 0.92 ? (1 - t) * 10 : 1);
+    const droop = h * (0.04 + R() * 0.05);
+    const a = 0.25 + R() * 0.45;
+    x.strokeStyle = `rgba(255,255,255,${a})`; x.lineWidth = 0.6 + R() * 1.1;
+    x.beginPath(); x.moveTo(w / 2, y0);
+    x.bezierCurveTo(w / 2 + side * len * 0.4, y0 + droop * 0.1, w / 2 + side * len * 0.8, y0 + droop * 0.5, w / 2 + side * len, y0 + droop);
+    x.stroke();
+  }
+  x.strokeStyle = 'rgba(240,235,225,0.95)'; x.lineWidth = 2.2; x.beginPath(); x.moveTo(w / 2, 0); x.lineTo(w / 2, h * 0.97); x.stroke();
+  const out = tex(c, { repeat: false });
+  cache.set('feather' + size, out); return out;
+}
+function rngLocal(seed) { let a = seed >>> 0; return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+// Billowing cloud for distant storms and smoke: brighter crowns, dark bellies.
+export function cloudTexture(size = 256) {
+  if (cache.has('cloud' + size)) return cache.get('cloud' + size);
+  const s = size; const c = canvas(s); const x = c.getContext('2d'); const r = rng(311);
+  for (let i = 0; i < 70; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * s * 0.32;
+    const cx = s / 2 + Math.cos(a) * d * 1.2, cy = s * 0.55 + Math.sin(a) * d * 0.6 - r() * s * 0.08, rad = s * (0.08 + r() * 0.14);
+    const top = 1 - (cy - rad) / s;
+    const g = x.createRadialGradient(cx, cy - rad * 0.3, 0, cx, cy, rad);
+    const L = Math.round(120 + top * 120);
+    g.addColorStop(0, `rgba(${L},${L},${L},0.5)`); g.addColorStop(0.7, `rgba(${L * 0.7 | 0},${L * 0.7 | 0},${L * 0.72 | 0},0.3)`); g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g; x.beginPath(); x.arc(cx, cy, rad, 0, Math.PI * 2); x.fill();
+  }
+  const t = tex(c, { repeat: false }); cache.set('cloud' + size, t); return t;
+}
+
+// A spray of leaves on a transparent card (oak), or a fan of needles (pine).
+export function leafTexture(pine = false, size = 256) {
+  const key = 'leaf' + pine + size; if (cache.has(key)) return cache.get(key);
+  const s = size; const c = canvas(s); const x = c.getContext('2d'); const r = rng(pine ? 77 : 55);
+  x.clearRect(0, 0, s, s);
+  const n = pine ? 260 : 150;
+  for (let i = 0; i < n; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * s * 0.42;
+    const cx = s / 2 + Math.cos(a) * d, cy = s / 2 + Math.sin(a) * d;
+    const L = pine ? s * 0.05 : s * (0.04 + r() * 0.03);
+    const g = Math.round(70 + r() * 70), rr = Math.round(g * (0.55 + r() * 0.2)), b = Math.round(g * 0.35);
+    x.fillStyle = `rgb(${rr},${g},${b})`;
+    x.save(); x.translate(cx, cy); x.rotate(r() * Math.PI * 2);
+    if (pine) { x.fillRect(-L, -0.8, L * 2, 1.6); }
+    else { x.beginPath(); x.ellipse(0, 0, L, L * 0.5, 0, 0, Math.PI * 2); x.fill(); x.fillStyle = 'rgba(0,0,0,0.25)'; x.fillRect(-L, -0.4, L * 2, 0.8); }
+    x.restore();
+  }
+  const t = tex(c, { repeat: false }); cache.set(key, t); return t;
 }

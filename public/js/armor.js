@@ -7,8 +7,9 @@
 // of the next joint's rotation, so they fan and slide like real articulations.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { armorTextures, mailTextures, clothTextures, leatherTextures, FINISHES } from './textures.js';
+import { armorTextures, mailTextures, clothTextures, leatherTextures, featherTexture, FINISHES } from './textures.js';
 import { clamp, lerp, smooth } from './util.js';
+import { field } from './body.js';
 
 const PI = Math.PI;
 
@@ -29,6 +30,10 @@ function surf(fn, nu, nv) {
     const a = j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1;
     idx.push(a, c, b, b, c, d);
   }
+  // UVs in real-world scale (one texture tile = 0.5 m) so etching and polish keep their size on every plate
+  const len = (f) => { let L = 0, q = f(0); for (let k = 1; k <= 8; k++) { const r = f(k / 8); L += Math.hypot(r[0] - q[0], r[1] - q[1], r[2] - q[2]); q = r; } return L; };
+  const Lu = len((t) => fn(t, 0.5)) / 0.5, Lv = len((t) => fn(0.5, t)) / 0.5;
+  for (let i = 0; i < uv.length; i += 2) { uv[i] *= Lu; uv[i + 1] *= Lv; }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
@@ -84,121 +89,160 @@ function flute(style, scale = 1) {
   };
 }
 
+// ---------------------------------------------------------------- body-fitted surfaces
+// Plates are shaped from the MakeHuman body's cross-sections (body.js), so every
+// piece sits where a real armourer would have fitted it. If the body asset is
+// missing, plain ellipses of similar size stand in.
+function ellipseField(rx, rz, cz = 0) {
+  return {
+    r: (th, y) => { const a = rx(y), b = rz(y); return (a * b) / Math.hypot(b * Math.sin(th), a * Math.cos(th)); },
+    centre: () => [0, cz],
+    at(th, y, off = 0) { const r = this.r(th, y) + off; return [Math.sin(th) * r, cz + Math.cos(th) * r]; },
+  };
+}
+const FALLBACK = {
+  torso: ellipseField((y) => lerp(0.14, 0.17, smooth(clamp((y + 0.2) / 0.3, 0, 1))), (y) => lerp(0.1, 0.12, smooth(clamp((y + 0.2) / 0.3, 0, 1))), 0.04),
+  neck: ellipseField(() => 0.05, () => 0.045, 0.01),
+  uArm: ellipseField(() => 0.05, () => 0.05), fArm: ellipseField((y) => lerp(0.028, 0.042, (y + 0.27) / 0.27), (y) => lerp(0.026, 0.04, (y + 0.27) / 0.27)),
+  thigh: ellipseField((y) => lerp(0.06, 0.088, (y + 0.45) / 0.45), (y) => lerp(0.06, 0.088, (y + 0.45) / 0.45)),
+  shin: ellipseField((y) => lerp(0.035, 0.055, smooth((y + 0.43) / 0.43)), (y) => lerp(0.035, 0.06, smooth((y + 0.43) / 0.43))),
+};
+function F(name) { return field(name) || FALLBACK[name.replace(/[RL]$/, '')]; }
+// radius averaged over a small height window: plate is raised smooth, not wrapped over every muscle
+function rSmooth(f, th, y, w) { if (!w) return f.r(th, y); return (f.r(th, y - w) + 2 * f.r(th, y) + f.r(th, y + w)) * 0.25; }
+// A plate on the body: u sweeps the angle, v the height. Coordinates are in the
+// mounting joint's frame; the field is sampled at (y + dy) and its z shifted by dz,
+// x by dx (for pieces hung from a parent joint).
+function fshell(f, { a0, a1, y0, y1, off, aOfV, yOfU, nu = 32, nv = 12, dy = 0, dz = 0, dx = 0, yLo = -9, yHi = 9, win = 0.025, rMax = 0, slope = 0 }) {
+  const fn = (u, v) => {
+    let A0 = a0, A1 = a1; if (aOfV) [A0, A1] = aOfV(v);
+    const th = lerp(A0, A1, u);
+    let y = lerp(y0, y1, v); if (yOfU) y += yOfU(th, v);
+    const yf = clamp(y + dy, yLo, yHi);
+    const c = f.centre(yf);
+    let r = rSmooth(f, th, yf, win);
+    if (slope) { for (let k = -6; k <= 6; k++) { if (!k) continue; const y2 = clamp(yf + k * 0.03, Math.max(yLo, y0 + dy), Math.min(yHi, y1 + dy)); r = Math.max(r, rSmooth(f, th, y2, win) - slope * Math.abs(y2 - yf)); } }
+    if (rMax) { for (let k = 1; k <= 4; k++) r = Math.max(r, rSmooth(f, th, clamp(yf + k * rMax / 4, yLo, yHi), win)); }
+    r += typeof off === 'function' ? off(th, v, y) : off;
+    return [dx + c[0] + Math.sin(th) * r, y, dz + c[1] + Math.cos(th) * r];
+  };
+  return { fn, geo: surf(fn, nu, nv) };
+}
+
 // ---------------------------------------------------------------- the harness
 // Each part: { joint, follow?: {joint, k, pivot}, mat, geo }
+// Joint offsets used to move between frames (keep in sync with rig.js SKEL)
+const SPINE_TO_CHEST = 0.22, HIPS_TO_SPINE = [0.10, -0.01], CLAV_TO_SHOULDER = 0.165, HIP_X = 0.10, HIP_Y = -0.06;
 export function buildHarness(style, opts = {}) {
   const S = STYLES[style];
   const parts = [];
   const add = (joint, mat, geo, follow) => parts.push({ joint, mat, geo, follow });
   const fl = flute(S);
+  const torso = F('torso');
+  const HD = -(SPINE_TO_CHEST + HIPS_TO_SPINE[0]), HZ = HIPS_TO_SPINE[1]; // hips frame -> torso field
 
-  // ---------------- under-layer: arming doublet, mail skirt, voiders
-  add('chest', 'cloth', xf(new THREE.CylinderGeometry(0.155, 0.135, 0.42, 16, 1, true), { p: [0, -0.02, -0.005], s: [1, 1, 0.82] }));
-  add('spine', 'cloth', xf(new THREE.CylinderGeometry(0.14, 0.15, 0.2, 16, 1, true), { p: [0, 0.03, 0], s: [1, 1, 0.8] }));
-  add('hips', 'mail', xf(new THREE.CylinderGeometry(0.165, 0.215, 0.26, 20, 1, true), { p: [0, -0.10, 0], s: [1, 1, 0.82] }));
+  // ---------------- under-layer: the body (body.js) is the arming doublet and hose.
+  // Mail skirt: four panels, each swinging with its thigh so the legs never cut through.
   for (const s of ['R', 'L']) {
     const sx = s === 'R' ? -1 : 1;
-    add('uArm' + s, 'mail', xf(new THREE.SphereGeometry(0.06, 10, 8), { p: [0, -0.03, 0], s: [1, 1.1, 1] })); // armpit voider
-    add('uArm' + s, 'cloth', xf(new THREE.CylinderGeometry(0.048, 0.045, 0.30, 10, 1, true), { p: [0, -0.15, 0] }));
-    add('fArm' + s, 'mail', xf(new THREE.SphereGeometry(0.046, 10, 8), { p: [0, 0.0, 0] })); // inner elbow mail
-    add('fArm' + s, 'cloth', xf(new THREE.CylinderGeometry(0.042, 0.034, 0.26, 10, 1, true), { p: [0, -0.13, 0] }));
-    add('thigh' + s, 'cloth', xf(new THREE.CylinderGeometry(0.078, 0.058, 0.45, 12, 1, true), { p: [0, -0.22, 0] }));
-    add('shin' + s, 'mail', xf(new THREE.SphereGeometry(0.055, 10, 8), { p: [0, 0.0, -0.01] })); // back of knee
-    add('shin' + s, 'cloth', xf(new THREE.CylinderGeometry(0.05, 0.036, 0.42, 10, 1, true), { p: [0, -0.21, 0] }));
-    // leather straps securing the cuisses
-    add('thigh' + s, 'leather', xf(new THREE.TorusGeometry(0.074, 0.006, 4, 16, PI * 0.9), { p: [0, -0.12, 0], r: [PI / 2, 0, PI * 0.55] }));
-    add('thigh' + s, 'leather', xf(new THREE.TorusGeometry(0.066, 0.006, 4, 16, PI * 0.9), { p: [0, -0.30, 0], r: [PI / 2, 0, PI * 0.55] }));
+    for (const back of [0, 1]) {
+      const a0 = back ? (sx > 0 ? PI * 0.5 : PI) : (sx > 0 ? 0.04 : -PI * 0.5);
+      const a1 = back ? (sx > 0 ? PI : PI * 1.5) : (sx > 0 ? PI * 0.5 : -0.04);
+      const sk = fshell(torso, { a0, a1, y0: back ? -0.25 : -0.175, y1: back ? 0.08 : 0.02, dy: HD, dz: HZ, yLo: -0.34, rMax: 0.05, off: (th, v) => 0.016 + (1 - v) * 0.026, nu: 14, nv: 6 });
+      add('hips', 'mail', sk.geo, { joint: 'thigh' + s, k: back ? 0.35 : 0.55, pivot: [sx * HIP_X, HIP_Y, 0] });
+    }
   }
   // sword belt + rondel dagger on the right hip
-  add('hips', 'leather', xf(new THREE.TorusGeometry(0.2, 0.012, 4, 24), { p: [0, -0.05, 0], r: [PI / 2, 0, 0], s: [1, 0.82, 1] }));
+  const belt = fshell(torso, { a0: 0, a1: PI * 2, y0: -0.02, y1: 0.012, dy: HD, dz: HZ, yLo: -0.34, off: 0.05, nu: 40, nv: 1 });
+  add('hips', 'leather', belt.geo);
   const dag = [];
   dag.push(xf(new THREE.CylinderGeometry(0.012, 0.01, 0.22, 6), { p: [0, -0.11, 0] }));
   dag.push(xf(new THREE.CylinderGeometry(0.03, 0.03, 0.008, 12), { p: [0, 0.0, 0] }));
   dag.push(xf(new THREE.CylinderGeometry(0.009, 0.009, 0.09, 6), { p: [0, 0.05, 0] }));
   dag.push(xf(new THREE.CylinderGeometry(0.026, 0.026, 0.008, 12), { p: [0, 0.10, 0] }));
-  add('hips', 'leather', xf(mergeGeometries(dag), { p: [-0.2, -0.12, -0.04], r: [0.25, 0, 0.15] }));
+  const dp = torso.at(-PI * 0.62, -0.32, 0.06);
+  add('hips', 'leather', xf(mergeGeometries(dag), { p: [dp[0], -0.1, dp[1] + HZ], r: [0.25, 0, 0.15] }));
 
   // ---------------- cuirass: breastplate (chest joint)
-  const bp = shell({
-    a0: -1.85, a1: 1.85, y0: -0.235, y1: 0.185,
-    aOfV: (v) => { const m = lerp(1.85, 1.25, smooth(clamp((v - 0.55) / 0.45, 0, 1))); return [-m, m]; },
-    rx: (v) => lerp(0.158, 0.192, smooth(clamp(v * 1.6, 0, 1))) - Math.max(0, v - 0.85) * 0.2,
-    rz: (v) => lerp(0.128, 0.162, smooth(clamp(v * 1.4, 0, 1))) - Math.max(0, v - 0.8) * 0.18,
-    extra: (th, v) => {
-      const keel = 0.022 * Math.exp(-((th / 0.38) ** 2)) * smooth(clamp(v * 2, 0, 1)) * (1 - smooth(clamp((v - 0.8) * 5, 0, 1)));
-      return keel + (fl ? fl(th, v) : 0) + (style === 'maximilian' ? 0.012 * Math.sin(v * PI) : 0);
+  const bp = fshell(torso, {
+    a0: -1.85, a1: 1.85, y0: -0.25, y1: 0.165,
+    aOfV: (v) => { const m = lerp(1.85, 1.2, smooth(clamp((v - 0.55) / 0.45, 0, 1))); return [-m, m]; },
+    off: (th, v) => {
+      const keel = 0.016 * Math.exp(-((th / 0.4) ** 2)) * smooth(clamp(v * 2, 0, 1)) * (1 - smooth(clamp((v - 0.85) * 6, 0, 1)));
+      const globe = style === 'maximilian' ? 0.012 * Math.sin(v * PI) * Math.cos(th * 0.5) : style === 'gothic' ? 0.006 * Math.sin(v * PI) : 0.016 * Math.sin(v * PI) * Math.cos(th * 0.6);
+      const waist = 0.012 * (1 - smooth(clamp(v * 3, 0, 1)));   // the waist flares out over the plackart
+      return 0.016 + keel + globe + waist + (fl ? fl(th, v) : 0);
     },
-    yOfU: (th, v) => v > 0.85 ? -0.055 * Math.pow(Math.cos(th * 0.95), 6) * (v - 0.85) / 0.15 : 0, // neck scoop
-    cz: 0.005, nu: 48, nv: 18,
+    yOfU: (th, v) => v > 0.82 ? -0.06 * Math.pow(Math.cos(th * 0.95), 6) * (v - 0.82) / 0.18 : 0, // neck scoop
+    nu: 56, nv: 22, win: 0.03, slope: 0.22,
   });
   add('chest', 'plate', bp.geo);
-  add('chest', 'trim', edge(bp.fn, 'v1', 0.0075, 40));
-  add('chest', 'trim', edge(bp.fn, 'u0', 0.006, 24)); add('chest', 'trim', edge(bp.fn, 'u1', 0.006, 24));
-  // gussets (articulated armpit lames) on breastplate
-  for (const s of [-1, 1]) {
-    const gs = shell({ a0: s > 0 ? 0.9 : -1.4, a1: s > 0 ? 1.4 : -0.9, y0: 0.06, y1: 0.12, rx: () => 0.2, rz: () => 0.17, nu: 10, nv: 3 });
-    add('chest', 'plate', gs.geo); add('chest', 'trim', edge(gs.fn, 'v1', 0.004, 12));
-  }
-  // backplate
-  const bk = shell({
-    a0: 1.75, a1: PI * 2 - 1.75, y0: -0.235, y1: 0.165,
-    rx: (v) => lerp(0.152, 0.186, smooth(clamp(v * 1.6, 0, 1))),
-    rz: (v) => lerp(0.118, 0.13, smooth(v)),
-    extra: (th, v) => (fl ? fl(th, v) * 0.7 : 0),
-    cz: -0.005, nu: 36, nv: 14,
+  add('chest', 'trim', edge(bp.fn, 'v1', 0.0075, 48));
+  add('chest', 'trim', edge(bp.fn, 'u0', 0.006, 28)); add('chest', 'trim', edge(bp.fn, 'u1', 0.006, 28));
+  // backplate, overlapped by the breast at the sides
+  const bk = fshell(torso, {
+    a0: 1.62, a1: PI * 2 - 1.62, y0: -0.25, y1: 0.15,
+    off: (th, v) => 0.012 + (fl ? fl(th, v) * 0.7 : 0) + 0.004 * Math.sin(v * PI),
+    nu: 40, nv: 16, win: 0.03, slope: 0.15,
   });
-  add('chest', 'plate', bk.geo); add('chest', 'trim', edge(bk.fn, 'v1', 0.0065, 30));
+  add('chest', 'plate', bk.geo); add('chest', 'trim', edge(bk.fn, 'v1', 0.0065, 32));
   // shoulder straps & buckles
   for (const s of [-1, 1]) {
-    add('chest', 'leather', tubeAlong([[s * 0.1, 0.16, 0.13], [s * 0.12, 0.21, 0.02], [s * 0.1, 0.17, -0.12]], 0.006, 12, 4));
-    add('chest', 'brass', rivetOut([s * 0.1, 0.155, 0.14], [0, 0.3, 1], 0.009));
+    const f0 = torso.at(s * 0.55, 0.13, 0.03), f1 = torso.at(s * PI * 0.5, 0.2, 0.03), f2 = torso.at(s * 2.6, 0.13, 0.03);
+    add('chest', 'leather', tubeAlong([[f0[0], 0.13, f0[1]], [f1[0] * 0.75, 0.2, (f0[1] + f2[1]) / 2], [f2[0], 0.13, f2[1]]], 0.006, 12, 4));
+    add('chest', 'brass', rivetOut([f0[0], 0.125, f0[1]], [Math.sin(s * 0.55), 0.3, Math.cos(s * 0.55)], 0.009));
   }
   // rivets along the breastplate's waist
-  for (let i = -5; i <= 5; i++) { const th = i * 0.3; add('chest', 'brass', rivetOut([0.162 * Math.sin(th), -0.21, 0.135 * Math.cos(th) + 0.005], [Math.sin(th), 0, Math.cos(th)], 0.0055)); }
+  for (let i = -5; i <= 5; i++) { const th = i * 0.3; const p = torso.at(th, -0.235, 0.032); add('chest', 'brass', rivetOut([p[0], -0.235, p[1]], [Math.sin(th), 0, Math.cos(th)], 0.0055)); }
   // lance rest (arrêt) on the right breast
-  add('chest', 'plate', xf(new THREE.BoxGeometry(0.012, 0.03, 0.06), { p: [-0.11, -0.02, 0.15], r: [0, -0.5, 0] }));
+  { const p = torso.at(-0.75, -0.04, 0.035); add('chest', 'plate', xf(new THREE.BoxGeometry(0.012, 0.03, 0.06), { p: [p[0], -0.04, p[1]], r: [0, -0.75, 0] })); }
 
-  // plackart (spine joint — slides under the breastplate as the torso bends)
-  const pk = shell({
-    a0: -1.3, a1: 1.3, y0: -0.07, y1: 0.12,
-    aOfV: (v) => { const m = lerp(1.3, style === 'gothic' ? 0.25 : 0.7, smooth(clamp((v - 0.4) / 0.6, 0, 1))); return [-m, m]; },
-    rx: () => 0.158, rz: () => 0.14, extra: (th, v) => (fl ? fl(th, v) : 0) + 0.006, nu: 30, nv: 10,
+  // plackart (spine joint): over the belly, slides under the breastplate as the torso bends
+  const pk = fshell(torso, {
+    a0: -1.3, a1: 1.3, y0: -0.07, y1: 0.12, dy: -SPINE_TO_CHEST,
+    aOfV: (v) => { const m = lerp(1.35, style === 'gothic' ? 0.22 : 0.7, smooth(clamp((v - 0.35) / 0.65, 0, 1))); return [-m, m]; },
+    off: (th, v) => 0.03 + (fl ? fl(th, v) : 0) + 0.008 * (1 - v), nu: 32, nv: 10, win: 0.04,
   });
-  add('spine', 'plate', pk.geo); add('spine', 'trim', edge(pk.fn, 'v1', 0.005, 24));
+  add('spine', 'plate', pk.geo); add('spine', 'trim', edge(pk.fn, 'v1', 0.005, 28));
   // culet lames over the small of the back
   for (let i = 0; i < 2; i++) {
-    const c = shell({ a0: 2.0, a1: PI * 2 - 2.0, y0: -0.05 - i * 0.05, y1: 0.0 - i * 0.05, rx: () => 0.16 + i * 0.008, rz: () => 0.125 + i * 0.008, nu: 20, nv: 3 });
-    add('spine', 'plate', c.geo); add('spine', 'trim', edge(c.fn, 'v0', 0.004, 16));
+    const c = fshell(torso, { a0: 1.75, a1: PI * 2 - 1.75, y0: -0.07 - i * 0.045, y1: -0.01 - i * 0.045, dy: -SPINE_TO_CHEST, off: 0.034 + i * 0.008, slope: 0.15, nu: 20, nv: 3 });
+    add('spine', 'plate', c.geo); add('spine', 'trim', edge(c.fn, 'v0', 0.004, 18));
   }
 
-  // fauld: three hooped lames (hips)
+  // fauld: three hooped lames below the waist (hips joint)
   for (let i = 0; i < 3; i++) {
-    const r0 = 0.17 + i * 0.012, z0 = 0.145 + i * 0.012;
-    const f = shell({ a0: -1.95, a1: 1.95, y0: 0.0 - i * 0.05, y1: 0.06 - i * 0.05, rx: (v) => r0 + (1 - v) * 0.012, rz: (v) => z0 + (1 - v) * 0.012, extra: fl ? (th, v) => fl(th, 0.5) * 0.6 : null, nu: 32, nv: 3 });
-    add('hips', 'plate', f.geo); add('hips', 'trim', edge(f.fn, 'v0', 0.0045, 24));
-    if (i === 0) for (const s of [-1, 1]) add('hips', 'brass', rivetOut([s * r0 * Math.sin(1.7), 0.03, z0 * Math.cos(1.7)], [s, 0, 0], 0.006));
+    const y1 = 0.075 - i * 0.038;
+    // the lowest lame is arched over the groin
+    const arch = i === 2 ? (th, v) => (v < 0.5 ? 0.03 * Math.exp(-((th / 0.45) ** 2)) : 0) : null;
+    const f = fshell(torso, { a0: -1.95, a1: 1.95, y0: y1 - 0.05, y1, dy: HD, dz: HZ, yLo: -0.33, rMax: 0.05, yOfU: arch, off: (th, v) => 0.034 + i * 0.01 + (1 - v) * 0.008 + (fl ? fl(th, 0.5) * 0.6 : 0), nu: 36, nv: 3, win: 0.04 });
+    add('hips', 'plate', f.geo); add('hips', 'trim', edge(f.fn, 'v0', 0.0045, 28));
+    if (i === 0) for (const s of [-1, 1]) { const p = f.fn(s > 0 ? 0.98 : 0.02, 0.6); add('hips', 'brass', rivetOut(p, [s, 0, 0.2], 0.006)); }
   }
-  // tassets: four lames each, hung from the fauld, following the thigh by half
+  // tassets: four lames each, hung from the fauld over the thigh, following it by degrees
   for (const s of ['R', 'L']) {
     const sx = s === 'R' ? -1 : 1;
+    const th = F('thigh' + s);
     for (let i = 0; i < 4; i++) {
-      const t = shell({
-        a0: -0.95, a1: 0.95, y0: -0.07 - i * 0.055, y1: -0.0 - i * 0.055,
-        rx: () => 0.105 + i * 0.002, rz: () => 0.075 + i * 0.002, cz: 0.02, nu: 18, nv: 3,
-        extra: fl ? (th, v) => fl(th * 1.5, 0.5) * 0.5 : null,
+      const top = -0.04 - i * 0.05;
+      const t = fshell(th, {
+        a0: -0.62 + sx * 0.38, a1: 0.62 + sx * 0.38, y0: top - 0.062, y1: top, dx: sx * HIP_X, dy: -HIP_Y, yHi: -0.1, yLo: -0.12,
+        off: (a, v) => 0.07 - i * 0.004 + (fl ? fl(a * 1.5, 0.5) * 0.5 : 0) + Math.sin(v * PI) * 0.006 + (1 - v) * 0.004, nu: 16, nv: 4, win: 0,
+        yOfU: (a, v) => (v < 0.5 ? -0.012 * Math.cos((a - sx * 0.38) * 2.4) : 0),   // lower edge rounded
       });
-      const g = xf(t.geo, { r: [0, sx * 0.35, 0] });
-      add('hips', 'plate', g, { joint: 'thigh' + s, k: 0.25 + i * 0.12, pivot: [sx * 0.10, -0.06, 0.0] });
-      add('hips', 'trim', xf(edge(t.fn, 'v0', 0.004, 14), { r: [0, sx * 0.35, 0] }), { joint: 'thigh' + s, k: 0.25 + i * 0.12, pivot: [sx * 0.10, -0.06, 0.0] });
+      const fol = { joint: 'thigh' + s, k: 0.3 + i * 0.13, pivot: [sx * HIP_X, HIP_Y, 0] };
+      add('hips', 'plate', t.geo, fol);
+      add('hips', 'trim', edge(t.fn, 'v0', 0.004, 16), fol);
     }
   }
 
-  // ---------------- gorget (chest) + top lame following the neck
+  // ---------------- gorget: two lames on the chest, the top one turning with the neck
+  const neck = F('neck');
   for (let i = 0; i < 3; i++) {
-    const r = 0.105 - i * 0.008;
-    const g = shell({ a0: 0, a1: PI * 2, y0: 0.15 + i * 0.03, y1: 0.19 + i * 0.03, rx: (v) => r + (1 - v) * 0.03, rz: (v) => r * 0.95 + (1 - v) * 0.025, nu: 28, nv: 3 });
-    if (i < 2) { add('chest', 'plate', g.geo); add('chest', 'trim', edge(g.fn, 'v1', 0.0045, 24)); }
-    else { add('chest', 'plate', g.geo, { joint: 'neck', k: 0.5, pivot: [0, 0.2, 0] }); add('chest', 'trim', edge(g.fn, 'v1', 0.0045, 24), { joint: 'neck', k: 0.5, pivot: [0, 0.2, 0] }); }
+    const y0 = 0.135 + i * 0.03, y1 = y0 + 0.042;
+    const g = fshell(neck, { a0: 0, a1: PI * 2, y0, y1, dy: -0.20, dz: -0.01, yLo: -0.03, off: (th, v) => 0.024 + (2 - i) * 0.01 + (1 - v) * (i === 0 ? 0.045 * Math.abs(Math.cos(th)) : 0.01), nu: 32, nv: 3, win: 0 });
+    if (i < 2) { add('chest', 'plate', g.geo); add('chest', 'trim', edge(g.fn, 'v1', 0.0045, 28)); }
+    else { const fol = { joint: 'neck', k: 0.5, pivot: [0, 0.2, -0.01] }; add('chest', 'plate', g.geo, fol); add('chest', 'trim', edge(g.fn, 'v1', 0.0045, 28), fol); }
   }
 
   // ---------------- helmet (head joint; skull centre ~ +0.11)
@@ -207,108 +251,123 @@ export function buildHarness(style, opts = {}) {
   // ---------------- arms
   for (const s of ['R', 'L']) {
     const sx = s === 'R' ? -1 : 1;
+    const ua = F('uArm' + s), fa = F('fArm' + s);
     const big = S.grandGuard && s === 'L' ? 1.18 : 1;
     const ps = S.pauldron * big;
-    // pauldron cap on the clavicle joint, sitting over the shoulder ball
-    const cap = surf((u, v) => {
-      const th = lerp(-1.9, 1.9, u); const ph = lerp(0, 1.45, v);
-      const R = 0.105 * ps;
-      const flt = S.flutes ? Math.sin(th * 7) * 0.003 * Math.sin(v * PI) : 0;
-      return [sx * 0.15 + sx * Math.sin(ph) * (R + flt) * 1.05 * Math.abs(Math.cos(th * 0.25)) + sx * 0.012, 0.03 + Math.cos(ph) * R * 0.9, Math.sin(ph) * Math.sin(th) * (R + flt) * 1.12];
-    }, 28, 12);
-    add('clav' + s, 'plate', cap);
+    const SX = sx * CLAV_TO_SHOULDER;
+    // pauldron cap on the clavicle joint, domed over the shoulder ball
+    const capR = 0.112 * ps;
+    // a full dome over the shoulder: hangs low on the outside, rests on the gorget inside
+    const rxo = capR * 1.04, rxi = capR * 0.62, rzc = capR * 1.12, ryc = capR * 0.82, CX = SX - sx * 0.018, CY = -0.01;
+    const capFn = (u, v) => {
+      const t = lerp(-PI, PI, u);                      // around the vertical; t = 0 points outward
+      const out = Math.cos(t);
+      const phMax = lerp(1.1, 1.62, (out + 1) / 2);
+      const ph = v * phMax;
+      const flt = S.flutes ? Math.sin(t * 7) * 0.003 * Math.sin(v * PI) : 0;
+      const rx = (out > 0 ? rxo : rxi) + flt;
+      return [CX + sx * out * Math.sin(ph) * rx, CY + Math.cos(ph) * ryc, Math.sin(t) * Math.sin(ph) * (rzc + flt) - 0.006];
+    };
+    const capFol = { joint: 'uArm' + s, k: 0.3, pivot: [SX, 0, 0] };
+    add('clav' + s, 'plate', surf(capFn, 30, 14), capFol);
+    add('clav' + s, 'trim', edge(capFn, 'v1', 0.0055, 30), capFol);
     for (let i = 0; i < 3; i++) {
-      // lames hang from the cap, follow the upper arm progressively
-      const lame = surf((u, v) => {
-        const th = lerp(-2.0, 2.0, u); const R = (0.1 + i * 0.002) * ps;
-        const y = -0.012 - i * 0.034 - v * 0.04;
-        return [sx * 0.15 + sx * Math.abs(Math.cos(th * 0.5)) * R * 0.95 * (1 + v * 0.06), y, Math.sin(th) * R * 1.05 * (1 + v * 0.05)];
-      }, 22, 3);
-      add('clav' + s, 'plate', lame, { joint: 'uArm' + s, k: 0.3 + i * 0.22, pivot: [sx * 0.15, 0, 0], composeWithParent: false });
-      add('clav' + s, 'trim', edge((u, v) => {
-        const th = lerp(-2.0, 2.0, u); const R = (0.1 + i * 0.002) * ps; const y = -0.012 - i * 0.034 - 0.04;
-        return [sx * 0.15 + sx * Math.abs(Math.cos(th * 0.5)) * R * 0.95 * 1.06, y, Math.sin(th) * R * 1.05 * 1.05];
-      }, 'u0', 0.004, 18), { joint: 'uArm' + s, k: 0.3 + i * 0.22, pivot: [sx * 0.15, 0, 0] });
+      // lames hang from the cap and follow the upper arm progressively
+      const lfn = (u, v) => {
+        const th = lerp(-2.05, 2.05, u); const R = (0.106 + i * 0.003) * ps;
+        const y = -0.01 - i * 0.036 - v * 0.044;
+        return [SX + sx * Math.abs(Math.cos(th * 0.5)) * R * 0.98 * (1 + v * 0.05) - sx * 0.004, y, Math.sin(th) * R * 1.1 * (1 + v * 0.04) - 0.006];
+      };
+      const fol = { joint: 'uArm' + s, k: 0.42 + i * 0.14, pivot: [SX, 0, 0] };
+      add('clav' + s, 'plate', surf(lfn, 24, 3), fol);
+      add('clav' + s, 'trim', edge(lfn, 'v1', 0.004, 20), fol);
     }
-    if (S.haute) { // haute-piece: upstanding neck guard flange on the pauldron
-      const h = surf((u, v) => { const t = lerp(-0.9, 0.9, u); return [sx * (0.1 + 0.02 * v), 0.11 * ps + v * 0.06, Math.sin(t) * 0.09 * ps]; }, 12, 3);
-      add('clav' + s, 'plate', h); add('clav' + s, 'trim', edge((u) => { const t = lerp(-0.9, 0.9, u); return [sx * 0.12, 0.11 * ps + 0.06, Math.sin(t) * 0.09 * ps]; }, 'u0', 0.005, 12));
+    if (S.haute) { // haute-piece: upstanding flange guarding the neck
+      const hx = CX - sx * rxi * 0.62;
+      const hfn = (u, v) => { const t = lerp(-0.95, 0.95, u); return [hx + sx * 0.012 * v, 0.07 * ps + v * 0.075, Math.sin(t) * 0.1 * ps]; };
+      add('clav' + s, 'plate', surf(hfn, 12, 3), capFol); add('clav' + s, 'trim', edge(hfn, 'v1', 0.005, 12), capFol);
     }
-    // rosette rivets on the cap
-    add('clav' + s, 'brass', rivetOut([sx * 0.22 * ps, 0.07, 0.0], [sx, 0.6, 0], 0.008));
-    // rerebrace (upper arm)
-    const rr = shell({ a0: 0, a1: PI * 2, y0: -0.25, y1: -0.07, rx: (v) => lerp(0.05, 0.056, v), rz: (v) => lerp(0.047, 0.054, v), extra: S.flutes ? (th, v) => Math.sin(th * 9) * 0.0018 : null, nu: 20, nv: 6 });
-    add('uArm' + s, 'plate', rr.geo); add('uArm' + s, 'trim', edge(rr.fn, 'v1', 0.004, 18));
-    // couter: elbow cop with a heart-shaped side wing; follows the forearm by half
-    const cop = xf(new THREE.SphereGeometry(0.058, 16, 10, 0, PI * 2, 0, PI * 0.55), { r: [-PI / 2, 0, 0], p: [0, 0, -0.012] });
-    const wing = surf((u, v) => { const a = lerp(-1.3, 1.3, u); const r = 0.075 * (1 - v * 0.35) * (0.6 + 0.4 * Math.cos(a * 1.2)); return [sx * (0.05 + v * 0.008), Math.sin(a) * r, -Math.cos(a) * r * 0.55 - 0.01]; }, 14, 4);
-    add('uArm' + s, 'plate', xf(mergeGeometries([cop, wing]), { p: [0, -0.30, 0] }), { joint: 'fArm' + s, k: 0.5, pivot: [0, -0.30, 0] });
+    add('clav' + s, 'brass', rivetOut([SX + sx * 0.07 * ps, 0.085, 0.0], [sx, 0.6, 0], 0.008), capFol);
+    // rerebrace (upper arm), closed, shaped to the arm
+    const rr = fshell(ua, { a0: 0, a1: PI * 2, y0: -0.25, y1: -0.07, off: (th, v) => 0.013 + (S.flutes ? Math.sin(th * 9) * 0.0018 : 0), nu: 24, nv: 8, win: 0.03 });
+    add('uArm' + s, 'plate', rr.geo); add('uArm' + s, 'trim', edge(rr.fn, 'v1', 0.004, 22)); add('uArm' + s, 'trim', edge(rr.fn, 'v0', 0.0035, 22));
+    // couter: elbow cop with a fan-shaped side wing; follows the forearm by half
+    const er = Math.max(ua.r(PI, -0.28), fa.r(PI, -0.02)) + 0.03;
+    const cop = xf(new THREE.SphereGeometry(er, 18, 10, 0, PI * 2, 0, PI * 0.5), { r: [-PI / 2, 0, 0], p: [0, 0, -0.006], s: [1, 0.65, 1.05] });
+    const wing = surf((u, v) => { const a = lerp(-1.35, 1.35, u); const r = 0.084 * (0.15 + 0.85 * v) * (0.62 + 0.38 * Math.cos(a * 1.2)); return [sx * (er * 0.8 + (1 - v) * 0.012), Math.sin(a) * r, -Math.cos(a) * r * 0.55 - 0.012]; }, 14, 5);
+    const elbowFol = { joint: 'fArm' + s, k: 0.5, pivot: [0, -0.30, 0] };
+    add('uArm' + s, 'plate', xf(mergeGeometries([cop, wing]), { p: [0, -0.30, 0] }), elbowFol);
+    add('uArm' + s, 'brass', rivetOut([0, -0.30, -er - 0.004], [0, 0, -1], 0.007), elbowFol);
     for (let i = 0; i < 2; i++) { // couter lames above & below
-      const l = shell({ a0: 1.6, a1: PI * 2 - 1.6, y0: -0.265 + i * -0.055, y1: -0.245 + i * -0.055, rx: () => 0.056, rz: () => 0.056, nu: 12, nv: 2 });
-      add('uArm' + s, 'plate', l.geo, { joint: 'fArm' + s, k: i ? 0.75 : 0.25, pivot: [0, -0.30, 0] });
+      const l = fshell(i ? fa : ua, { a0: 1.4, a1: PI * 2 - 1.4, y0: i ? -0.055 : -0.27, y1: i ? -0.03 : -0.245, dy: i ? 0 : 0, off: 0.022, nu: 14, nv: 2, win: 0 });
+      if (i) add('fArm' + s, 'plate', l.geo); else add('uArm' + s, 'plate', l.geo, { joint: 'fArm' + s, k: 0.25, pivot: [0, -0.30, 0] });
     }
     // vambrace (forearm), closed, tapering to the wrist
-    const vb = shell({ a0: 0, a1: PI * 2, y0: -0.235, y1: -0.04, rx: (v) => lerp(0.04, 0.05, v), rz: (v) => lerp(0.036, 0.047, v), nu: 18, nv: 6 });
-    add('fArm' + s, 'plate', vb.geo); add('fArm' + s, 'trim', edge(vb.fn, 'v0', 0.0035, 16));
+    const vb = fshell(fa, { a0: 0, a1: PI * 2, y0: -0.235, y1: -0.05, off: 0.012, nu: 22, nv: 8, win: 0.02 });
+    add('fArm' + s, 'plate', vb.geo); add('fArm' + s, 'trim', edge(vb.fn, 'v0', 0.0038, 20)); add('fArm' + s, 'trim', edge(vb.fn, 'v1', 0.0035, 20));
     // gauntlet: flared cuff, metacarpal plate, finger lames over a gloved fist
-    const cuff = new THREE.LatheGeometry([new THREE.Vector2(0.040, 0.0), new THREE.Vector2(0.046, 0.03), new THREE.Vector2(0.058, 0.07)], 16);
-    add('hand' + s, 'plate', xf(cuff, { p: [0, -0.02, 0] }));
-    add('hand' + s, 'leather', xf(new THREE.BoxGeometry(0.05, 0.095, 0.075, 2, 3, 2), { p: [0, -0.07, 0.008] }));
-    const meta = surf((u, v) => { const a = lerp(-1.2, 1.2, u); return [sx * (0.024 + 0.006 * Math.cos(a)) * 1, -0.02 - v * 0.055, Math.sin(a) * 0.04 + 0.008]; }, 10, 4);
+    const cuff = new THREE.LatheGeometry([new THREE.Vector2(0.041, 0.0), new THREE.Vector2(0.047, 0.03), new THREE.Vector2(0.055, 0.07)], 18);
+    add('hand' + s, 'plate', xf(cuff, { p: [0, -0.022, 0] }));
+    add('hand' + s, 'trim', xf(new THREE.TorusGeometry(0.055, 0.004, 4, 18), { p: [0, 0.048, 0], r: [PI / 2, 0, 0] }));
+    add('hand' + s, 'leather', xf(new THREE.BoxGeometry(0.055, 0.1, 0.08, 2, 3, 2), { p: [0, -0.072, 0.008] }));
+    const meta = surf((u, v) => { const a = lerp(-1.2, 1.2, u); return [sx * (0.027 + 0.006 * Math.cos(a)), -0.02 - v * 0.058, Math.sin(a) * 0.044 + 0.008]; }, 10, 4);
     add('hand' + s, 'plate', meta);
     for (let i = 0; i < 4; i++) {
-      const fl2 = surf((u, v) => { const a = lerp(-1.3, 1.3, u); const ang = 0.4 + i * 0.42 + v * 0.38; const R = 0.03; return [sx * Math.cos(ang) * R * 1.05, -0.078 - Math.sin(ang) * R * 0.7 - i * 0.004, Math.sin(a) * 0.041 + 0.008]; }, 8, 2);
+      const fl2 = surf((u, v) => { const a = lerp(-1.3, 1.3, u); const ang = 0.4 + i * 0.42 + v * 0.38; const R = 0.033; return [sx * Math.cos(ang) * R * 1.05, -0.082 - Math.sin(ang) * R * 0.7 - i * 0.004, Math.sin(a) * 0.045 + 0.008]; }, 8, 2);
       add('hand' + s, 'plate', fl2);
     }
-    add('hand' + s, 'plate', xf(new THREE.CapsuleGeometry(0.012, 0.03, 3, 6), { p: [-sx * 0.012, -0.06, 0.045], r: [0.9, 0, -sx * 0.5] })); // thumb
+    add('hand' + s, 'plate', xf(new THREE.CapsuleGeometry(0.013, 0.032, 3, 6), { p: [-sx * 0.012, -0.062, 0.048], r: [0.9, 0, -sx * 0.5] })); // thumb
   }
 
   // ---------------- legs
   for (const s of ['R', 'L']) {
     const sx = s === 'R' ? -1 : 1;
-    // cuisse: front and outer thigh
-    const cu = shell({ a0: -2.1, a1: 2.1, y0: -0.37, y1: -0.02, rx: (v) => lerp(0.066, 0.086, v), rz: (v) => lerp(0.064, 0.086, v), extra: fl ? (th, v) => fl(th * 0.6, v) : null, cz: 0.004, nu: 24, nv: 10 });
-    add('thigh' + s, 'plate', cu.geo); add('thigh' + s, 'trim', edge(cu.fn, 'v1', 0.005, 20));
+    const th = F('thigh' + s), sh = F('shin' + s);
+    // cuisse: front and outer thigh, open behind as real cuisses were
+    const cu = fshell(th, { a0: -2.05, a1: 2.05, y0: -0.38, y1: -0.04, yHi: -0.08, off: (a, v) => 0.016 + (fl ? fl(a * 0.6, v) : 0) + 0.008 * smooth(clamp((v - 0.8) * 5, 0, 1)), nu: 28, nv: 12, win: 0.03 });
+    add('thigh' + s, 'plate', cu.geo); add('thigh' + s, 'trim', edge(cu.fn, 'v1', 0.005, 24));
+    add('thigh' + s, 'trim', edge(cu.fn, 'u0', 0.004, 14)); add('thigh' + s, 'trim', edge(cu.fn, 'u1', 0.004, 14));
+    // straps around the back of the thigh
+    for (const y of [-0.12, -0.3]) add('thigh' + s, 'leather', fshell(th, { a0: 2.0, a1: PI * 2 - 2.0, y0: y, y1: y + 0.018, off: 0.01, nu: 10, nv: 1, win: 0 }).geo);
     // poleyn: knee cop + outer wing, following the shin by half
-    const kc = xf(new THREE.SphereGeometry(0.062, 16, 10, 0, PI * 2, 0, PI * 0.55), { r: [PI / 2, 0, 0], p: [0, 0, 0.018] });
-    const kw = surf((u, v) => { const a = lerp(-1.4, 1.4, u); const r = 0.075 * (1 - v * 0.3) * (0.55 + 0.45 * Math.cos(a)); return [sx * (0.058 + v * 0.01), Math.sin(a) * r, Math.cos(a) * r * 0.5]; }, 14, 4);
-    add('thigh' + s, 'plate', xf(mergeGeometries([kc, kw]), { p: [0, -0.45, 0] }), { joint: 'shin' + s, k: 0.5, pivot: [0, -0.45, 0] });
-    add('thigh' + s, 'brass', rivetOut([0, -0.45, 0.083], [0, 0, 1], 0.008), { joint: 'shin' + s, k: 0.5, pivot: [0, -0.45, 0] });
+    const kr = Math.max(th.r(0, -0.42), sh.r(0, -0.03)) + 0.03;
+    const kc = xf(new THREE.SphereGeometry(kr, 18, 10, 0, PI * 2, 0, PI * 0.5), { r: [PI / 2, 0, 0], p: [0, 0, 0.012], s: [1, 0.62, 1.05] });
+    const kw = surf((u, v) => { const a = lerp(-1.4, 1.4, u); const r = 0.088 * (0.15 + 0.85 * v) * (0.58 + 0.42 * Math.cos(a)); return [sx * (kr * 0.85 + (1 - v) * 0.014), Math.sin(a) * r, Math.cos(a) * r * 0.5]; }, 14, 5);
+    const kneeFol = { joint: 'shin' + s, k: 0.5, pivot: [0, -0.45, 0] };
+    add('thigh' + s, 'plate', xf(mergeGeometries([kc, kw]), { p: [0, -0.45, 0] }), kneeFol);
+    add('thigh' + s, 'brass', rivetOut([0, -0.45, kr + 0.016], [0, 0, 1], 0.008), kneeFol);
     for (let i = 0; i < 2; i++) {
-      const l = shell({ a0: -1.6, a1: 1.6, y0: -0.41 + i * -0.065, y1: -0.385 + i * -0.065, rx: () => 0.066, rz: () => 0.07, cz: 0.006, nu: 12, nv: 2 });
-      add('thigh' + s, 'plate', l.geo, { joint: 'shin' + s, k: i ? 0.8 : 0.2, pivot: [0, -0.45, 0] });
+      const l = fshell(i ? sh : th, { a0: -1.55, a1: 1.55, y0: i ? -0.06 : -0.41, y1: i ? -0.035 : -0.385, off: 0.024, nu: 14, nv: 2, win: 0 });
+      if (i) add('shin' + s, 'plate', l.geo); else add('thigh' + s, 'plate', l.geo, { joint: 'shin' + s, k: 0.2, pivot: [0, -0.45, 0] });
     }
     // greave: closed, shaped to the calf
-    const gr = shell({
-      a0: 0, a1: PI * 2, y0: -0.405, y1: -0.05,
-      rx: (v) => lerp(0.042, 0.054, smooth(v)) + Math.sin(v * PI) * 0.006,
-      rz: (v) => lerp(0.042, 0.052, smooth(v)),
-      extra: (th, v) => { const calf = Math.max(0, -Math.cos(th)) * 0.016 * Math.exp(-(((v - 0.68) / 0.22) ** 2)); const shinR = Math.max(0, Math.cos(th)) * 0.004 * Math.exp(-((th / 0.3) ** 2)); return calf + shinR; },
-      nu: 24, nv: 12,
-    });
-    add('shin' + s, 'plate', gr.geo); add('shin' + s, 'trim', edge(gr.fn, 'v1', 0.0045, 22)); add('shin' + s, 'trim', edge(gr.fn, 'v0', 0.004, 22));
+    const gr = fshell(sh, { a0: 0, a1: PI * 2, y0: -0.405, y1: -0.07, off: (a) => 0.012 + Math.max(0, Math.cos(a)) * 0.003 * Math.exp(-((a / 0.3) ** 2)), nu: 28, nv: 14, win: 0.03 });
+    add('shin' + s, 'plate', gr.geo); add('shin' + s, 'trim', edge(gr.fn, 'v1', 0.0045, 26)); add('shin' + s, 'trim', edge(gr.fn, 'v0', 0.004, 26));
     // sabaton: overlapping lames from instep to toe
-    const toeLen = S.pointedToe ? 0.24 : S.bearPaw ? 0.18 : 0.2;
+    const toeLen = S.pointedToe ? 0.25 : S.bearPaw ? 0.19 : 0.21;
     const lames = 6;
     for (let i = 0; i < lames; i++) {
       const t0 = i / lames, t1 = (i + 1.25) / lames;
       const z0 = lerp(-0.02, toeLen, t0), z1 = lerp(-0.02, toeLen, Math.min(1, t1));
       const width = (t) => {
-        if (S.bearPaw) return lerp(0.048, 0.07, smooth(t));
-        if (S.pointedToe) return lerp(0.048, 0.008, Math.pow(t, 1.6));
-        return lerp(0.048, 0.04, t);
+        if (S.bearPaw) return lerp(0.052, 0.074, smooth(t));
+        if (S.pointedToe) return lerp(0.052, 0.008, Math.pow(t, 1.6));
+        return lerp(0.052, 0.042, t);
       };
-      const height = (t) => lerp(0.058, S.pointedToe ? 0.012 : 0.026, smooth(t));
+      const height = (t) => lerp(0.064, S.pointedToe ? 0.012 : 0.026, smooth(t));
       const sab = surf((u, v) => {
         const a = lerp(-1.6, 1.6, u); const z = lerp(z0, z1, v); const t = clamp((z + 0.02) / (toeLen + 0.02), 0, 1);
-        return [Math.sin(a) * width(t), -0.075 + Math.cos(a) * height(t) * (1 - t * 0.2), z];
+        return [Math.sin(a) * width(t), -0.078 + Math.cos(a) * height(t) * (1 - t * 0.2), z];
       }, 12, 2);
       add('foot' + s, 'plate', sab);
     }
-    add('foot' + s, 'leather', xf(new THREE.BoxGeometry(0.1, 0.02, toeLen + 0.08), { p: [0, -0.072, toeLen / 2 - 0.03] })); // sole
-    const heel = shell({ a0: 2.0, a1: PI * 2 - 2.0, y0: -0.07, y1: -0.02, rx: () => 0.046, rz: () => 0.05, nu: 10, nv: 2 });
+    add('foot' + s, 'leather', xf(new THREE.BoxGeometry(0.108, 0.02, toeLen + 0.09), { p: [0, -0.075, toeLen / 2 - 0.035] })); // sole
+    const heel = shell({ a0: 1.9, a1: PI * 2 - 1.9, y0: -0.075, y1: 0.0, rx: () => 0.05, rz: () => 0.056, nu: 12, nv: 2 });
     add('foot' + s, 'plate', heel.geo);
-    add('foot' + s, 'plate', xf(new THREE.CylinderGeometry(0.004, 0.004, 0.05, 4), { p: [0, -0.06, -0.075], r: [PI / 2, 0, 0] })); // spur stub
+    // ankle lames joining greave and sabaton
+    const ank = shell({ a0: 0, a1: PI * 2, y0: -0.01, y1: 0.03, rx: () => 0.052, rz: () => 0.058, cz: 0.004, nu: 18, nv: 2 });
+    add('foot' + s, 'plate', ank.geo);
+    add('foot' + s, 'plate', xf(new THREE.CylinderGeometry(0.004, 0.004, 0.05, 4), { p: [0, -0.06, -0.08], r: [PI / 2, 0, 0] })); // spur stub
   }
   return parts;
 }
@@ -370,21 +429,28 @@ function buildHelm(S, style, add, opts) {
     for (let i = 0; i < 2; i++) { const nl = shell({ a0: 0, a1: PI * 2, y0: -0.06 - i * 0.03, y1: -0.025 - i * 0.03, rx: () => 0.1 + i * 0.006, rz: () => 0.1 + i * 0.006, nu: 24, nv: 2 }); add('head', 'plate', nl.geo); }
   }
   if (plume) {
-    // ostrich-plume: drooping feathers rising from a holder at the back of the helmet
+    // ostrich plume: long feathers rising from a socket at the back of the skull and
+    // arching back over the helmet, each a curved ribbon carrying a feather texture
     const feathers = [];
-    for (let i = 0; i < 5; i++) {
-      const a = (i - 2) * 0.22;
+    const N = 7;
+    for (let i = 0; i < N; i++) {
+      const spread = (i - (N - 1) / 2) / ((N - 1) / 2);
+      const len = 0.5 + (1 - Math.abs(spread)) * 0.16 + (i % 2) * 0.04;
+      const yaw = spread * 0.55, rise = 0.55 - Math.abs(spread) * 0.25, wid = 0.085 + (1 - Math.abs(spread)) * 0.03;
       const g = surf((u, v) => {
-        const len = 0.42 + i % 2 * 0.06; const s = v * len;
-        const x = Math.sin(a) * s * 0.4 + (u - 0.5) * 0.06 * Math.sin(v * PI) * (1 - v * 0.3);
-        const y = Math.sin(v * PI * 0.55) * len * 0.45 - v * v * 0.12;
-        const z = -Math.cos(a) * s * 0.9;
-        return [x, y, z];
-      }, 4, 12);
+        const s = v * len;
+        // the quill rises, arches over and droops behind
+        const ang = rise - v * 1.9 * (0.85 + 0.15 * (i % 3) / 2);
+        let px = 0, py = 0, pz = 0, a = rise;
+        const steps = 12; for (let k = 0; k < steps; k++) { const t = (k + 0.5) / steps * v; a = rise - t * 2.0; px += Math.sin(yaw) * Math.cos(a) * s / steps; py += Math.sin(a) * s / steps; pz -= Math.cos(yaw) * Math.cos(a) * s / steps; }
+        const w = (u - 0.5) * wid * Math.sin(Math.min(1, v * 1.15) * Math.PI * 0.95 + 0.15);
+        // the barbs hang: offset sideways, curled a little downward
+        return [px + Math.cos(yaw) * w, py - Math.abs(w) * 0.35, pz + Math.sin(yaw) * w];
+      }, 4, 14);
       feathers.push(g);
     }
-    add('head', 'plume', xf(mergeGeometries(feathers), { p: [0, 0.22, -0.1] }));
-    add('head', 'brass', xf(new THREE.CylinderGeometry(0.012, 0.008, 0.05, 8), { p: [0, 0.22, -0.11], r: [-0.5, 0, 0] }));
+    add('head', 'plume', xf(mergeGeometries(feathers), { p: [0, 0.2, -0.12] }));
+    add('head', 'brass', xf(new THREE.CylinderGeometry(0.014, 0.009, 0.06, 10), { p: [0, 0.2, -0.125], r: [-0.6, 0, 0] }));
   }
 }
 
@@ -395,7 +461,7 @@ export function harnessMaterials(finish, quality, colors = {}) {
   const F = FINISHES[finish];
   const plate = new THREE.MeshStandardMaterial({
     map: at.map, normalMap: at.normalMap, roughnessMap: at.roughnessMap, metalness: 1, roughness: 1,
-    normalScale: new THREE.Vector2(0.6, 0.6), side: THREE.DoubleSide, envMapIntensity: 1.25,
+    normalScale: new THREE.Vector2(0.6, 0.6), side: THREE.DoubleSide, envMapIntensity: 1.0,
   });
   const gilt = F.gilt;
   const trim = gilt
@@ -410,7 +476,7 @@ export function harnessMaterials(finish, quality, colors = {}) {
   const lt = leatherTextures();
   const leather = new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughness: 0.75, metalness: 0 });
   const dark = new THREE.MeshBasicMaterial({ color: 0x020202 });
-  const plume = new THREE.MeshStandardMaterial({ color: new THREE.Color(...(colors.plume || [0.85, 0.82, 0.78])), roughness: 0.9, side: THREE.DoubleSide });
+  const plume = new THREE.MeshStandardMaterial({ color: new THREE.Color(...(colors.plume || [0.85, 0.82, 0.78])), map: featherTexture(256), alphaTest: 0.32, roughness: 0.85, side: THREE.DoubleSide });
   return { plate, trim, brass, mail, cloth, leather, dark, plume };
 }
 
@@ -434,6 +500,7 @@ export function dressRig(rig, style, finish, quality, colors) {
     if (!geo) continue;
     const mesh = new THREE.Mesh(geo, mats[g.mat]);
     mesh.castShadow = g.mat !== 'dark'; mesh.receiveShadow = true;
+    if (g.mat === 'plume') mesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: mats.plume.map, alphaTest: 0.32 });
     if (g.follow) {
       const fk = `${g.joint}|${g.follow.joint}|${g.follow.k}|${g.follow.pivot.join(',')}`;
       let node = followerNodes.get(fk);

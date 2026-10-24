@@ -1,4 +1,6 @@
 // Boot, menus, lobby and the main loop.
+import { loadBody } from './body.js';
+import { loadDemonBodies } from './horror.js';
 import * as THREE from 'three';
 import { Engine } from './engine.js';
 import { AudioEngine } from './audio.js';
@@ -41,7 +43,7 @@ class Input {
 
 // ---------------------------------------------------------------- app
 const app = {
-  settings: Object.assign({ quality: 'high', sens: 1, fov: 62, invert: false, vol: 0.8, music: 0.65, sfx: 0.9, subs: true }, store.get('evil.settings', {})),
+  settings: Object.assign({ quality: 'high', sens: 1, fov: 62, invert: false, lockKey: 'ctrl', vol: 0.8, music: 0.65, sfx: 0.9, subs: true }, store.get('evil.settings', {})),
   loadout: Object.assign({ style: 'maximilian', finish: 'bright', weapon: 'longsword', relic: 'water', heraldry: 'gules', cape: true, plume: true }, store.get('evil.loadout', {})),
   name: store.get('evil.name', ''),
   game: null, lobby: null,
@@ -59,6 +61,8 @@ async function boot() {
   app.input = new Input(canvas);
   app.input.onLockChange = (l) => { if (app.game && !l && !app.paused && !app.game.cinema.active) $('clickToPlay').hidden = false; if (l) $('clickToPlay').hidden = true; };
   const step = async (frac, msg, fn) => { ui.boot(frac, msg); window.__bootProgress = frac; await new Promise((r) => setTimeout(r, 30)); fn && fn(); };
+  ui.boot(0.08, 'Measuring the knight…'); window.__bootProgress = 0.08;
+  await Promise.all([loadBody(), loadDemonBodies()]);
   await step(0.15, 'Hammering the plate…', () => { for (const f of Object.keys(FINISHES)) armorTextures(f, app.engine.q.tex); });
   await step(0.45, 'Calling up the shadows…', () => prewarmDemons());
   await step(0.6, 'The land dies…', () => buildMenuScene());
@@ -87,6 +91,7 @@ function randomName() { const n = ['Aldric', 'Bertrand', 'Conrad', 'Dietrich', '
 
 // ---------------------------------------------------------------- menu scene
 const menu = { world: null, knight: null, watcher: null, t: 0, focus: 'title' };
+app.menu = menu;
 function buildMenuScene() {
   const e = app.engine;
   menu.world = new World(e, e.q, 0);
@@ -94,14 +99,18 @@ function buildMenuScene() {
   menu.altar = a;
   makeMenuKnight();
   menu.watcher = new Watcher(e.scene, null);
-  const s = menu.world.devilSpots[0];
-  if (s) { menu.watcher.pos.set(s.x, s.y, s.z); menu.watcher.state = 'watch'; menu.watcher.yaw = Math.atan2(a.x - s.x, a.z - s.z); }
+  // for the title he stands nearer than he ever will in play, on a rise beyond the altar
+  const k0 = menu.knight; const fx = Math.sin(k0.yaw), fz = Math.cos(k0.yaw);
+  const wx = a.x + fx * 38 - fz * 9, wz = a.z + fz * 38 + fx * 9;
+  menu.watcher.pos.set(wx, menu.world.groundAt(wx, wz), wz); menu.watcher.state = 'watch'; menu.watcher.yaw = Math.atan2(a.x - wx, a.z - wz);
+  menu.world.vista.onThunder = (str, delay) => app.audio.thunder(str, delay);
+  e.renderer.toneMappingExposure = (menu.world.ch.atmos.exposure || 1) * 1.4;
 }
 function makeMenuKnight() {
   const e = app.engine, a = menu.altar;
   if (menu.knight) menu.knight.dispose();
   const k = menu.knight = new Knight(e.scene, e.q, app.loadout, { id: 0, name: '' });
-  k.pos.set(a.x + 2.2, 0, a.z - 2.6); k.pos.y = menu.world.heightAt(k.pos.x, k.pos.z);
+  k.pos.set(a.x + 0.9, 0, a.z - 2.9); k.pos.y = menu.world.heightAt(k.pos.x, k.pos.z);   // south of the altar, facing north toward the storm
   k.yaw = Math.atan2(a.x - k.pos.x, a.z - k.pos.z);
   k.praying = true; k.kneel = 1; k.prayT = 3;
 }
@@ -123,10 +132,13 @@ function menuUpdate(dt) {
     const want = new THREE.Vector3(p.x + Math.sin(ang) * 3.2, p.y + 1.55, p.z + Math.cos(ang) * 3.2);
     c.position.lerp(want, 1 - Math.exp(-3 * dt)); c.lookAt(p.x, p.y + 1.1, p.z);
   } else {
-    const ang = k.yaw + 2.4 + Math.sin(menu.t * 0.05) * 0.25;
-    const want = new THREE.Vector3(p.x + Math.sin(ang) * 6.5, p.y + 2.2, p.z + Math.cos(ang) * 6.5);
-    c.position.lerp(want, 1 - Math.exp(-1.5 * dt)); c.lookAt(p.x - 1.5, p.y + 1.6, p.z);
+    // behind the kneeling knight's shoulder, looking past him and the altar to the rise where He stands
+    const fx = Math.sin(k.yaw), fz = Math.cos(k.yaw), sway = Math.sin(menu.t * 0.05) * 0.5;
+    const want = new THREE.Vector3(p.x - fx * 4.2 + fz * (1.6 + sway), p.y + 1.25, p.z - fz * 4.2 - fx * (1.6 + sway));
+    c.position.lerp(want, menu.snapped ? 1 - Math.exp(-1.5 * dt) : 1); menu.snapped = true;
+    const w = menu.watcher.pos; c.lookAt(lerp(p.x, w.x, 0.35), p.y + 2.6, lerp(p.z, w.z, 0.35));
   }
+  const gy = menu.world.heightAt(c.position.x, c.position.z) + 0.6; if (c.position.y < gy) c.position.y = gy;
   if (Math.abs(c.fov - 45) > 0.1) { c.fov = 45; c.updateProjectionMatrix(); }
   e.focusShadows(p);
   app.audio.update(dt);
@@ -214,14 +226,14 @@ function setupMenus() {
 }
 function openSettings(ret) {
   const s = app.settings; app.settingsReturn = ret;
-  $('setQuality').value = s.quality; $('setSens').value = s.sens; $('setFov').value = s.fov; $('setInvert').checked = s.invert;
+  $('setQuality').value = s.quality; $('setSens').value = s.sens; $('setFov').value = s.fov; $('setInvert').checked = s.invert; $('setLockKey').value = s.lockKey || 'ctrl';
   $('setVol').value = s.vol; $('setMusic').value = s.music; $('setSfx').value = s.sfx; $('setSubs').checked = s.subs;
   app.ui.show('settings');
 }
 function saveSettings() {
   const s = app.settings;
   const q = $('setQuality').value; const qChanged = q !== s.quality;
-  Object.assign(s, { quality: q, sens: +$('setSens').value, fov: +$('setFov').value, invert: $('setInvert').checked, vol: +$('setVol').value, music: +$('setMusic').value, sfx: +$('setSfx').value, subs: $('setSubs').checked });
+  Object.assign(s, { quality: q, sens: +$('setSens').value, fov: +$('setFov').value, invert: $('setInvert').checked, lockKey: $('setLockKey').value, vol: +$('setVol').value, music: +$('setMusic').value, sfx: +$('setSfx').value, subs: $('setSubs').checked });
   app.ui.subsOn = s.subs; store.set('evil.settings', s);
   app.audio.setVolumes({ master: s.vol, music: s.music, sfx: s.sfx });
   if (qChanged) app.engine.setQuality(q);
@@ -355,7 +367,8 @@ let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   try {
-    if (app.game) app.game.update(dt);
+    if (app.hold) app.hold(dt);
+    else if (app.game) app.game.update(dt);
     else if (menu.world) menuUpdate(dt);
   } catch (err) { console.error(err); showFatal(err); }
   app.input.endFrame();

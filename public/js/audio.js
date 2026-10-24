@@ -191,6 +191,98 @@ const RENDER = {
     const ng = gainEnv(ctx, [[0, 0], [0.002, rim ? 0.9 : 0.8], [rim ? 0.08 : 0.25, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(ctx.destination); n.start();
     return normalize(await ctx.startRendering(), 0.9);
   },
+  // a demon screaming: a torn human voice that climbs from a wail into a shriek,
+  // two throats slightly out of tune, gargling distortion, a rasp of breath
+  async scream(low) {
+    const dur = low ? 2.0 : 1.3 + R() * 0.6; const ctx = off(dur + 0.2);
+    const f0 = low ? 95 + R() * 30 : 210 + R() * 120;
+    const out = gainEnv(ctx, [[0, 0], [0.06, 0.6], [0.22, 1], [dur * 0.75, 0.85], [dur, 0.0001, 'e']]);
+    const ws = ctx.createWaveShaper(); const k = low ? 40 : 14; const curve = new Float32Array(2048); for (let i = 0; i < 2048; i++) { const x = i * 2 / 2048 - 1; curve[i] = (1 + k) * x / (1 + k * Math.abs(x)); } ws.curve = curve;
+    const voice = ctx.createGain(); voice.gain.value = 0.5; voice.connect(ws);
+    for (const det of [1, 1.034, 0.5]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f0 * det, 0); o.frequency.exponentialRampToValueAtTime(f0 * det * (low ? 1.6 : 2.6 + R()), dur * 0.35); o.frequency.exponentialRampToValueAtTime(f0 * det * (low ? 1.3 : 2.1), dur * 0.8); o.frequency.exponentialRampToValueAtTime(f0 * det * 0.8, dur);
+      // vocal fry and break: fast, uneven wobble
+      const j = ctx.createOscillator(); j.type = 'square'; j.frequency.value = 23 + R() * 18; const jg = ctx.createGain(); jg.gain.value = f0 * det * 0.08; j.connect(jg).connect(o.frequency); j.start();
+      const g = ctx.createGain(); g.gain.value = det === 0.5 ? 0.6 : 0.8; o.connect(g).connect(voice); o.start();
+    }
+    // formants morph ah -> eh -> ee as the mouth stretches
+    const fA = VOWELS.ah, fE = VOWELS.eh;
+    for (let i = 0; i < 3; i++) {
+      const b = bp(ctx, fA[i][0] * (low ? 0.75 : 1.25), low ? 5 : 7);
+      b.frequency.setValueAtTime(fA[i][0] * (low ? 0.75 : 1.25), 0); b.frequency.linearRampToValueAtTime(fE[i][0] * (low ? 0.8 : 1.45) * (i === 1 ? 1.25 : 1), dur * 0.5);
+      const g = ctx.createGain(); g.gain.value = [1.6, 1.1, 0.6][i]; ws.connect(b).connect(g).connect(out);
+    }
+    const n = src(ctx, noiseBuf(ctx, dur + 0.2, 'pink')); const nb = bp(ctx, low ? 900 : 3000, 0.7); const ng = gainEnv(ctx, [[0, 0], [0.1, 0.5], [dur, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(out); n.start();
+    out.connect(ctx.destination);
+    return normalize(await ctx.startRendering(), 0.85);
+  },
+  // the head-shaking fit: a gargled stutter in the throat and teeth clattering
+  async chatter() {
+    const dur = 1.2 + R() * 0.6; const ctx = off(dur);
+    const out = ctx.createGain(); out.connect(ctx.destination);
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 120 + R() * 60;
+    const am = ctx.createGain(); am.gain.value = 0;
+    const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 11 + R() * 6; const lg = ctx.createGain(); lg.gain.value = 0.5; lfo.connect(lg).connect(am.gain); lfo.start();
+    const f = bp(ctx, 700, 3); const env = gainEnv(ctx, [[0, 0], [0.05, 1], [dur * 0.8, 0.8], [dur, 0.0001, 'e']]);
+    o.connect(am).connect(f).connect(env).connect(out); o.start();
+    // teeth: tiny bright clicks
+    const n = src(ctx, noiseBuf(ctx, dur)); const hp = filt(ctx, 'highpass', 3500); const cg = ctx.createGain(); cg.gain.setValueAtTime(0, 0);
+    let t = 0.02; while (t < dur - 0.05) { cg.gain.setValueAtTime(0.5 + R() * 0.5, t); cg.gain.setValueAtTime(0, t + 0.004); t += 0.035 + R() * 0.04; }
+    n.connect(hp).connect(cg).connect(out); n.start();
+    return normalize(await ctx.startRendering(), 0.8);
+  },
+  // thunder: a crack, then the long roll across the hills
+  async thunder(near) {
+    const dur = 6 + R() * 2; const ctx = off(dur);
+    const n = src(ctx, noiseBuf(ctx, dur, 'brown')); const lp = filt(ctx, 'lowpass', near ? 900 : 300, 0.5);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, 0);
+    let t = near ? 0.0 : 0.3; const rolls = 4 + Math.floor(R() * 4);
+    for (let i = 0; i < rolls; i++) { const a = (1 - i / rolls) * (0.6 + R() * 0.4); g.gain.linearRampToValueAtTime(a, t + 0.15 + R() * 0.2); t += 0.4 + R() * 0.9; g.gain.linearRampToValueAtTime(a * 0.4, t); }
+    g.gain.linearRampToValueAtTime(0, dur);
+    n.connect(lp).connect(g).connect(ctx.destination); n.start();
+    if (near) { const c = src(ctx, noiseBuf(ctx, 0.5)); const hp = filt(ctx, 'highpass', 1200); const cg = gainEnv(ctx, [[0, 0], [0.005, 1.4], [0.35, 0.0001, 'e']]); c.connect(hp).connect(cg).connect(ctx.destination); c.start(); }
+    return normalize(await ctx.startRendering(), 0.9);
+  },
+  // horror strings: a cluster of high violins bowed hard near the bridge, sliding apart
+  async cluster() {
+    const dur = 6; const ctx = off(dur);
+    const out = gainEnv(ctx, [[0, 0], [1.2, 0.8], [dur - 1.5, 1], [dur, 0]]); out.connect(ctx.destination);
+    const base = 70 + Math.floor(R() * 8);
+    for (let v = 0; v < 10; v++) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; const f = midi(base + v * 0.5 + (R() - 0.5) * 0.3);
+      o.frequency.setValueAtTime(f, 0); o.frequency.linearRampToValueAtTime(f * Math.pow(2, (R() - 0.6) * 0.5), dur);
+      const vib = ctx.createOscillator(); vib.frequency.value = 6 + R() * 3; const vg = ctx.createGain(); vg.gain.value = f * 0.012; vib.connect(vg).connect(o.frequency); vib.start();
+      const g = ctx.createGain(); g.gain.value = 0.12; o.connect(g).connect(out); o.start();
+    }
+    const n = src(ctx, noiseBuf(ctx, dur)); const nb = bp(ctx, 5200, 1.2); const ng = ctx.createGain(); ng.gain.value = 0.25; n.connect(nb).connect(ng).connect(out); n.start();
+    return normalize(await ctx.startRendering(), 0.6);
+  },
+  // the tritone drone: low strings a diabolus apart, beating against each other
+  async drone() {
+    const dur = 9; const ctx = off(dur);
+    const out = gainEnv(ctx, [[0, 0], [2.5, 1], [dur - 2.5, 1], [dur, 0]]); const lp = filt(ctx, 'lowpass', 700, 0.8); lp.connect(out).connect(ctx.destination);
+    for (const [n, a] of [[26, 1], [32, 0.8], [26.08, 0.7], [38, 0.35], [44.1, 0.25]]) { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = midi(n); const g = ctx.createGain(); g.gain.value = a * 0.3; o.connect(g).connect(lp); o.start(); }
+    const sc = src(ctx, noiseBuf(ctx, dur, 'pink')); const sb = bp(ctx, 220, 4); sb.frequency.setValueAtTime(180, 0); sb.frequency.linearRampToValueAtTime(320, dur); const sg = ctx.createGain(); sg.gain.value = 0.5; sc.connect(sb).connect(sg).connect(out); sc.start();
+    return normalize(await ctx.startRendering(), 0.6);
+  },
+  // a breath drawn in behind you, swelling and cut off dead
+  async breath() {
+    const dur = 2.6; const ctx = off(dur);
+    const n = src(ctx, noiseBuf(ctx, dur, 'pink'));
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, 0); g.gain.exponentialRampToValueAtTime(1, dur - 0.08); g.gain.linearRampToValueAtTime(0, dur);
+    const f1 = bp(ctx, 900, 5), f2 = bp(ctx, 2400, 6); f1.frequency.linearRampToValueAtTime(1300, dur); f2.frequency.linearRampToValueAtTime(3000, dur);
+    n.connect(f1).connect(g); n.connect(f2).connect(g); g.connect(ctx.destination); n.start();
+    return normalize(await ctx.startRendering(), 0.7);
+  },
+  // iron dragged on stone, somewhere off in the dark
+  async scrape() {
+    const dur = 2.4 + R(); const ctx = off(dur);
+    const n = src(ctx, noiseBuf(ctx, dur)); const out = gainEnv(ctx, [[0, 0], [0.3, 1], [dur - 0.4, 0.8], [dur, 0]]); out.connect(ctx.destination);
+    for (const [f, q] of [[1800, 25], [2670, 30], [3900, 35], [5100, 30]]) { const b = bp(ctx, f, q); b.frequency.setValueAtTime(f, 0); b.frequency.linearRampToValueAtTime(f * (0.8 + R() * 0.15), dur); const g = ctx.createGain(); g.gain.value = 2.5; n.connect(b).connect(g).connect(out); }
+    const am = ctx.createGain(); n.start();
+    return normalize(await ctx.startRendering(), 0.5);
+  },
 };
 
 // ---------------------------------------------------------------- engine
@@ -219,12 +311,15 @@ export class AudioEngine {
 
   // render the sound library in the background; until each bank is ready the live synths fill in
   async renderLibrary() {
-    const L = this.lib = { swing: [], heavySwing: [], clang: [], cut: [], blunt: [], pierce: [], step: [], screech: [], growl: [], boom: [], bells: {}, choir: {}, strings: {}, spic: {}, brass: {}, drums: {} };
+    const L = this.lib = { swing: [], heavySwing: [], clang: [], cut: [], blunt: [], pierce: [], step: [], screech: [], growl: [], boom: [], scream: [], screamLow: [], chatter: [], thunder: [], thunderNear: [], cluster: [], drone: [], breath: [], scrape: [], bells: {}, choir: {}, strings: {}, spic: {}, brass: {}, drums: {} };
     const tasks = [];
     const to = (arr, fn, n) => { for (let i = 0; i < n; i++) tasks.push(async () => arr.push(await fn())); };
     to(L.step, () => RENDER.step(), 10); to(L.swing, () => RENDER.swing(false), 6); to(L.heavySwing, () => RENDER.swing(true), 4);
     to(L.clang, () => RENDER.clang(), 6); to(L.cut, () => RENDER.flesh('cut'), 4); to(L.blunt, () => RENDER.flesh('blunt'), 4); to(L.pierce, () => RENDER.flesh('pierce'), 3);
     to(L.screech, () => RENDER.screech(false), 8); to(L.growl, () => RENDER.screech(true), 4); to(L.boom, () => RENDER.boom(), 2);
+    to(L.scream, () => RENDER.scream(false), 8); to(L.screamLow, () => RENDER.scream(true), 3); to(L.chatter, () => RENDER.chatter(), 4);
+    to(L.thunder, () => RENDER.thunder(false), 2); to(L.thunderNear, () => RENDER.thunder(true), 2);
+    to(L.cluster, () => RENDER.cluster(), 3); to(L.drone, () => RENDER.drone(), 2); to(L.breath, () => RENDER.breath(), 3); to(L.scrape, () => RENDER.scrape(), 3);
     tasks.push(async () => { L.bells.low = await RENDER.bell(110); }, async () => { L.bells.mid = await RENDER.bell(220); });
     tasks.push(async () => { L.drums.low = await RENDER.drum(55); });
     tasks.push(async () => { L.drums.mid = await RENDER.drum(82); }, async () => { L.drums.rim = await RENDER.drum(0, true); });
@@ -315,6 +410,30 @@ export class AudioEngine {
     this.liveBell(pos, pitch, gain);
   }
   whoosh(pos, pitch = 1, len = 0.6, gain = 0.3) { this.liveWhoosh(pos, gain, len, pitch); }
+  // ---- the horror layer
+  scream(pos, big = false, gain = 0.5, pitch = 1) {
+    const now = performance.now(); if (now - (this.lastScream || 0) < 450) return; this.lastScream = now;
+    if (!this.play(big ? 'screamLow' : 'scream', pos, gain, 0.55, pitch)) this.liveShriek(pos, pitch, 1.0, gain * 0.7);
+  }
+  chatter(pos, gain = 0.4) { const now = performance.now(); if (now - (this.lastChatter || 0) < 600) return; this.lastChatter = now; this.play('chatter', pos, gain, 0.35, 0.9 + R() * 0.25); }
+  thunder(strength = 1, delay = 2) {
+    setTimeout(() => { const near = strength > 0.8; if (!this.play(near ? 'thunderNear' : 'thunder', null, 0.55 * strength, 0.4, 0.85 + R() * 0.3)) this.liveBoom(null, 0.5 * strength); }, delay * 1000);
+  }
+  // unpositioned stingers that live under the music
+  stinger(kind, gain = 0.35) {
+    const list = this.lib && this.lib[kind]; if (!list || !list.length || !this.ctx) return;
+    const buf = list[Math.floor(R() * list.length)];
+    const g = this.ctx.createGain(); g.gain.value = gain; g.connect(this.musicBus);
+    const rs = this.ctx.createGain(); rs.gain.value = 0.6; g.connect(rs); rs.connect(this.revSend);
+    const b = this.ctx.createBufferSource(); b.buffer = buf; b.playbackRate.value = 0.92 + R() * 0.16; b.connect(g); b.start();
+  }
+  // a voice from somewhere out in the dark
+  distant(kind = 'scream') {
+    const a = R() * Math.PI * 2, d = 60 + R() * 70, L = this.listenerPos;
+    const p = { x: L.x + Math.cos(a) * d, y: L.y + 2, z: L.z + Math.sin(a) * d };
+    if (kind === 'scream') this.play(R() < 0.3 ? 'screamLow' : 'scream', p, 1.0, 1.2, 0.8 + R() * 0.3);
+    else this.play(kind, p, 0.9, 1.2);
+  }
 
   liveWhoosh(pos, gain, dur, pitch) {
     const o = this.out(pos, gain, 0.15, dur + 0.1); if (!o) return; const ctx = this.ctx, t = ctx.currentTime;
@@ -472,6 +591,20 @@ class Score {
       // low brass on the downbeat when the battle is fierce
       if ((mood === 'boss' || (mood === 'combat' && I > 0.65)) && L.brass) { this.sample(L.brass, root, '', bar, 0.5, 2.4, 0.05); this.sample(L.brass, fifth, '', bar, 0.35, 2.4, 0.05); }
       if (mood === 'triumph' && this.chordIdx % 2 === 1) this.one(L.bells.mid, bar, 0.25, Math.pow(2, (root + 24 - 57) / 12));
+      // the creeping dread: dissonance under the hymn, gone when the knights pray
+      if (mood === 'dread' || mood === 'combat' || mood === 'boss') {
+        const k = R();
+        if (k < 0.35) this.a.stinger('drone', 0.35);
+        else if (k < 0.6) this.a.stinger('cluster', mood === 'dread' ? 0.22 : 0.3);
+        else if (k < 0.72) this.a.stinger('scrape', 0.18);
+        else if (k < 0.82 && mood === 'dread') this.a.stinger('breath', 0.25);
+        // a semitone grinding against the choir's top note
+        if (mood !== 'boss' && R() < 0.5) this.sample(L.choir, oct + 13, 'oo', bar + spb * 2, 0.12, len - spb * 2, 2.5);
+        if (mood === 'dread' && R() < 0.35) this.a.distant('scream');
+      }
+      if (mood === 'prayer') { // the angelic answer: a high descant over the hymn
+        for (const n of [oct + 24, third + 24]) this.sample(L.choir, n, 'ah', bar + 0.2, 0.18, len, 2.0);
+      }
       this.nextBar += len;
     }
     // drums and spiccato ostinato

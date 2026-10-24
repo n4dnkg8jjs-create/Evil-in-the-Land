@@ -21,8 +21,8 @@ export const SKEL = {
   chest: ['spine', [0, 0.22, 0.0]],
   neck: ['chest', [0, 0.20, -0.01]],
   head: ['neck', [0, 0.10, 0.02]],
-  clavR: ['chest', [-0.04, 0.14, -0.01]], uArmR: ['clavR', [-0.15, 0, 0]], fArmR: ['uArmR', [0, -0.30, 0]], handR: ['fArmR', [0, -0.265, 0]],
-  clavL: ['chest', [0.04, 0.14, -0.01]], uArmL: ['clavL', [0.15, 0, 0]], fArmL: ['uArmL', [0, -0.30, 0]], handL: ['fArmL', [0, -0.265, 0]],
+  clavR: ['chest', [-0.035, 0.13, 0.035]], uArmR: ['clavR', [-0.165, 0, 0]], fArmR: ['uArmR', [0, -0.30, 0]], handR: ['fArmR', [0, -0.265, 0]],
+  clavL: ['chest', [0.035, 0.13, 0.035]], uArmL: ['clavL', [0.165, 0, 0]], fArmL: ['uArmL', [0, -0.30, 0]], handL: ['fArmL', [0, -0.265, 0]],
   thighR: ['hips', [-0.10, -0.06, 0]], shinR: ['thighR', [0, -0.45, 0]], footR: ['shinR', [0, -0.43, 0]],
   thighL: ['hips', [0.10, -0.06, 0]], shinL: ['thighL', [0, -0.45, 0]], footL: ['shinL', [0, -0.43, 0]],
 };
@@ -158,6 +158,21 @@ export class Rig {
     return U;
   }
 
+  // gripArm, then swing the elbow out if the elbow or forearm passes through the
+  // torso (f: torso field, see clearTorso). The hand stays where it is.
+  gripArmClear(side, grip, d, uPref, pole, maxRoll, f) {
+    let U = this.gripArm(side, grip, d, uPref, pole, maxRoll);
+    if (!f) return U;
+    const pl = pole.clone();
+    for (let i = 0; i < 4; i++) {
+      const hit = armInTorso(this, side, f);
+      if (hit.depth < 0.012) break;
+      pl.addScaledVector(hit.dir, 1.2 + i * 0.8).normalize();
+      U = this.gripArm(side, grip, d, uPref, pl, maxRoll);
+    }
+    return U;
+  }
+
   // Keep a weapon within reach of both hands: if a grip point is beyond an
   // arm's reach, the weapon is drawn in toward that shoulder (in place on p).
   fitWeapon(p, d, u, leftGrip) {
@@ -230,6 +245,54 @@ export class Rig {
     const flex = Math.acos(clamp(dirU.dot(dirF), -1, 1));
     sh.quaternion.setFromAxisAngle(_v1.set(1, 0, 0), flex);
   }
+}
+
+// Keep the hands (and the haft between them) out of the body. `f` is a torso
+// cross-section field ({r(th, y), centre(y)} in the chest's frame, see body.js).
+// Each grip point is pushed radially out of the armoured torso; the whole weapon
+// moves with it, so no stance or swing ever drives a fist through the breastplate.
+const _inv = new THREE.Matrix4(), _pt = new THREE.Vector3(), _push = new THREE.Vector3();
+export function clearTorso(rig, p, d, lg, f, margin = 0.09) {
+  if (!f) return p;
+  const chest = rig.j.chest; chest.updateWorldMatrix(true, false);
+  _inv.copy(chest.matrixWorld).invert();
+  for (let it = 0; it < 3; it++) {
+    let best = 0;
+    const n = lg === null || lg === undefined ? 1 : 3;
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0 : (lg * i) / (n - 1);
+      _pt.copy(p).addScaledVector(d, t).applyMatrix4(_inv);
+      if (_pt.y < -0.44 || _pt.y > 0.2) continue;
+      const c = f.centre(_pt.y); const dx = _pt.x - c[0], dz = _pt.z - c[1];
+      const dist = Math.hypot(dx, dz); const th = Math.atan2(dx, dz);
+      const R = f.r(th, _pt.y) + margin;
+      if (dist < R && R - dist > best) { best = R - dist; if (dist > 1e-4) _push.set(dx / dist, 0, dz / dist); else _push.set(0, 0, 1); }
+    }
+    if (best < 0.002) break;
+    _pt.copy(_push).transformDirection(chest.matrixWorld);
+    p.addScaledVector(_pt, best);
+  }
+  return p;
+}
+
+// Deepest point of an arm (elbow, forearm) inside the armoured torso, and the
+// outward direction (world) that would free it.
+const _ae = new THREE.Vector3(), _aw = new THREE.Vector3(), _ap = new THREE.Vector3(), _ad = new THREE.Vector3();
+export function armInTorso(rig, side, f, margin = 0.068) {
+  const chest = rig.j.chest; chest.updateWorldMatrix(true, false);
+  rig.j['hand' + side].updateWorldMatrix(true, false);
+  _inv.copy(chest.matrixWorld).invert();
+  _ae.setFromMatrixPosition(rig.j['fArm' + side].matrixWorld); _aw.setFromMatrixPosition(rig.j['hand' + side].matrixWorld);
+  let depth = 0;
+  for (const t of [0, 0.33, 0.66]) {
+    _ap.copy(_ae).lerp(_aw, t).applyMatrix4(_inv);
+    if (_ap.y < -0.44 || _ap.y > 0.2) continue;
+    const c = f.centre(_ap.y); const dx = _ap.x - c[0], dz = _ap.z - c[1];
+    const dist = Math.hypot(dx, dz), R = f.r(Math.atan2(dx, dz), _ap.y) + margin;
+    if (R - dist > depth) { depth = R - dist; _ad.set(dist > 1e-4 ? dx / dist : 0, 0, dist > 1e-4 ? dz / dist : 1); }
+  }
+  if (depth > 0) _ad.transformDirection(chest.matrixWorld);
+  return { depth, dir: _ad };
 }
 
 // A world/root-space orientation from a weapon axis `d` and edge direction `u`.

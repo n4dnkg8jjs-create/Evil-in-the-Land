@@ -2,8 +2,9 @@
 // combat state machine, two-bone IK for hands, the kneeling prayer with the
 // sign of the cross, and a verlet-simulated cape.
 import * as THREE from 'three';
-import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER } from './rig.js';
+import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER, clearTorso } from './rig.js';
 import { dressRig, STYLES } from './armor.js';
+import { dressBody, field } from './body.js';
 import { buildWeapon, WEAPONS } from './weapons.js';
 import { MOVESETS, COMMON } from './moves.js';
 import { clothTextures } from './textures.js';
@@ -91,74 +92,151 @@ function sampleRange(arr, t0, t1, t) { // root motion speed lookup
 export { compileStance, compileClip, sampleTrack };
 
 // ---------------------------------------------------------------- cape (verlet cloth)
+// A half-cloak gathered at the collar and hung over the pauldrons. The cloth is
+// simulated on a coarse grid that collides with the real torso shape (body.js), the
+// pauldrons and the thighs; it is drawn on a finer, smoothed grid with pleats
+// pressed into it, wool sheen on the outside and a darker lining within.
+const CW = 11, CH = 13, RW = 31, RH = 37;
 class Cape {
-  constructor(color) {
-    this.W = 7; this.H = 11; this.width = 0.46; this.len = 1.12;
-    const N = this.W * this.H;
+  constructor(color, style) {
+    this.len = 1.0; this.top = 0.2; this.hem = 1.25; this.arc = 1.9; this.ps = style?.pauldron || 1;
+    const N = CW * CH;
     this.p = new Float32Array(N * 3); this.o = new Float32Array(N * 3); this.init = false;
-    this.rest = this.len / (this.H - 1); this.restW = this.width / (this.W - 1);
-    const geo = new THREE.PlaneGeometry(this.width, this.len, this.W - 1, this.H - 1);
+    this.rest = this.len / (CH - 1);
+    this.restW = new Float32Array(CH);
+    for (let j = 0; j < CH; j++) this.restW[j] = lerp(this.top * 1.9, this.hem, Math.pow(j / (CH - 1), 0.8)) / (CW - 1);
+    const geo = new THREE.PlaneGeometry(1, 1, RW - 1, RH - 1);
+    const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 3, uv.getY(i) * 3.5);
     this.geo = geo;
     const ct = clothTextures(color, false, 256, 'cape');
-    this.mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: ct.map, normalMap: ct.normalMap, roughness: 0.92, side: THREE.DoubleSide }));
-    this.mesh.castShadow = true; this.mesh.frustumCulled = false;
-    this.anchors = [];
+    const map = ct.map.clone(); map.wrapS = map.wrapT = THREE.RepeatWrapping; map.needsUpdate = true;
+    const nmap = ct.normalMap.clone(); nmap.wrapS = nmap.wrapT = THREE.RepeatWrapping; nmap.needsUpdate = true;
+    const lining = new THREE.Color(color[0] / 255, color[1] / 255, color[2] / 255).multiplyScalar(0.35);
+    const mat = new THREE.MeshPhysicalMaterial({ map, normalMap: nmap, normalScale: new THREE.Vector2(0.35, 0.35), roughness: 0.95, sheen: 1, sheenRoughness: 0.55, sheenColor: new THREE.Color(color[0] / 255, color[1] / 255, color[2] / 255).lerp(new THREE.Color(1, 1, 1), 0.35), side: THREE.DoubleSide });
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uLining = { value: lining };
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uLining;')
+        .replace('#include <map_fragment>', '#include <map_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb = uLining * (0.7 + 0.6 * diffuseColor.g / max(0.05, diffuseColor.r + diffuseColor.g + diffuseColor.b));');
+    };
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.castShadow = true; this.mesh.receiveShadow = true; this.mesh.frustumCulled = false;
+    this.pleat = Array.from({ length: RW }, (_, i) => Math.sin(i / (RW - 1) * Math.PI * 7) * 0.5 + Math.sin(i / (RW - 1) * Math.PI * 11 + 1.3) * 0.25);
+    this._m = new THREE.Matrix4(); this._mi = new THREE.Matrix4();
+  }
+  anchor(i, out, chestM) {
+    const u = i / (CW - 1) - 0.5, th = Math.PI + u * this.arc * 2;   // around the back of the collar
+    const f = field('torso');
+    const y = 0.215;
+    let x, z;
+    if (f) { const c = f.centre(0.16); const r = f.r(th, 0.16) * 0.78 + 0.05; x = c[0] + Math.sin(th) * r; z = c[1] + Math.cos(th) * r; }
+    else { x = Math.sin(th) * 0.16; z = Math.cos(th) * 0.12; }
+    return out.set(x, y, z).applyMatrix4(chestM);
   }
   update(dt, rig, wind, groundY) {
-    const chest = rig.j.chest, hips = rig.j.hips;
-    chest.updateWorldMatrix(true, false);
-    const W = this.W, H = this.H, p = this.p, o = this.o;
-    const tmp = new THREE.Vector3();
-    // anchors along the top, tucked under the pauldrons at the back
-    for (let i = 0; i < W; i++) {
-      const u = i / (W - 1) - 0.5;
-      tmp.set(u * this.width * 0.95, 0.15 - Math.abs(u) * 0.04, -0.13 - (0.25 - u * u) * 0.08).applyMatrix4(chest.matrixWorld);
-      if (!this.init) for (let j = 0; j < H; j++) { const k = (j * W + i) * 3; p[k] = tmp.x; p[k + 1] = tmp.y - j * this.rest; p[k + 2] = tmp.z; o[k] = p[k]; o[k + 1] = p[k + 1]; o[k + 2] = p[k + 2]; }
+    const chest = rig.j.chest; chest.updateWorldMatrix(true, false);
+    const p = this.p, o = this.o;
+    const tmp = _a, d = _b;
+    for (let i = 0; i < CW; i++) {
+      this.anchor(i, tmp, chest.matrixWorld);
+      if (!this.init) {
+        const out = tmp.clone().sub(_c.setFromMatrixPosition(chest.matrixWorld)).setY(0).normalize();
+        for (let j = 0; j < CH; j++) { const k = (j * CW + i) * 3; const sp = j * 0.03; p[k] = o[k] = tmp.x + out.x * sp; p[k + 1] = o[k + 1] = tmp.y - j * this.rest; p[k + 2] = o[k + 2] = tmp.z + out.z * sp; }
+      }
       const k = i * 3; p[k] = o[k] = tmp.x; p[k + 1] = o[k + 1] = tmp.y; p[k + 2] = o[k + 2] = tmp.z;
     }
     this.init = true;
     dt = Math.min(dt, 1 / 30);
-    const g = -9.8 * dt * dt, damping = 0.985;
-    for (let j = 1; j < H; j++) for (let i = 0; i < W; i++) {
-      const k = (j * W + i) * 3;
+    const g = -9.8 * dt * dt, damping = 0.975, t = performance.now() * 0.001;
+    for (let j = 1; j < CH; j++) for (let i = 0; i < CW; i++) {
+      const k = (j * CW + i) * 3;
       const vx = (p[k] - o[k]) * damping, vy = (p[k + 1] - o[k + 1]) * damping, vz = (p[k + 2] - o[k + 2]) * damping;
       o[k] = p[k]; o[k + 1] = p[k + 1]; o[k + 2] = p[k + 2];
-      const flutter = Math.sin(performance.now() * 0.004 + i + j * 0.7) * 0.4 + 0.6;
-      p[k] += vx + wind.x * dt * dt * flutter; p[k + 1] += vy + g; p[k + 2] += vz + wind.z * dt * dt * flutter;
+      const gust = (Math.sin(t * 2.3 + i * 0.6 + j * 0.45) * 0.5 + 0.7) * (j / CH);
+      p[k] += vx + wind.x * dt * dt * gust * 1.6; p[k + 1] += vy + g; p[k + 2] += vz + wind.z * dt * dt * gust * 1.6;
     }
-    // body collider: a capsule from hips to chest, plus a slab behind the back
-    hips.updateWorldMatrix(true, false);
-    const a = new THREE.Vector3().setFromMatrixPosition(hips.matrixWorld), b = new THREE.Vector3().setFromMatrixPosition(chest.matrixWorld);
-    a.y -= 0.35;
-    const back = new THREE.Vector3(0, 0, -1).applyQuaternion(chest.getWorldQuaternion(new THREE.Quaternion()));
-    const ab = b.clone().sub(a); const abl = ab.lengthSq();
-    for (let it = 0; it < 4; it++) {
-      for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-        const k = (j * W + i) * 3;
-        if (i < W - 1) this.link(k, k + 3, this.restW);
-        if (j < H - 1) this.link(k, k + W * 3, this.rest);
-        if (i < W - 1 && j < H - 1) this.link(k, k + W * 3 + 3, Math.hypot(this.rest, this.restW));
+    // colliders, in the chest's frame: the torso outline, the pauldrons; thighs in world
+    this._m.copy(chest.matrixWorld); this._mi.copy(this._m).invert();
+    const f = field('torso');
+    const thR = rig.j.thighR, thL = rig.j.thighL, shR = rig.j.shinR, shL = rig.j.shinL;
+    thR.updateWorldMatrix(true, false); thL.updateWorldMatrix(true, false); shR.updateWorldMatrix(true, false); shL.updateWorldMatrix(true, false);
+    const legs = [[_d.setFromMatrixPosition(thR.matrixWorld).clone(), _d.setFromMatrixPosition(shR.matrixWorld).clone()], [_d.setFromMatrixPosition(thL.matrixWorld).clone(), _d.setFromMatrixPosition(shL.matrixWorld).clone()]];
+    const SH = 0.035 + 0.165;
+    for (let it = 0; it < 5; it++) {
+      for (let j = 0; j < CH; j++) for (let i = 0; i < CW; i++) {
+        const k = (j * CW + i) * 3;
+        if (i < CW - 1) this.link(k, k + 3, (this.restW[j]));
+        if (j < CH - 1) this.link(k, k + CW * 3, this.rest);
+        if (i < CW - 1 && j < CH - 1) this.link(k, k + CW * 3 + 3, Math.hypot(this.rest, (this.restW[j] + this.restW[j + 1]) / 2));
+        if (j < CH - 2) this.link(k, k + CW * 6, this.rest * 2, 0.35);   // bend resistance
       }
-      for (let j = 1; j < H; j++) for (let i = 0; i < W; i++) {
-        const k = (j * W + i) * 3;
-        tmp.set(p[k], p[k + 1], p[k + 2]);
-        let t = abl ? clamp(tmp.clone().sub(a).dot(ab) / abl, 0, 1) : 0;
-        const c = a.clone().addScaledVector(ab, t);
-        const d = tmp.clone().sub(c); const r = 0.22; const dl = d.length();
-        if (dl < r && dl > 1e-5) { d.multiplyScalar(r / dl); p[k] = c.x + d.x; p[k + 1] = c.y + d.y; p[k + 2] = c.z + d.z; }
-        if (p[k + 1] < groundY + 0.02) p[k + 1] = groundY + 0.02;
+      for (let j = 1; j < CH; j++) for (let i = 0; i < CW; i++) {
+        const k = (j * CW + i) * 3;
+        tmp.set(p[k], p[k + 1], p[k + 2]).applyMatrix4(this._mi);
+        let moved = false;
+        // torso + harness
+        if (tmp.y > -0.62 && tmp.y < 0.24) {
+          const yl = clamp(tmp.y, -0.42, 0.2);
+          const c = f ? f.centre(yl) : [0, 0.05];
+          const dx = tmp.x - c[0], dz = tmp.z - c[1];
+          const th = Math.atan2(dx, dz);
+          const R = (f ? f.r(th, yl) : 0.15) + (tmp.y < -0.22 ? 0.12 : 0.05);
+          const dl = Math.hypot(dx, dz);
+          if (dl < R && dl > 1e-5) { tmp.x = c[0] + dx * R / dl; tmp.z = c[1] + dz * R / dl; moved = true; }
+        }
+        // pauldrons
+        for (const sx of [-1, 1]) {
+          d.set(tmp.x - sx * SH, tmp.y - 0.165, tmp.z - 0.03);
+          const R = 0.13 * this.ps, dl = d.length();
+          if (dl < R && dl > 1e-5) { tmp.set(sx * SH, 0.165, 0.03).addScaledVector(d, R / dl); moved = true; }
+        }
+        if (moved) tmp.applyMatrix4(this._m); else tmp.set(p[k], p[k + 1], p[k + 2]);
+        // thighs (capsules)
+        for (const [a, b] of legs) {
+          d.subVectors(b, a); const L2 = d.lengthSq();
+          const s = clamp(_c.subVectors(tmp, a).dot(d) / L2, 0, 1);
+          _c.copy(a).addScaledVector(d, s); const e = tmp.clone().sub(_c); const el = e.length(); const R = 0.13;
+          if (el < R && el > 1e-5) tmp.copy(_c).addScaledVector(e, R / el);
+        }
+        if (tmp.y < groundY + 0.03) tmp.y = groundY + 0.03;
+        p[k] = tmp.x; p[k + 1] = tmp.y; p[k + 2] = tmp.z;
       }
-      for (let i = 0; i < W; i++) { const k = i * 3; tmp.set(0.0, 0, 0); } // anchors fixed
     }
-    const pos = this.geo.attributes.position;
-    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) { const k = (j * W + i) * 3; pos.setXYZ(j * W + i, p[k], p[k + 1], p[k + 2]); }
-    pos.needsUpdate = true; this.geo.computeVertexNormals(); this.geo.computeBoundingSphere();
+    this.draw();
   }
-  link(a, b, rest) {
+  // smooth the coarse cloth onto the render grid and press in the pleats
+  draw() {
+    const p = this.p, pos = this.geo.attributes.position;
+    const node = (i, j, c) => p[(clamp(j, 0, CH - 1) * CW + clamp(i, 0, CW - 1)) * 3 + c];
+    const cr = (a, b, c, d, t) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (-a + 3 * b - 3 * c + d) * t * t * t);
+    for (let rj = 0; rj < RH; rj++) {
+      const fj = rj / (RH - 1) * (CH - 1), j = Math.min(CH - 2, Math.floor(fj)), tj = fj - j;
+      for (let ri = 0; ri < RW; ri++) {
+        const fi = ri / (RW - 1) * (CW - 1), i = Math.min(CW - 2, Math.floor(fi)), ti = fi - i;
+        for (let c = 0; c < 3; c++) {
+          const row = (jj) => cr(node(i - 1, jj, c), node(i, jj, c), node(i + 1, jj, c), node(i + 2, jj, c), ti);
+          const v = cr(row(j - 1), row(j), row(j + 1), row(j + 2), tj);
+          if (c === 0) pos.setX(rj * RW + ri, v); else if (c === 1) pos.setY(rj * RW + ri, v); else pos.setZ(rj * RW + ri, v);
+        }
+      }
+    }
+    this.geo.computeVertexNormals();
+    const nrm = this.geo.attributes.normal;
+    for (let rj = 1; rj < RH; rj++) {
+      const depth = 0.028 * Math.pow(rj / (RH - 1), 0.6);
+      for (let ri = 0; ri < RW; ri++) {
+        const q = rj * RW + ri, a = this.pleat[ri] * depth;
+        pos.setXYZ(q, pos.getX(q) + nrm.getX(q) * a, pos.getY(q) + nrm.getY(q) * a, pos.getZ(q) + nrm.getZ(q) * a);
+      }
+    }
+    pos.needsUpdate = true; this.geo.computeVertexNormals();
+  }
+  link(a, b, rest, stiff = 1) {
     const p = this.p;
     const dx = p[b] - p[a], dy = p[b + 1] - p[a + 1], dz = p[b + 2] - p[a + 2];
-    const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6; const diff = (d - rest) / d;
-    const W3 = this.W * 3;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+    if (stiff < 1 && d > rest) return;   // bending links only push apart
+    const diff = (d - rest) / d * stiff;
+    const W3 = CW * 3;
     const fa = a < W3 ? 0 : 0.5, fb = b < W3 ? 0 : 0.5; const tot = fa + fb || 1;
     const ka = fa / tot, kb = fb / tot;
     p[a] += dx * diff * ka; p[a + 1] += dy * diff * ka; p[a + 2] += dz * diff * ka;
@@ -179,11 +257,12 @@ export class Knight {
     this.rig = new Rig(opts.scale || 1);
     this.dress = dressRig(this.rig, loadout.style, loadout.finish, quality, { cloth: her.cloth, plume: loadout.plume === false ? null : her.plume });
     this.group = this.rig.root;
+    this.body = dressBody(this.rig, her.cloth, quality);
     scene.add(this.group);
     this.weapon = buildWeapon(loadout.weapon, quality);
     scene.add(this.weapon);
     if (this.wdef.buckler) { this.buckler = buildWeapon('buckler', quality); this.rig.j.handL.add(this.buckler); this.buckler.position.set(0, -0.06, 0); }
-    if (loadout.cape) { this.cape = new Cape(her.cloth); scene.add(this.cape.mesh); }
+    if (loadout.cape) { this.cape = new Cape(her.cloth, this.style); scene.add(this.cape.mesh); }
     // compiled animation
     const ms = MOVESETS[loadout.weapon];
     this.st = compileStance(ms, loadout.weapon);
@@ -386,6 +465,9 @@ export class Knight {
     if (!this.action || this.actT < 0.08) {
       if (this.blocking || (this.action && (this.actKind === 'light' || this.actKind === 'heavy'))) {
         this.yaw = dampAngle(this.yaw, input.aimYaw ?? this.yaw, this.action ? 30 : 14, dt);
+      } else if (input.lock && !this.praying && !this.downed && !(this.action && this.actKind === 'roll')) {
+        // shift lock: face where the camera looks and strafe
+        this.yaw = dampAngle(this.yaw, input.aimYaw ?? this.yaw, 16, dt);
       } else if (moving > 0.1 && !this.praying) {
         this.yaw = dampAngle(this.yaw, Math.atan2(input.mx, input.mz), input.sprint ? 7 : 11, dt);
       }
@@ -593,6 +675,7 @@ export class Knight {
         lgFit = this.leftGripS;
       }
       this.rig.fitWeapon(wp, wd, wu, lgFit);
+      clearTorso(this.rig, wp, wd, this.wdef.twoHanded && !freeLeft ? lgFit : null, field('torso'));
     }
     weaponQuatFrom(wd, wu, _wq);
     if (!ikOff && !this.downed) {
@@ -602,18 +685,18 @@ export class Knight {
       if (crossR) {
         this.rig.solveArm('R', crossR.wrist, crossR.pole, crossR.q);
       } else {
-        this.rig.gripArm('R', wp, wd, wu, dirWorld(PO[0], PO[1], PO[2], _c), roll[0] * D2R);
+        this.rig.gripArmClear('R', wp, wd, wu, dirWorld(PO[0], PO[1], PO[2], _c), roll[0] * D2R, field('torso'));
       }
       // left hand: on the haft / hilt, or free (buckler, relic)
       if (this.wdef.twoHanded && !freeLeft) {
         const lg = this.kneel > 0.3 ? this.plantedSpec().lg : (this.leftGripS ?? this.wdef.leftGrip);
         const g = _b.copy(wp).addScaledVector(wd, lg);
-        this.rig.gripArm('L', g, wd, wu, dirWorld(PO[3], PO[4], PO[5], _c), roll[1] * D2R);
+        this.rig.gripArmClear('L', g, wd, wu, dirWorld(PO[3], PO[4], PO[5], _c), roll[1] * D2R, field('torso'));
       } else if (hasL || freeLeft) {
         const lp = toWorld(Lh[0], Lh[1], Lh[2], new THREE.Vector3());
         const ld = dirWorld(Lh[3], Lh[4], Lh[5], new THREE.Vector3()).normalize(); const lu = dirWorld(Lh[6], Lh[7], Lh[8], new THREE.Vector3());
         if (this.kneel > 0.3 && !this.wdef.twoHanded) { const ps = this.plantedSpec(); toWorld(...ps.lp, lp); }
-        this.rig.gripArm('L', lp, ld, lu, dirWorld(PO[3], PO[4], PO[5], _c), (freeLeft ? 60 : roll[1]) * D2R);
+        this.rig.gripArmClear('L', lp, ld, lu, dirWorld(PO[3], PO[4], PO[5], _c), (freeLeft ? 60 : roll[1]) * D2R, field('torso'));
       }
     }
     // smooth arm transitions (IK <-> keyed arms)

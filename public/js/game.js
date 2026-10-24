@@ -24,6 +24,12 @@ export class Game {
     this.fx = new FX(this.scene, this.engine.q);
     this.cinema = new Cinema(this.engine, this.ui);
     this.horde = new Horde(this.scene); this.horde.onDeath = (d) => this.demonDeathFx(d);
+    // fits of head-shaking, with the gargling and the scream
+    this.horde.onScream = (d) => {
+      const p = V(d.pos.x, d.pos.y + d.def.height * 0.85, d.pos.z);
+      this.audio.chatter(p, 0.45);
+      if (R() < 0.55) this.audio.scream(p, !!d.def.big, 0.5, { crawler: 1.25, wraith: 1.15, husk: 0.8, brute: 0.7 }[d.type] || 1);
+    };
     this.knights = new Map(); this.companions = []; this.trails = new Map();
     this.cam = { yaw: 0, pitch: 0.22, dist: 4.4, targetDist: 4.4, pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: app.settings.fov || 62 };
     this.time = 0; this.netT = 0; this.snapT = 0; this.paused = false; this.stats = { kills: 0, start: performance.now() };
@@ -60,6 +66,7 @@ export class Game {
     if (this.watcher) { this.scene.remove(this.watcher.mesh); this.watcher = null; }
     this.crevices = null;
     this.world = new World(this.engine, this.engine.q, n);
+    if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
     if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); if (ch.devil.army) this.watcher.mode = 'army'; }
@@ -185,6 +192,13 @@ export class Game {
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
+    // the sky answers the land beneath you: blue over living country, ember-red in the blight
+    if (this.world) {
+      const life = this.world.lifeAt(this.me.pos.x, this.me.pos.z);
+      const target = Math.max(this.world.healedFrac * 0.3, life * 0.8);
+      this.atmosF = this.atmosF === undefined ? target : damp(this.atmosF, target, 0.6, dt);
+      if (Math.abs(this.atmosF - (this.atmosShown ?? -1)) > 0.01) { const env = Math.abs(this.atmosF - (this.atmosEnvF ?? -1)) > 0.12; this.blendAtmosphere(this.atmosF, env); this.atmosShown = this.atmosF; if (env) this.atmosEnvF = this.atmosF; }
+    }
     this.fx.update(dt);
     this.fx.ambient(dt, camPos, CHAPTERS[this.chapterIdx]?.ambient || 'ash', 1);
     if (this.world && this.world.fires.length && R() < 0.8) { const f = this.world.fires[Math.floor(R() * this.world.fires.length)]; if ((f.x - camPos.x) ** 2 + (f.z - camPos.z) ** 2 < 80 * 80) { this.fx.glow.emit({ x: f.x + (R() - 0.5) * f.s, y: f.y + 0.2, z: f.z + (R() - 0.5) * f.s, vy: 1.5 + R() * 2, color: [1, 0.45, 0.1], size: 0.5 * f.s, grow: 0.8, life: 0.6 + R() * 0.5, cell: 3, spin: 2 }); if (R() < 0.3) this.fx.smoke.emit({ x: f.x, y: f.y + 1.2, z: f.z, vy: 1.4, color: [0.06, 0.05, 0.05], a: 0.5, size: 0.9, grow: 1.5, life: 3, drag: 0.4, cell: 0 }); } }
@@ -213,8 +227,17 @@ export class Game {
     const mx = fz * s + fx * c, mz = fz * c - fx * s;
     let aim = this.cam.yaw;
     const attack = I.pressed('Mouse0'), heavy = I.pressed('Mouse2');
-    if (attack || heavy) aim = this.softAim(aim);
-    return { mx, mz, aimYaw: aim, sprint: I.held('ShiftLeft') || I.held('ShiftRight'), block: I.held('KeyQ') || I.held('Mouse3'), pray: I.held('KeyE'), attack, heavy, dodge: I.pressed('Space'), relic: I.pressed('KeyR') };
+    // shift lock: one key toggles; the other runs
+    const lk = this.app.settings.lockKey;
+    const lockKeys = lk === 'caps' ? ['CapsLock'] : lk === 'tab' ? ['Tab'] : ['ControlLeft', 'ControlRight'];
+    const runKeys = ['ShiftLeft', 'ShiftRight'];
+    if (lockKeys.some((k) => I.pressed(k))) {
+      this.shiftLock = !this.shiftLock; this.ui.toast(this.shiftLock ? 'Shift lock on' : 'Shift lock off', 1.2);
+      const ind = document.getElementById('lockInd'); if (ind) ind.hidden = !this.shiftLock;
+      document.getElementById('hud')?.classList.toggle('locked', !!this.shiftLock);
+    }
+    if ((attack || heavy) && !this.shiftLock) aim = this.softAim(aim);
+    return { mx, mz, aimYaw: aim, lock: !!this.shiftLock, sprint: runKeys.some((k) => I.held(k)), block: I.held('KeyQ') || I.held('Mouse3'), pray: I.held('KeyE'), attack, heavy, dodge: I.pressed('Space'), relic: I.pressed('KeyR') };
   }
   // gentle aim assist toward the most threatening demon in front
   softAim(yaw) {
@@ -256,6 +279,8 @@ export class Game {
     if (I.wheel) { c.targetDist = clamp(c.targetDist + I.wheel * 0.004, 2.6, 8); }
     const k = this.me;
     let dist = c.targetDist, height = 1.65, shoulder = 0.55;
+    this.lockW = damp(this.lockW || 0, this.shiftLock && !k.praying && !k.downed ? 1 : 0, 6, dt);
+    shoulder = lerp(shoulder, 0.85, this.lockW); dist = lerp(dist, Math.min(dist, 4.2), this.lockW); height = lerp(height, 1.75, this.lockW);
     if (this.boss && this.boss.alive) dist += this.boss.kind === 'dragon' ? 3 : 1.5;
     if (k.kneel > 0.2) { dist = lerp(dist, 3.2, k.kneel); height = lerp(height, 1.2, k.kneel); }
     if (k.downed) { dist = 5.5; height = 2.5; }
@@ -760,8 +785,8 @@ export class Game {
     if (a.type === 'boss') return;
     const pitch = { shade: 1.3, crawler: 1.8, wretch: 1.1, husk: 0.7, brute: 0.5, wraith: 1.5, herald: 1.0 }[a.type] || 1;
     switch (a.kind) {
-      case 'windup': if (R() < 0.5) this.audio.shriek(p, pitch, 0.35, 0.22); break;
-      case 'leap': this.audio.shriek(p, pitch * 1.1, 0.45, 0.3); break;
+      case 'windup': if (R() < 0.6) this.audio.scream(p, pitch < 0.8, 0.45, pitch * 0.85); else this.audio.shriek(p, pitch, 0.35, 0.22); break;
+      case 'leap': this.audio.scream(p, pitch < 0.8, 0.55, pitch); break;
       case 'cast': this.audio.whisper(p, 0.9, 0.35); break;
       case 'inflate': this.audio.growl(p, 1.6, 1.1, 0.5); break;
       case 'roar': this.audio.roar(p, 0.6, 1.4); break;
@@ -793,17 +818,17 @@ export class Game {
     this.ui.subtitle(PRAYERS[5], 5);
     // every knight is healed; the fallen rise
     for (const k of this.knightList) if (this.owns(k)) { if (k.downed) this.reviveKnight(k); k.hp = k.maxHp; }
-    // the sky lightens a little with every altar
-    this.blendAtmosphere(this.world.healedFrac * 0.3);
+    // the sky lightens a little with every altar (eased in by the frame loop)
+    this.atmosEnvF = -1;
   }
-  blendAtmosphere(f) {
+  blendAtmosphere(f, env = true) {
     const base = CHAPTERS[this.chapterIdx].atmos; const mix = {};
     for (const key in base) {
       if (HEALED[key] !== undefined && typeof base[key] === 'number' && key !== 'cover' && key !== 'sunIntensity' && key !== 'hemiIntensity' && key !== 'fogDensity' && key !== 'exposure' && key !== 'fillIntensity' && key !== 'sunSize') mix[key] = new THREE.Color(base[key]).lerp(new THREE.Color(HEALED[key]), f).getHex();
       else mix[key] = base[key];
     }
     mix.fogDensity = base.fogDensity * (1 - f * 0.4); mix.cover = base.cover * (1 - f * 0.4);
-    this.engine.setAtmosphere(mix); this.fx.setFog(this.scene.fog);
+    this.engine.setAtmosphere(mix, env); this.fx.setFog(this.scene.fog);
   }
   playOutro(n) {
     const ch = CHAPTERS[n]; const w = this.world; const last = w.altars[w.altars.length - 1];

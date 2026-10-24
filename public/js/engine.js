@@ -72,7 +72,8 @@ export function makeSky() {
         col = mix(uBottom, col, smoothstep(-0.25, 0.02, h));
         float sd = max(dot(d, uSunDir), 0.0);
         col += uGlow * pow(sd, 6.0) * 0.9 + uGlow * (1.0 - abs(h)) * 0.25;
-        col += uSunColor * smoothstep(1.0 - uSunSize, 1.0 - uSunSize * 0.6, sd) * 3.0;
+        col += uSunColor * smoothstep(1.0 - uSunSize, 1.0 - uSunSize * 0.5, sd) * 3.0;
+        col += uSunColor * pow(sd, 900.0) * 0.8;
         col += uSunColor * pow(sd, 120.0) * 1.2;
         if (h > -0.05) {
           vec2 uv = d.xz / (h + 0.18) * 1.4;
@@ -102,7 +103,7 @@ export class Engine {
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.PCFSoftShadowMap;
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1200);
+    this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
     this.scene.add(this.camera);
     this.time = 0;
     this.fx = { hurt: 0, holy: 0, desat: 0, flash: 0, shake: 0, shakeT: 0, tint: new THREE.Color(1, 1, 1), lift: new THREE.Color(0, 0, 0) };
@@ -148,7 +149,7 @@ export class Engine {
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
     if (q.bloom) {
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.55, 0.6, 0.82);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.5, 0.55, 1.25);
       this.composer.addPass(this.bloom);
     } else this.bloom = null;
     this.grade = new ShaderPass(GradeShader);
@@ -164,11 +165,11 @@ export class Engine {
   }
 
   // Apply a chapter's look
-  setAtmosphere(a) {
+  setAtmosphere(a, env = true) {
     const u = this.sky.uniforms;
     u.uTop.value.set(a.skyTop); u.uMid.value.set(a.skyMid); u.uBottom.value.set(a.skyBottom);
     u.uSunColor.value.set(a.sunColor); u.uCloud.value.set(a.cloud); u.uCloudLit.value.set(a.cloudLit);
-    u.uGlow.value.set(a.glow); u.uCover.value = a.cover; u.uSunSize.value = a.sunSize ?? 0.03;
+    u.uGlow.value.set(a.glow); u.uCover.value = a.cover; u.uSunSize.value = a.sunSize ?? 0.0009;
     this.sunDir.set(a.sunDir[0], a.sunDir[1], a.sunDir[2]).normalize();
     u.uSunDir.value.copy(this.sunDir);
     this.sun.color.set(a.sunLight); this.sun.intensity = a.sunIntensity;
@@ -177,7 +178,7 @@ export class Engine {
     this.scene.fog.color.set(a.fog); this.scene.fog.density = a.fogDensity;
     this.renderer.toneMappingExposure = a.exposure ?? 1.0;
     this.baseAtmos = a;
-    this.buildEnvironment();
+    if (env) this.buildEnvironment();
   }
 
   // Reflection environment for metal: render the sky into a PMREM cube.

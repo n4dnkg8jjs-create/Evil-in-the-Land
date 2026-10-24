@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { demonTextures } from './textures.js';
+import { buildHorror, ANIM, horrorTick } from './horror.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, makeNoise, TAU, SpatialHash, rng } from './util.js';
 
 const D2R = Math.PI / 180;
@@ -11,13 +12,13 @@ const R = Math.random;
 
 // ---------------------------------------------------------------- type table
 export const TYPES = {
-  shade:   { name: 'Shade',   rarity: 'common',   hp: 45,  speed: 6.0, radius: 0.45, height: 2.0, dmg: 9,  range: 1.9, cd: 1.3, mass: 1, rim: 0xb0201a, eye: 0xffe0a0, score: 1, stagger: 1 },
-  crawler: { name: 'Crawler', rarity: 'common',   hp: 28,  speed: 7.6, radius: 0.5,  height: 0.9, dmg: 7,  range: 1.6, cd: 1.1, mass: 0.7, rim: 0x7a2ab0, eye: 0xff4030, score: 1, stagger: 1 },
-  wretch:  { name: 'Wretch',  rarity: 'uncommon', hp: 55,  speed: 4.4, radius: 0.45, height: 1.7, dmg: 12, range: 20, cd: 3.2, mass: 1, rim: 0x4a8a2a, eye: 0xb0ff60, score: 2, stagger: 1, ranged: true },
-  husk:    { name: 'Husk',    rarity: 'uncommon', hp: 70,  speed: 3.2, radius: 0.7,  height: 1.6, dmg: 32, range: 2.4, cd: 1, mass: 1.6, rim: 0xd06010, eye: 0xffa040, score: 2, stagger: 0.6 },
-  brute:   { name: 'Brute',   rarity: 'rare',     hp: 420, speed: 3.9, radius: 1.0,  height: 3.1, dmg: 26, range: 3.2, cd: 2.4, mass: 5, rim: 0xff1a10, eye: 0xff6020, score: 8, stagger: 0.25, big: true },
-  wraith:  { name: 'Wraith',  rarity: 'rare',     hp: 140, speed: 5.0, radius: 0.5,  height: 2.4, dmg: 14, range: 16, cd: 4.5, mass: 0.8, rim: 0x80a0ff, eye: 0xd0e8ff, score: 5, stagger: 0.7, ranged: true, floats: 0.5 },
-  herald:  { name: 'Herald',  rarity: 'very rare', hp: 260, speed: 7.0, radius: 0.8,  height: 2.4, dmg: 22, range: 2.6, cd: 3.5, mass: 2, rim: 0xffa020, eye: 0xffd060, score: 10, stagger: 0.5, flies: 6 },
+  shade:   { name: 'Shade',   rarity: 'common',   hp: 45,  speed: 6.0, radius: 0.45, height: 2.05, dmg: 9,  range: 1.9, cd: 1.3, mass: 1, rim: 0x8a1410, score: 1, stagger: 1 },
+  crawler: { name: 'Crawler', rarity: 'common',   hp: 28,  speed: 7.6, radius: 0.55, height: 0.9, dmg: 7,  range: 1.6, cd: 1.1, mass: 0.7, rim: 0x5a1a80, score: 1, stagger: 1 },
+  wretch:  { name: 'Wretch',  rarity: 'uncommon', hp: 55,  speed: 4.4, radius: 0.45, height: 1.6, dmg: 12, range: 20, cd: 3.2, mass: 1, rim: 0x3a7a20, score: 2, stagger: 1, ranged: true, robe: true },
+  husk:    { name: 'Husk',    rarity: 'uncommon', hp: 70,  speed: 3.2, radius: 0.7,  height: 1.7, dmg: 32, range: 2.4, cd: 1, mass: 1.6, rim: 0xc05010, score: 2, stagger: 0.6, boils: true, skin: 0x1c1612 },
+  brute:   { name: 'Brute',   rarity: 'rare',     hp: 420, speed: 3.9, radius: 1.0,  height: 2.9, dmg: 26, range: 3.2, cd: 2.4, mass: 5, rim: 0xd01a10, score: 8, stagger: 0.25, big: true, horns: [0.62, 0.06, 2.3], spikes: true },
+  wraith:  { name: 'Wraith',  rarity: 'rare',     hp: 140, speed: 5.0, radius: 0.55, height: 2.2, dmg: 14, range: 16, cd: 4.5, mass: 0.8, rim: 0x6080d0, score: 5, stagger: 0.7, ranged: true, wings: 1.7 },
+  herald:  { name: 'Herald',  rarity: 'very rare', hp: 260, speed: 7.0, radius: 0.8,  height: 2.5, dmg: 22, range: 2.6, cd: 3.5, mass: 2, rim: 0xe08020, score: 10, stagger: 0.5, wings: 2.2, crown: true },
 };
 
 // ---------------------------------------------------------------- materials
@@ -141,230 +142,9 @@ function instantiate(tpl, mat, eyeTpl) {
   return { mesh, B };
 }
 
-// ---------------------------------------------------------------- the seven kinds
 const S = (x, y, z) => [x, y, z];
 function sym(fn) { return [fn(-1, 'R'), fn(1, 'L')].flat(); }
-
-const BUILDERS = {
-  shade() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 1.0, 0) }, { name: 'spine', parent: 'hips', pos: S(0, 0.14, 0) }, { name: 'chest', parent: 'spine', pos: S(0, 0.3, 0) },
-      { name: 'neck', parent: 'chest', pos: S(0, 0.27, 0.02) }, { name: 'head', parent: 'neck', pos: S(0, 0.13, 0.04) }, { name: 'jaw', parent: 'head', pos: S(0, -0.02, 0.06) },
-      ...sym((s, k) => [{ name: 'uArm' + k, parent: 'chest', pos: S(s * 0.21, 0.2, 0) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.43, 0) }, { name: 'hand' + k, parent: 'fArm' + k, pos: S(0, -0.41, 0) },
-        { name: 'thigh' + k, parent: 'hips', pos: S(s * 0.11, -0.04, 0) }, { name: 'shin' + k, parent: 'thigh' + k, pos: S(0, -0.5, 0) }, { name: 'foot' + k, parent: 'shin' + k, pos: S(0, -0.47, 0) }]),
-    ];
-    const p = [
-      { joint: 'hips', geo: blob(0.16, 0.12, 0.11, 0.25, 1) },
-      { joint: 'spine', geo: place(blob(0.12, 0.2, 0.09, 0.3, 2), [0, 0.12, 0]), blend: 0.1 },
-      { joint: 'chest', geo: place(blob(0.21, 0.19, 0.13, 0.3, 3), [0, 0.1, -0.01]), blend: 0.12 },
-      { joint: 'chest', geo: place(blob(0.07, 0.07, 0.07, 0.2, 9), [-0.2, 0.2, 0]) }, { joint: 'chest', geo: place(blob(0.07, 0.07, 0.07, 0.2, 10), [0.2, 0.2, 0]) },
-      ...[0, 1, 2, 3, 4].map((i) => ({ joint: 'chest', geo: place(cone(0.025, 0.12, 4), [0, 0.02 + i * 0.06, -0.12], [-1.9, 0, 0]) })), // spine ridges
-      { joint: 'neck', geo: place(limb(0.05, 0.045, 0.16, 6, 0.1, 4), [0, 0.15, 0], [0, 0, 0]), blend: 0.05 },
-      { joint: 'head', geo: place(blob(0.1, 0.125, 0.14, 0.18, 5), [0, 0.07, 0.03]) },
-      { joint: 'head', geo: place(cone(0.03, 0.18, 5), [-0.07, 0.17, -0.04], [-0.6, 0, 0.4]) }, { joint: 'head', geo: place(cone(0.03, 0.18, 5), [0.07, 0.17, -0.04], [-0.6, 0, -0.4]) },
-      { joint: 'jaw', geo: place(blob(0.07, 0.04, 0.09, 0.2, 6), [0, -0.03, 0.04]) },
-      ...[0, 1, 2, 3, 4].map((i) => ({ joint: 'jaw', geo: place(cone(0.008, 0.05, 4), [-0.04 + i * 0.02, 0.0, 0.11], [Math.PI, 0, 0]) })),
-      ...sym((s, k) => [
-        { joint: 'uArm' + k, geo: limb(0.05, 0.035, 0.43, 7, 0.2, 11 + s), blend: 0.08 },
-        { joint: 'fArm' + k, geo: limb(0.036, 0.024, 0.41, 7, 0.2, 13 + s), blend: 0.06 },
-        { joint: 'hand' + k, geo: place(blob(0.045, 0.06, 0.025, 0.2, 15), [0, -0.05, 0]), blend: 0.03 },
-        ...[0, 1, 2, 3].map((i) => ({ joint: 'hand' + k, geo: place(cone(0.012, 0.24, 4), [(i - 1.5) * 0.022, -0.2, 0.02], [0.25, 0, (i - 1.5) * 0.12 + Math.PI]) })),
-        { joint: 'thigh' + k, geo: limb(0.075, 0.045, 0.5, 8, 0.2, 17 + s), blend: 0.08 },
-        { joint: 'shin' + k, geo: limb(0.046, 0.03, 0.47, 7, 0.2, 19 + s), blend: 0.06 },
-        { joint: 'foot' + k, geo: place(blob(0.04, 0.035, 0.12, 0.2, 21), [0, -0.02, 0.08]), blend: 0.02 },
-        ...[0, 1, 2].map((i) => ({ joint: 'foot' + k, geo: place(cone(0.01, 0.08, 4), [(i - 1) * 0.025, -0.03, 0.2], [Math.PI / 2, 0, 0]) })),
-      ]),
-    ];
-    return { j, p, eyes: { joint: 'head', pos: [[-0.04, 0.08, 0.15], [0.04, 0.08, 0.15]], r: 0.016 } };
-  },
-  crawler() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 0.5, -0.2) }, { name: 'spine', parent: 'hips', pos: S(0, 0.02, 0.22) }, { name: 'chest', parent: 'spine', pos: S(0, 0.0, 0.24) },
-      { name: 'head', parent: 'chest', pos: S(0, 0.02, 0.22) }, { name: 'jaw', parent: 'head', pos: S(0, -0.04, 0.06) },
-      ...sym((s, k) => [
-        { name: 'legF1' + k, parent: 'chest', pos: S(s * 0.13, 0, 0.04) }, { name: 'legF2' + k, parent: 'legF1' + k, pos: S(0, -0.46, 0) },
-        { name: 'legB1' + k, parent: 'hips', pos: S(s * 0.12, 0, -0.02) }, { name: 'legB2' + k, parent: 'legB1' + k, pos: S(0, -0.5, 0) },
-      ]),
-    ];
-    const p = [
-      { joint: 'hips', geo: blob(0.15, 0.1, 0.16, 0.25, 31) },
-      { joint: 'spine', geo: place(blob(0.13, 0.09, 0.17, 0.3, 32), [0, 0, 0.0]), blend: 0 },
-      { joint: 'chest', geo: place(blob(0.16, 0.11, 0.16, 0.3, 33), [0, 0.02, 0.02]) },
-      ...[0, 1, 2, 3, 4, 5].map((i) => ({ joint: i < 3 ? 'spine' : 'chest', geo: place(cone(0.022, 0.14, 4), [0, 0.1, -0.1 + (i % 3) * 0.1], [-0.3, 0, 0]) })),
-      { joint: 'head', geo: place(blob(0.1, 0.07, 0.12, 0.2, 34), [0, 0, 0.06]) },
-      { joint: 'jaw', geo: place(blob(0.09, 0.03, 0.09, 0.2, 35), [0, -0.01, 0.06]) },
-      ...[0, 1, 2, 3, 4, 5].map((i) => ({ joint: 'jaw', geo: place(cone(0.007, 0.05, 4), [-0.06 + i * 0.024, 0.02, 0.13], [0, 0, 0]) })),
-      ...sym((s, k) => [
-        { joint: 'legF1' + k, geo: limb(0.04, 0.03, 0.46, 6, 0.2, 36 + s), blend: 0.05 }, { joint: 'legF2' + k, geo: limb(0.03, 0.006, 0.6, 6, 0.15, 37 + s), blend: 0.05 },
-        { joint: 'legB1' + k, geo: limb(0.05, 0.035, 0.5, 6, 0.2, 38 + s), blend: 0.05 }, { joint: 'legB2' + k, geo: limb(0.035, 0.006, 0.62, 6, 0.15, 39 + s), blend: 0.05 },
-      ]),
-    ];
-    const eyePos = []; for (let i = 0; i < 6; i++) eyePos.push([(i % 3 - 1) * 0.04, 0.05 + Math.floor(i / 3) * 0.025, 0.14]);
-    return { j, p, eyes: { joint: 'head', pos: eyePos, r: 0.011 } };
-  },
-  wretch() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 0.85, 0) }, { name: 'spine', parent: 'hips', pos: S(0, 0.12, 0) }, { name: 'chest', parent: 'spine', pos: S(0, 0.24, 0) },
-      { name: 'neck', parent: 'chest', pos: S(0, 0.2, 0.05) }, { name: 'head', parent: 'neck', pos: S(0, 0.1, 0.04) }, { name: 'robe', parent: 'hips', pos: S(0, 0, 0) },
-      ...sym((s, k) => [{ name: 'uArm' + k, parent: 'chest', pos: S(s * 0.17, 0.16, 0) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.32, 0) }, { name: 'hand' + k, parent: 'fArm' + k, pos: S(0, -0.3, 0) },
-        { name: 'thigh' + k, parent: 'hips', pos: S(s * 0.09, -0.03, 0) }, { name: 'shin' + k, parent: 'thigh' + k, pos: S(0, -0.4, 0) }]),
-    ];
-    // ragged robe: an open cone from the chest to the ground
-    const robe = new THREE.CylinderGeometry(0.16, 0.42, 1.05, 14, 6, true); robe.translate(0, -0.27, 0);
-    const rp = robe.attributes.position; for (let i = 0; i < rp.count; i++) { const y = rp.getY(i); if (y < -0.75) rp.setY(i, y + Math.abs(Math.sin(i * 7.7)) * 0.18); }
-    lumpyG(robe, 0.08, 41);
-    const hood = new THREE.SphereGeometry(0.15, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62); place(hood, [0, 0.06, -0.02], [-0.3, 0, 0], [1, 1.15, 1.2]);
-    const p = [
-      { joint: 'hips', geo: blob(0.13, 0.1, 0.1, 0.2, 42) },
-      { joint: 'spine', geo: place(blob(0.12, 0.16, 0.1, 0.25, 43), [0, 0.1, 0]), blend: 0.08 },
-      { joint: 'chest', geo: place(blob(0.17, 0.15, 0.12, 0.25, 44), [0, 0.08, 0]), blend: 0.08 },
-      { joint: 'robe', geo: robe, weight: (x, y) => smooth(clamp(-y / 1.0, 0, 1)) * 0.0, to: 'hips' },
-      { joint: 'chest', geo: place(new THREE.CylinderGeometry(0.2, 0.17, 0.3, 12, 1, true), [0, 0.12, 0]) },
-      { joint: 'neck', geo: place(limb(0.04, 0.04, 0.12, 6, 0.1, 45), [0, 0.11, 0]) },
-      { joint: 'head', geo: place(blob(0.08, 0.1, 0.1, 0.2, 46), [0, 0.04, 0.03]) },
-      { joint: 'head', geo: hood },
-      ...sym((s, k) => [
-        { joint: 'uArm' + k, geo: limb(0.035, 0.028, 0.32, 6, 0.2, 47 + s), blend: 0.06 }, { joint: 'fArm' + k, geo: limb(0.028, 0.02, 0.3, 6, 0.2, 48 + s), blend: 0.05 },
-        ...[0, 1, 2].map((i) => ({ joint: 'hand' + k, geo: place(cone(0.009, 0.14, 4), [(i - 1) * 0.02, -0.08, 0.02], [0.3, 0, Math.PI + (i - 1) * 0.2]) })),
-        { joint: 'thigh' + k, geo: limb(0.05, 0.035, 0.4, 6, 0.2, 49 + s), blend: 0.06 }, { joint: 'shin' + k, geo: limb(0.035, 0.025, 0.42, 6, 0.2, 50 + s), blend: 0.05 },
-      ]),
-    ];
-    return { j, p, eyes: { joint: 'head', pos: [[-0.03, 0.05, 0.11], [0.03, 0.05, 0.11]], r: 0.014 } };
-  },
-  husk() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 0.62, 0) }, { name: 'belly', parent: 'hips', pos: S(0, 0.3, 0.05) }, { name: 'chest', parent: 'hips', pos: S(0, 0.62, 0) },
-      { name: 'head', parent: 'chest', pos: S(0, 0.12, 0.08) },
-      ...sym((s, k) => [{ name: 'uArm' + k, parent: 'chest', pos: S(s * 0.3, 0.02, 0) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.28, 0) },
-        { name: 'thigh' + k, parent: 'hips', pos: S(s * 0.2, -0.02, 0) }, { name: 'shin' + k, parent: 'thigh' + k, pos: S(0, -0.3, 0) }]),
-    ];
-    const p = [
-      { joint: 'hips', geo: blob(0.25, 0.16, 0.22, 0.2, 51) },
-      { joint: 'belly', geo: blob(0.5, 0.48, 0.48, 0.18, 52, 3) },
-      ...[0, 1, 2, 3, 4, 5, 6].map((i) => ({ joint: 'belly', geo: place(blob(0.09, 0.09, 0.05, 0.3, 60 + i), [Math.cos(i * 0.9) * 0.42, Math.sin(i * 1.7) * 0.3, Math.sin(i * 0.9) * 0.42]) })), // boils
-      { joint: 'chest', geo: blob(0.26, 0.15, 0.22, 0.2, 53) },
-      { joint: 'head', geo: place(blob(0.1, 0.09, 0.1, 0.2, 54), [0, 0.03, 0.04]) },
-      ...sym((s, k) => [
-        { joint: 'uArm' + k, geo: limb(0.07, 0.055, 0.28, 7, 0.2, 55 + s), blend: 0.05 }, { joint: 'fArm' + k, geo: limb(0.055, 0.04, 0.26, 7, 0.2, 56 + s), blend: 0.05 },
-        { joint: 'thigh' + k, geo: limb(0.11, 0.08, 0.3, 7, 0.2, 57 + s), blend: 0.05 }, { joint: 'shin' + k, geo: limb(0.08, 0.07, 0.32, 7, 0.2, 58 + s), blend: 0.05 },
-      ]),
-    ];
-    return { j, p, eyes: { joint: 'head', pos: [[-0.035, 0.05, 0.12], [0.035, 0.05, 0.12]], r: 0.014 } };
-  },
-  brute() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 1.35, 0) }, { name: 'spine', parent: 'hips', pos: S(0, 0.25, 0) }, { name: 'chest', parent: 'spine', pos: S(0, 0.45, 0) },
-      { name: 'neck', parent: 'chest', pos: S(0, 0.38, 0.14) }, { name: 'head', parent: 'neck', pos: S(0, 0.12, 0.12) }, { name: 'jaw', parent: 'head', pos: S(0, -0.06, 0.1) },
-      ...sym((s, k) => [{ name: 'uArm' + k, parent: 'chest', pos: S(s * 0.52, 0.3, 0) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.68, 0) }, { name: 'hand' + k, parent: 'fArm' + k, pos: S(0, -0.74, 0) },
-        { name: 'thigh' + k, parent: 'hips', pos: S(s * 0.24, -0.06, 0) }, { name: 'shin' + k, parent: 'thigh' + k, pos: S(0, -0.64, 0) }, { name: 'foot' + k, parent: 'shin' + k, pos: S(0, -0.62, 0) }]),
-    ];
-    const p = [
-      { joint: 'hips', geo: blob(0.36, 0.26, 0.28, 0.2, 71) },
-      { joint: 'spine', geo: place(blob(0.38, 0.34, 0.3, 0.25, 72), [0, 0.2, 0]), blend: 0.15 },
-      { joint: 'chest', geo: place(blob(0.6, 0.42, 0.42, 0.25, 73, 3), [0, 0.18, 0.02]), blend: 0.15 },
-      ...[0, 1, 2, 3, 4, 5].map((i) => ({ joint: 'chest', geo: place(cone(0.06, 0.32, 5), [(i % 2 ? 1 : -1) * (0.15 + Math.floor(i / 2) * 0.12), 0.48 - Math.floor(i / 2) * 0.1, -0.2], [-1.0, 0, (i % 2 ? -1 : 1) * 0.4]) })),
-      { joint: 'neck', geo: place(limb(0.2, 0.18, 0.2, 8, 0.15, 74), [0, 0.12, 0]), blend: 0.1 },
-      { joint: 'head', geo: place(blob(0.2, 0.2, 0.22, 0.2, 75), [0, 0.04, 0.06]) },
-      { joint: 'head', geo: place(horn(0.75, 0.07, 2.4), [-0.16, 0.14, 0.0], [0, -0.6, 0.3]) }, { joint: 'head', geo: place(horn(0.75, 0.07, 2.4), [0.16, 0.14, 0.0], [0, 0.6, -0.3]) },
-      { joint: 'jaw', geo: place(blob(0.16, 0.07, 0.15, 0.2, 76), [0, -0.03, 0.05]) },
-      ...[0, 1].map((i) => ({ joint: 'jaw', geo: place(cone(0.03, 0.14, 5), [(i ? 1 : -1) * 0.11, 0.06, 0.14], [0, 0, 0]) })),
-      ...sym((s, k) => [
-        { joint: 'uArm' + k, geo: limb(0.2, 0.15, 0.68, 9, 0.2, 77 + s), blend: 0.15 },
-        { joint: 'fArm' + k, geo: limb(0.22, 0.17, 0.74, 9, 0.25, 78 + s), blend: 0.12 },
-        { joint: 'hand' + k, geo: place(blob(0.2, 0.18, 0.18, 0.25, 79), [0, -0.12, 0.03]), blend: 0.05 },
-        ...[0, 1, 2].map((i) => ({ joint: 'fArm' + k, geo: place(cone(0.04, 0.2, 5), [s * 0.15, -0.2 - i * 0.18, -0.08], [-0.6, 0, -s * 1.2]) })),
-        { joint: 'thigh' + k, geo: limb(0.22, 0.16, 0.64, 9, 0.2, 80 + s), blend: 0.12 },
-        { joint: 'shin' + k, geo: limb(0.16, 0.13, 0.62, 9, 0.2, 81 + s), blend: 0.1 },
-        { joint: 'foot' + k, geo: place(blob(0.14, 0.08, 0.24, 0.2, 82), [0, -0.04, 0.1]), blend: 0.03 },
-      ]),
-    ];
-    return { j, p, eyes: { joint: 'head', pos: [[-0.08, 0.08, 0.24], [0.08, 0.08, 0.24]], r: 0.026 } };
-  },
-  wraith() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 1.25, 0) }, { name: 'spine', parent: 'hips', pos: S(0, 0.16, 0) }, { name: 'chest', parent: 'spine', pos: S(0, 0.28, 0) },
-      { name: 'head', parent: 'chest', pos: S(0, 0.36, 0.06) }, { name: 'tail', parent: 'hips', pos: S(0, -0.1, 0) }, { name: 'tail2', parent: 'tail', pos: S(0, -0.6, 0) },
-      ...sym((s, k) => [{ name: 'uArm' + k, parent: 'chest', pos: S(s * 0.2, 0.2, 0) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.42, 0) }, { name: 'hand' + k, parent: 'fArm' + k, pos: S(0, -0.46, 0) }]),
-    ];
-    const shroud = new THREE.CylinderGeometry(0.2, 0.55, 1.3, 16, 8, true); shroud.translate(0, -0.55, 0);
-    const sp = shroud.attributes.position; for (let i = 0; i < sp.count; i++) { const y = sp.getY(i); if (y < -0.9) sp.setY(i, y + Math.abs(Math.sin(i * 5.3)) * 0.4); }
-    lumpyG(shroud, 0.12, 91);
-    const hood = new THREE.SphereGeometry(0.18, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.7); place(hood, [0, 0.04, -0.03], [-0.25, 0, 0], [1, 1.3, 1.3]);
-    const p = [
-      { joint: 'hips', geo: blob(0.16, 0.12, 0.12, 0.2, 92) },
-      { joint: 'tail', geo: shroud, weight: (x, y) => smooth(clamp((-y - 0.3) / 0.8, 0, 1)), to: 'tail2' },
-      { joint: 'spine', geo: place(blob(0.14, 0.2, 0.11, 0.25, 93), [0, 0.12, 0]), blend: 0.1 },
-      { joint: 'chest', geo: place(blob(0.2, 0.18, 0.13, 0.25, 94), [0, 0.12, 0]), blend: 0.1 },
-      { joint: 'chest', geo: place(new THREE.CylinderGeometry(0.24, 0.2, 0.5, 14, 1, true), [0, 0.1, 0]) },
-      { joint: 'head', geo: place(blob(0.08, 0.11, 0.1, 0.15, 95), [0, 0.02, 0.03]) },
-      { joint: 'head', geo: hood },
-      ...sym((s, k) => [
-        { joint: 'uArm' + k, geo: limb(0.04, 0.03, 0.42, 6, 0.15, 96 + s), blend: 0.06 },
-        { joint: 'uArm' + k, geo: place(new THREE.CylinderGeometry(0.06, 0.14, 0.7, 8, 2, true), [0, -0.45, 0]) }, // trailing sleeve
-        { joint: 'fArm' + k, geo: limb(0.03, 0.02, 0.46, 6, 0.15, 97 + s), blend: 0.05 },
-        ...[0, 1, 2, 3].map((i) => ({ joint: 'hand' + k, geo: place(cone(0.008, 0.2, 4), [(i - 1.5) * 0.018, -0.1, 0.0], [0.1, 0, Math.PI + (i - 1.5) * 0.1]) })),
-      ]),
-    ];
-    return { j, p, eyes: { joint: 'head', pos: [[-0.035, 0.04, 0.12], [0.035, 0.04, 0.12]], r: 0.018 } };
-  },
-  herald() {
-    const j = [
-      { name: 'hips', parent: null, pos: S(0, 1.2, 0) }, { name: 'spine', parent: 'hips', pos: S(0, 0.16, 0) }, { name: 'chest', parent: 'spine', pos: S(0, 0.3, 0) },
-      { name: 'neck', parent: 'chest', pos: S(0, 0.28, 0.04) }, { name: 'head', parent: 'neck', pos: S(0, 0.12, 0.05) },
-      { name: 'tail1', parent: 'hips', pos: S(0, -0.05, -0.12) }, { name: 'tail2', parent: 'tail1', pos: S(0, -0.5, 0) }, { name: 'tail3', parent: 'tail2', pos: S(0, -0.5, 0) },
-      ...sym((s, k) => [
-        { name: 'uArm' + k, parent: 'chest', pos: S(s * 0.2, 0.2, 0.02) }, { name: 'fArm' + k, parent: 'uArm' + k, pos: S(0, -0.36, 0) },
-        { name: 'thigh' + k, parent: 'hips', pos: S(s * 0.11, -0.04, 0) }, { name: 'shin' + k, parent: 'thigh' + k, pos: S(0, -0.45, 0) },
-        { name: 'wing1' + k, parent: 'chest', pos: S(s * 0.12, 0.18, -0.12) }, { name: 'wing2' + k, parent: 'wing1' + k, pos: S(s * 0.9, 0, 0) }, { name: 'wing3' + k, parent: 'wing2' + k, pos: S(s * 1.0, 0, 0) },
-      ]),
-    ];
-    const wing = (s, k) => {
-      // membrane from the body to the finger tips, weighted along the wing bones
-      const g = new THREE.BufferGeometry(); const pos = [], ind = [], uv = [];
-      const cols = 8, rows = 4;
-      for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
-        const u = c / cols, v = r / rows; const x = s * u * 1.95; const y = -v * (0.2 + 0.9 * Math.sin(u * Math.PI * 0.9)) + Math.sin(u * 3) * 0.1 * (1 - v);
-        const scallop = v === 1 ? Math.abs(Math.sin(u * Math.PI * 4)) * 0.18 : 0;
-        pos.push(x, y + scallop, -v * 0.08); uv.push(u, v);
-      }
-      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const a = r * (cols + 1) + c; ind.push(a, a + 1, a + cols + 1, a + 1, a + cols + 2, a + cols + 1); }
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(ind); g.computeVertexNormals();
-      return [
-        { joint: 'wing1' + k, geo: g, weight: (x) => smooth(clamp((Math.abs(x) - 0.4) / 0.6, 0, 1)), to: 'wing2' + k },
-        { joint: 'wing1' + k, geo: place(limb(0.035, 0.03, 0.9, 6, 0.1, 101), [0, 0, 0], [0, 0, s * Math.PI / 2]) },
-        { joint: 'wing2' + k, geo: place(limb(0.03, 0.012, 1.0, 6, 0.1, 102), [0, 0, 0], [0, 0, s * Math.PI / 2]) },
-        { joint: 'wing3' + k, geo: place(cone(0.02, 0.15, 4), [s * 0.05, 0, 0], [0, 0, s * Math.PI / 2]) },
-      ];
-    };
-    const p = [
-      { joint: 'hips', geo: blob(0.15, 0.12, 0.11, 0.2, 103) },
-      { joint: 'spine', geo: place(blob(0.13, 0.19, 0.1, 0.25, 104), [0, 0.12, 0]), blend: 0.1 },
-      { joint: 'chest', geo: place(blob(0.21, 0.2, 0.14, 0.25, 105), [0, 0.1, 0]), blend: 0.1 },
-      { joint: 'neck', geo: place(limb(0.05, 0.045, 0.16, 6, 0.1, 106), [0, 0.15, 0]), blend: 0.05 },
-      { joint: 'head', geo: place(blob(0.1, 0.12, 0.13, 0.2, 107), [0, 0.06, 0.03]) },
-      ...[0, 1, 2, 3, 4].map((i) => ({ joint: 'head', geo: place(cone(0.02, 0.18 + (i === 2 ? 0.08 : 0), 5), [(i - 2) * 0.05, 0.17, -0.02], [-0.3, 0, (i - 2) * -0.25]) })), // crown of horns
-      { joint: 'tail1', geo: limb(0.06, 0.04, 0.5, 6, 0.1, 108), blend: 0.05 }, { joint: 'tail2', geo: limb(0.04, 0.025, 0.5, 6, 0.1, 109), blend: 0.05 },
-      { joint: 'tail3', geo: limb(0.025, 0.005, 0.5, 6, 0.1, 110), blend: 0.05 },
-      ...sym((s, k) => [
-        { joint: 'uArm' + k, geo: limb(0.045, 0.035, 0.36, 6, 0.2, 111 + s), blend: 0.06 }, { joint: 'fArm' + k, geo: limb(0.035, 0.02, 0.4, 6, 0.2, 112 + s), blend: 0.05 },
-        { joint: 'thigh' + k, geo: limb(0.07, 0.045, 0.45, 7, 0.2, 113 + s), blend: 0.06 }, { joint: 'shin' + k, geo: limb(0.045, 0.02, 0.5, 6, 0.2, 114 + s), blend: 0.05 },
-        ...wing(s, k),
-      ]),
-    ];
-    return { j, p, eyes: { joint: 'head', pos: [[-0.04, 0.07, 0.14], [0.04, 0.07, 0.14]], r: 0.017 } };
-  },
-};
-
-const templates = {};
-function getTemplate(type) {
-  if (templates[type]) return templates[type];
-  const b = BUILDERS[type]();
-  const tpl = buildTemplate(b.j, b.p);
-  const eyeGeos = b.eyes.pos.map((p) => place(new THREE.SphereGeometry(b.eyes.r, 8, 6), p));
-  tpl.eye = { joint: b.eyes.joint, geo: mergeGeometries(eyeGeos), mat: new THREE.MeshBasicMaterial({ color: new THREE.Color(TYPES[type].eye).multiplyScalar(3), toneMapped: false }) };
-  templates[type] = tpl; return tpl;
-}
-export function prewarmDemons() { for (const t in TYPES) getTemplate(t); }
+export function prewarmDemons() {}
 
 // ---------------------------------------------------------------- demon instance
 const ST = { spawn: 0, chase: 1, windup: 2, strike: 3, recover: 4, stagger: 5, dead: 6, special: 7, flee: 8, leap: 9 };
@@ -373,16 +153,15 @@ export const STATE_NAMES = Object.fromEntries(Object.entries(ST).map(([k, v]) =>
 export class Demon {
   constructor(type, id, scene) {
     this.type = type; this.def = TYPES[type]; this.id = id; this.scene = scene;
-    const tpl = getTemplate(type);
-    this.mat = demonMaterial(this.def.rim);
-    const { mesh, B } = instantiate(tpl, this.mat, tpl.eye);
-    this.mesh = mesh; this.B = B; scene.add(mesh);
+    const body = buildHorror(type, this.def);
+    this.mat = body.mat; this.wings = body.wings;
+    this.mesh = body.mesh; this.B = body.B; scene.add(this.mesh);
     this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.yaw = 0;
     this.hp = this.def.hp; this.maxHp = this.def.hp;
     this.state = ST.spawn; this.stateT = 0; this.cd = R() * 1.0; this.target = null; this.retarget = 0;
     this.phase = R(); this.speedVis = 0; this.hitFlash = 0; this.flinch = 0; this.flinchDir = 1; this.dissolve = 0; this.alive = true; this.removed = false;
-    this.seed = R() * 100; this.special = 0; this.fuse = -1; this.alt = this.def.flies || 0;
-    this.scale = this.def.big ? 1 : 0.92 + R() * 0.16; mesh.scale.setScalar(this.scale);
+    this.seed = R() * 100; this.special = 0; this.fuse = -1; this.alt = 0;
+    this.scale = this.def.big ? 1 : 0.92 + R() * 0.16; this.mesh.scale.setScalar(this.scale);
     this.wispT = 0; this.lastHitBy = null; this.buff = 0;
   }
   get radius() { return this.def.radius * this.scale; }
@@ -430,8 +209,6 @@ export class Demon {
     const gy = C.world.heightAt(this.pos.x, this.pos.z);
     if (this.state === ST.leap) this.pos.y = gy + Math.sin(clamp(this.stateT / this.leapT, 0, 1) * Math.PI) * (this.leapH || 1.4);
     else this.pos.y = gy;
-    if (def.flies) { const tgtAlt = this.state === ST.strike ? 1.0 : this.state === ST.windup ? 3 : def.flies; this.alt = damp(this.alt, tgtAlt, 3, dt); }
-    if (def.floats) this.alt = def.floats + Math.sin(C.time * 1.7 + this.seed) * 0.15;
   }
 
   // shared melee: approach, wind up, strike in an arc, recover
@@ -523,7 +300,11 @@ export class Demon {
     // distance LOD for animation updates
     const d2 = camPos ? (camPos.x - this.pos.x) ** 2 + (camPos.z - this.pos.z) ** 2 : 0;
     this.lodSkip = d2 > 70 * 70 ? (this.lodSkip + 1) % 3 : 0;
-    this.mesh.position.set(this.pos.x, (world && this.state !== ST.leap && !this.def.flies && !this.def.floats ? this.pos.y : this.pos.y) + (this.alt || 0), this.pos.z);
+    this.mat.userData.u.uTime.value = time;
+    const h = horrorTick(this, dt, time, d2 < 32 * 32);
+    // stop-motion: now and then a demon freezes mid-motion, then snaps on to where it really is
+    if (h.stutter > 0 && this.state !== ST.dead) return;
+    this.mesh.position.set(this.pos.x, this.pos.y + (this.alt || 0), this.pos.z);
     this.mesh.rotation.y = this.yaw;
     if (this.lodSkip) return;
     // emerging from the earth
@@ -534,7 +315,7 @@ export class Demon {
     if (fx && this.wispT > (d2 > 40 * 40 ? 0.5 : 0.18) && this.state !== ST.dead) { this.wispT = 0; fx.wisp(this.chest, 0.35 * this.scale * (this.def.big ? 1.6 : 1)); }
   }
 
-  dispose() { this.scene.remove(this.mesh); this.mat.dispose(); }
+  dispose() { this.scene.remove(this.mesh); this.mat.dispose(); if (this.wings) for (const k in this.wings) this.wings[k].mesh.geometry.dispose(); }
 }
 
 // ---------------------------------------------------------------- behaviours (host)
@@ -626,189 +407,10 @@ Demon.prototype.behave = {
       if (this.cd <= 0 && dist < 12) { this.setState(ST.windup); C.ev('demonSfx', this, 'shriekShort'); }
       return;
     }
-    this.meleeStep(dt, C, T, toT, dist, want, speed, faceT, { windup: [0.6], lunge: 9, arc: 1.0, recover: 0.7 });
+    this.meleeStep(dt, C, T, toT, dist, want, speed, faceT, { leap: [4, 10], leapT: 0.7, leapH: 2.0, windup: [0.6], lunge: 6, arc: 1.0, recover: 0.7 });
   },
 };
 
-// ---------------------------------------------------------------- procedural animation (shared host/client)
-const e = (b, x, y, z) => { b.rotation.set(x * D2R, y * D2R, z * D2R); };
-const sinp = (t) => Math.sin(t * TAU);
-
-function deathPose(B, t, fall = 1) {
-  const k = smooth(clamp(t / 0.7, 0, 1));
-  if (B.spine) e(B.spine, 40 * k * fall, 0, 10 * k);
-  if (B.head) e(B.head, 30 * k, 0, 0);
-  if (B.hips) { B.hips.position.y = B.hips.userData.rest.y * (1 - 0.55 * k); B.hips.rotation.x = 20 * k * D2R; }
-}
-
-const ANIM = {
-  shade(dt, time) {
-    const B = this.B, s = this.speedVis, st = this.state, T = this.stateT;
-    this.phase += dt * s / 2.6;
-    const ph = this.phase, run = clamp(s / 5, 0, 1);
-    const tw = Math.sin(time * 23 + this.seed) * 3 * (1 - run * 0.5); // twitch
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += -Math.abs(Math.sin(ph * TAU)) * 0.08 * run;
-    e(B.hips, 6 * run, sinp(ph) * 8 * run, 0);
-    e(B.spine, 22 + 18 * run, -sinp(ph) * 6 * run, 0); e(B.chest, 16 + 8 * run, -sinp(ph) * 8 * run, tw * 0.5);
-    e(B.neck, -24 - 10 * run, 0, 0); e(B.head, -18 + tw, Math.sin(time * 1.3 + this.seed) * 25 * (1 - run), tw * 2);
-    e(B.jaw, 10 + Math.max(0, Math.sin(time * 5 + this.seed)) * 18, 0, 0);
-    for (const [k, sg, o] of [['R', -1, 0], ['L', 1, 0.5]]) {
-      const p = (ph + o) % 1; const sw = sinp(p), cw = Math.cos(p * TAU);
-      e(B['thigh' + k], -sw * 40 * run - 15, 0, sg * 5); e(B['shin' + k], 25 + Math.max(0, cw) * 70 * run, 0, 0); e(B['foot' + k], -10 + sw * 20 * run, 0, 0);
-      // arms trail behind while sprinting, loose and clawing at idle
-      e(B['uArm' + k], lerp(-20 + Math.sin(time * 2 + o * 6) * 8, 55 + sw * 20, run), 0, sg * (12 + 18 * run)); e(B['fArm' + k], lerp(-35, -20, run), 0, 0); e(B['hand' + k], -20, 0, 0);
-    }
-    if (st === ST.windup || st === ST.strike || st === ST.recover || st === ST.leap) {
-      const w = st === ST.windup ? smooth(clamp(T / 0.4, 0, 1)) : st === ST.leap ? 1 : 0;
-      const sk = st === ST.strike ? smooth(clamp(T / 0.18, 0, 1)) : st === ST.recover ? 1 - smooth(clamp(T / 0.4, 0, 1)) * 0.6 : 0;
-      for (const [k, sg] of [['R', -1], ['L', 1]]) {
-        const up = -150 * w, down = -30; const x = st === ST.windup || st === ST.leap ? up : lerp(-150, down, sk);
-        e(B['uArm' + k], x, 0, sg * (40 * w + 10 - 30 * sk)); e(B['fArm' + k], -60 * w - 10, 0, 0); e(B['hand' + k], 20, 0, 0);
-      }
-      e(B.chest, 10 - 25 * w + 40 * sk, 0, 0); e(B.head, -30 * w + 10 * sk, 0, 0); e(B.jaw, 40, 0, 0);
-      if (st === ST.leap) { e(B.thighR, -70, 0, -5); e(B.thighL, -50, 0, 5); e(B.shinR, 100, 0, 0); e(B.shinL, 80, 0, 0); }
-    }
-    if (st === ST.spawn) { const k = clamp(T / 1.1, 0, 1); e(B.uArmR, -160 + k * 120, 0, -30); e(B.uArmL, -150 + k * 110, 0, 30); e(B.spine, 50 - k * 30, 0, 0); }
-    if (st === ST.stagger) { e(B.spine, 0, 0, 0); e(B.chest, -20, 0, 10 * this.flinchDir); e(B.head, -30, 0, 0); }
-    if (this.flinch > 0) { B.chest.rotation.x -= this.flinch * 0.35; B.head.rotation.z += this.flinch * 0.3 * this.flinchDir; }
-    if (st === ST.dead) { deathPose(B, T); e(B.uArmR, -20, 0, -60 * clamp(T, 0, 1)); e(B.uArmL, -20, 0, 60 * clamp(T, 0, 1)); }
-  },
-  crawler(dt, time) {
-    const B = this.B, s = this.speedVis, st = this.state, T = this.stateT;
-    this.phase += dt * s / 1.3;
-    const ph = this.phase, run = clamp(s / 4, 0, 1);
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += Math.abs(Math.sin(ph * TAU * 2)) * 0.05 * run + Math.sin(time * 9 + this.seed) * 0.01;
-    e(B.hips, 0, Math.sin(ph * TAU) * 8 * run, Math.sin(ph * TAU * 2) * 5 * run);
-    e(B.spine, 0, -Math.sin(ph * TAU) * 6 * run, 0); e(B.chest, -6, 0, 0);
-    e(B.head, -10 + Math.sin(time * 7 + this.seed) * 6, Math.sin(time * 3 + this.seed) * 20 * (1 - run), Math.sin(time * 11 + this.seed) * 8);
-    e(B.jaw, 15 + Math.max(0, Math.sin(time * 6 + this.seed)) * 25, 0, 0);
-    // spider-legs: knees high, feet planted, diagonal pairs
-    const legs = [['F', 'R', -1, 0], ['B', 'L', 1, 0], ['F', 'L', 1, 0.5], ['B', 'R', -1, 0.5]];
-    for (const [fb, k, sg, o] of legs) {
-      const p = (ph + o) % 1; const lift = Math.max(0, Math.sin(p * TAU)) * run; const swing = Math.cos(p * TAU) * run;
-      const u = B['leg' + fb + '1' + k], l = B['leg' + fb + '2' + k];
-      const fwd = fb === 'F' ? -1 : 1;
-      e(u, fwd * (15 + swing * 25), 0, sg * (95 + lift * 25)); e(l, 0, 0, -sg * (125 + lift * 20));
-    }
-    if (st === ST.windup || st === ST.leap || st === ST.strike) {
-      const w = st === ST.windup ? smooth(clamp(T / 0.25, 0, 1)) : 1;
-      e(B.chest, -35 * w, 0, 0); e(B.head, -25 * w, 0, 0); e(B.jaw, 50 * w, 0, 0);
-      for (const k of ['R', 'L']) { const sg = k === 'R' ? -1 : 1; e(B['legF1' + k], -70 * w, 0, sg * 60); e(B['legF2' + k], 0, 0, -sg * 60); }
-      B.hips.position.y -= 0.12 * w * (st === ST.windup ? 1 : 0);
-    }
-    if (st === ST.spawn) B.hips.rotation.x = -40 * D2R * (1 - clamp(T / 1.1, 0, 1));
-    if (this.flinch > 0) { B.chest.rotation.z += this.flinch * 0.4 * this.flinchDir; }
-    if (st === ST.dead) { const k = smooth(clamp(T / 0.5, 0, 1)); B.hips.rotation.z = k * 2.6; B.hips.position.y = B.hips.userData.rest.y * (1 - 0.3 * k); }
-  },
-  wretch(dt, time) {
-    const B = this.B, s = this.speedVis, st = this.state, T = this.stateT;
-    this.phase += dt * s / 1.6; const ph = this.phase, run = clamp(s / 3.5, 0, 1);
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += -Math.abs(Math.sin(ph * TAU)) * 0.05 * run;
-    e(B.hips, 0, 0, Math.sin(ph * TAU) * 6 * run);
-    e(B.spine, 30, 0, 0); e(B.chest, 22, 0, Math.sin(time * 1.1 + this.seed) * 4); e(B.neck, -30, 0, 0); e(B.head, -10, Math.sin(time * 0.9 + this.seed) * 20, 0);
-    e(B.robe, -20, 0, Math.sin(ph * TAU) * 4 * run);
-    for (const [k, sg, o] of [['R', -1, 0], ['L', 1, 0.5]]) {
-      const p = (ph + o) % 1; e(B['thigh' + k], -sinp(p) * 30 * run - 10, 0, 0); e(B['shin' + k], 20 + Math.max(0, Math.cos(p * TAU)) * 50 * run, 0, 0);
-      e(B['uArm' + k], -30 + sinp(time * 0.3 + o) * 6, 0, sg * 10); e(B['fArm' + k], -60, 0, 0);
-    }
-    if (st === ST.windup || st === ST.strike) {
-      const w = st === ST.windup ? smooth(clamp(T / 0.6, 0, 1)) : 1 - smooth(clamp(T / 0.3, 0, 1));
-      const thr = st === ST.strike ? smooth(clamp(T / 0.15, 0, 1)) : 0;
-      e(B.uArmR, -110 * w - 60 * thr, 0, -20 + 30 * thr); e(B.fArmR, -40 * w, 0, 0); e(B.uArmL, -100 * w, 0, 30); e(B.fArmL, -50 * w, 0, 0);
-      e(B.chest, 10 - 20 * w + 30 * thr, 0, 0); e(B.head, -25 * w, 0, 0);
-    }
-    if (this.flinch > 0) B.chest.rotation.x -= this.flinch * 0.4;
-    if (st === ST.dead) deathPose(B, T);
-  },
-  husk(dt, time) {
-    const B = this.B, s = this.speedVis, st = this.state, T = this.stateT;
-    this.phase += dt * s / 0.9; const ph = this.phase, run = clamp(s / 2.5, 0, 1);
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += Math.abs(Math.sin(ph * TAU)) * 0.06 * run;
-    e(B.hips, 0, 0, Math.sin(ph * TAU) * 12 * run);
-    e(B.chest, 10, 0, -Math.sin(ph * TAU) * 6 * run); e(B.head, -10, Math.sin(time * 2 + this.seed) * 15, 0);
-    for (const [k, sg, o] of [['R', -1, 0], ['L', 1, 0.5]]) {
-      const p = (ph + o) % 1; e(B['thigh' + k], -sinp(p) * 30 * run, 0, sg * 12); e(B['shin' + k], 10 + Math.max(0, Math.cos(p * TAU)) * 40 * run, 0, 0);
-      e(B['uArm' + k], -20 + sinp(p) * 20 * run, 0, sg * 40); e(B['fArm' + k], -40, 0, 0);
-    }
-    let infl = 1 + Math.sin(time * 2 + this.seed) * 0.03;
-    if (st === ST.special) { const k = clamp(T / 1.1, 0, 1); infl = 1 + k * 0.45 + Math.sin(T * 40) * 0.04 * k; this.mat.userData.u.uGlow.value = 1 + k * 4; }
-    B.belly.scale.setScalar(infl);
-    if (this.flinch > 0) B.chest.rotation.x -= this.flinch * 0.3;
-    if (st === ST.dead) deathPose(B, T, 0.4);
-  },
-  brute(dt, time) {
-    const B = this.B, s = this.speedVis, st = this.state, T = this.stateT;
-    this.phase += dt * s / 3.4; const ph = this.phase, run = clamp(s / 4, 0, 1);
-    const charging = st === ST.special && T > 0.9;
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += -Math.abs(Math.sin(ph * TAU)) * 0.12 * run;
-    e(B.hips, 8 * run, sinp(ph) * 10 * run, Math.sin(ph * TAU) * 4 * run);
-    e(B.spine, 18 + 14 * run + (charging ? 20 : 0), -sinp(ph) * 8 * run, 0); e(B.chest, 10 + 6 * run, -sinp(ph) * 10 * run, 0);
-    e(B.neck, -25 - (charging ? 10 : 0), 0, 0); e(B.head, -10 + (charging ? 25 : 0), Math.sin(time * 0.7 + this.seed) * 15 * (1 - run), 0);
-    e(B.jaw, 8 + Math.max(0, Math.sin(time * 2 + this.seed)) * 12, 0, 0);
-    for (const [k, sg, o] of [['R', -1, 0], ['L', 1, 0.5]]) {
-      const p = (ph + o) % 1; const sw = sinp(p);
-      e(B['thigh' + k], -sw * 32 * run - 12, 0, sg * 8); e(B['shin' + k], 22 + Math.max(0, Math.cos(p * TAU)) * 55 * run, 0, 0); e(B['foot' + k], -10, 0, 0);
-      // knuckle-walking gait when running, heavy arm swing
-      e(B['uArm' + k], -10 + sw * -40 * run, 0, sg * 18); e(B['fArm' + k], -30 - 20 * run, 0, 0); e(B['hand' + k], 0, 0, 0);
-    }
-    if (st === ST.special && T < 0.9) { // paw the ground
-      const k = Math.sin(T * 14); e(B.uArmR, -60 + k * 20, 0, -20); e(B.fArmR, -20, 0, 0); e(B.spine, 40, 0, 0); e(B.head, 10, 0, 0); e(B.jaw, 40, 0, 0);
-    }
-    if (st === ST.windup || st === ST.strike || st === ST.recover) {
-      const w = st === ST.windup ? smooth(clamp(T / (this.atk === 1 ? 0.85 : 0.5), 0, 1)) : 0;
-      const sk = st === ST.strike ? smooth(clamp(T / 0.15, 0, 1)) : st === ST.recover ? 1 : 0;
-      if (this.atk === 1) { // overhead double-fist ground slam
-        for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['uArm' + k], lerp(-170 * w, -60, sk), 0, sg * 25); e(B['fArm' + k], lerp(-50 * w, -10, sk), 0, 0); }
-        e(B.spine, lerp(-5 * w + 18, 45, sk), 0, 0); e(B.head, -20 * w, 0, 0); e(B.jaw, 45 * w, 0, 0);
-        B.hips.position.y -= sk * 0.35;
-      } else { // backhand swipe
-        e(B.uArmR, lerp(-60 * w, -80, sk), lerp(-50 * w, 70, sk), -60 + 30 * sk); e(B.fArmR, -40 * (1 - sk), 0, 0);
-        e(B.chest, 10, lerp(-40 * w, 45, sk), 0);
-      }
-    }
-    if (this.flinch > 0) B.chest.rotation.x -= this.flinch * 0.2;
-    if (st === ST.stagger) { e(B.chest, -15, 0, 10); e(B.head, -25, 0, 0); }
-    if (st === ST.dead) { deathPose(B, T * 0.7); e(B.thighR, -70 * clamp(T, 0, 1), 0, 0); e(B.shinR, 110 * clamp(T, 0, 1), 0, 0); }
-  },
-  wraith(dt, time) {
-    const B = this.B, st = this.state, T = this.stateT;
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += Math.sin(time * 1.7 + this.seed) * 0.08;
-    const lean = clamp(this.speedVis / 5, 0, 1);
-    e(B.hips, 10 * lean, 0, 0); e(B.spine, 10, 0, Math.sin(time * 0.8 + this.seed) * 5); e(B.chest, 8, 0, 0); e(B.head, -10, Math.sin(time * 0.6 + this.seed) * 25, Math.sin(time * 1.1) * 10);
-    e(B.tail, 15 * lean + Math.sin(time * 2.1 + this.seed) * 6, 0, Math.sin(time * 1.4 + this.seed) * 8); e(B.tail2, 25 * lean + Math.sin(time * 2.6 + this.seed) * 10, 0, Math.sin(time * 1.9) * 10);
-    for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['uArm' + k], -15 + Math.sin(time * 1.2 + sg) * 8, 0, sg * 22); e(B['fArm' + k], -25, 0, 0); e(B['hand' + k], 10, 0, 0); }
-    if (st === ST.windup || st === ST.strike) {
-      const w = st === ST.windup ? smooth(clamp(T / 1.0, 0, 1)) : 1 - smooth(clamp(T / 0.5, 0, 1));
-      e(B.uArmR, -95 * w, 0, -10); e(B.fArmR, -5, 0, 0); e(B.uArmL, -60 * w, 0, 50 * w); e(B.chest, -15 * w, 0, 0); e(B.head, -10 * w, 0, 0);
-    }
-    let sc = 1; if (st === ST.flee) sc = T < 0.5 ? 1 - smooth(T / 0.5) : smooth((T - 0.5) / 0.5);
-    this.mesh.scale.setScalar(this.scale * Math.max(0.001, sc));
-    if (this.flinch > 0) B.chest.rotation.x -= this.flinch * 0.4;
-    if (st === ST.dead) { const k = smooth(clamp(T / 0.8, 0, 1)); B.hips.position.y = B.hips.userData.rest.y * (1 - 0.6 * k); e(B.spine, 50 * k, 0, 0); }
-  },
-  herald(dt, time) {
-    const B = this.B, st = this.state, T = this.stateT;
-    const flapRate = st === ST.windup ? 1.4 : st === ST.strike ? 0 : 2.4;
-    this.phase += dt * flapRate; const f = Math.sin(this.phase * TAU);
-    B.hips.position.copy(B.hips.userData.rest); B.hips.position.y += -f * 0.12;
-    const dive = st === ST.strike ? 1 : st === ST.windup ? smooth(clamp(T / 0.6, 0, 1)) : 0;
-    e(B.hips, 25 + 45 * dive, 0, 0); e(B.spine, 5, 0, 0); e(B.chest, 5 - 10 * dive, 0, 0); e(B.neck, -20 - 20 * dive, 0, 0); e(B.head, -10, Math.sin(time + this.seed) * 20 * (1 - dive), 0);
-    for (const [k, sg] of [['R', -1], ['L', 1]]) {
-      const fold = st === ST.strike ? 1 : 0;
-      e(B['wing1' + k], 0, sg * (-20 + 30 * fold), sg * (f * 45 * (1 - fold) + 10 + 60 * fold));
-      e(B['wing2' + k], 0, sg * (10 + 70 * fold), sg * (f * 20 * (1 - fold) - 10));
-      e(B['wing3' + k], 0, 0, sg * (f * 15));
-      e(B['thigh' + k], 20 - 30 * dive, 0, sg * 10); e(B['shin' + k], 40, 0, 0);
-      e(B['uArm' + k], lerp(-20, -110, dive), 0, sg * 20); e(B['fArm' + k], -40, 0, 0);
-    }
-    e(B.tail1, -40 + Math.sin(time * 2) * 10, 0, Math.sin(time * 1.3) * 15); e(B.tail2, 10, 0, Math.sin(time * 1.7) * 15); e(B.tail3, 10, 0, Math.sin(time * 2.1) * 15);
-    if (st === ST.flee) { e(B.neck, -50, 0, 0); e(B.head, -30, 0, 0); for (const k of ['R', 'L']) e(B['uArm' + k], -120, 0, (k === 'R' ? -1 : 1) * 60); }
-    if (this.flinch > 0) B.chest.rotation.x -= this.flinch * 0.3;
-    if (st === ST.dead) { const k = smooth(clamp(T / 0.6, 0, 1)); this.alt = Math.max(0, (this.alt || 0) - dt * 8); e(B.hips, 80 * k, 0, 40 * k); }
-  },
-};
-
-// ---------------------------------------------------------------- manager
 export const TYPE_LIST = Object.keys(TYPES);
 
 export class Horde {
@@ -830,6 +432,7 @@ export class Horde {
   animate(dt, time, world, fx, camPos) {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const d = this.list[i]; d.animate(dt, time, world, fx, camPos);
+      if (d.wantScream) { if (this.onScream) this.onScream(d, d.wantScream); d.wantScream = null; }
       if (d.removed) { d.dispose(); this.byId.delete(d.id); this.list.splice(i, 1); }
     }
   }
