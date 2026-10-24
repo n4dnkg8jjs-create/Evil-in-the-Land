@@ -4,7 +4,6 @@
 // they are drawn without it and hazed by hand, like a painted backdrop. Each
 // chapter the city falls further behind and the mountain draws nearer.
 import * as THREE from 'three';
-import { PEAK_SPIRE } from './world.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { stoneTextures, cloudTexture } from './textures.js';
 import { rng, makeNoise, clamp, lerp, smooth, TAU } from './util.js';
@@ -47,6 +46,7 @@ export class Vista {
     this.groundAt = groundAt;
     const kind = ch.terrain.kind;
     if (kind !== 'peak') this.buildCity(kind === 'mountain' ? 3300 : 1500 + chIdx * 280, kind === 'mountain' ? -300 : null);
+    if (chIdx > 0 && kind !== 'peak' && kind !== 'mountain') this.buildBehind(chIdx);
     if (kind !== 'peak') this.buildMountain(kind === 'mountain' ? 1500 : 2700 - chIdx * 330, kind === 'mountain' ? 260 : 0);
     else {
       // on the Peak the storm is all round and close: cloud boils up the faces from below, and the lightning
@@ -141,15 +141,52 @@ export class Vista {
       M.compose(P, Q, S); im.setMatrixAt(i, M);
     });
     g.add(im);
-    // smoke from the chimneys and the siege fires on the plain before it
+    // thin smoke from a few chimneys, rising and leaning with the wind (no great banks of cloud over the walls)
     this.smoke = [];
     const smokeTex = cloudTexture();
-    for (let k = 0; k < 8; k++) {
-      const sm = new THREE.SpriteMaterial({ map: smokeTex, color: 0x6a625c, transparent: true, opacity: 0.6, depthWrite: false, fog: false });
-      const s = new THREE.Sprite(sm); const a = r() * TAU, d = r() * 160;
-      s.position.set(Math.cos(a) * d, 40 + r() * 30, Math.sin(a) * d * 0.75); s.scale.setScalar(60 + r() * 40); g.add(s); this.smoke.push({ s, base: s.position.y, ph: r() * 10 });
+    for (let k = 0; k < 6; k++) {
+      const a = r() * TAU, d = r() * 150, x0 = Math.cos(a) * d, z0 = Math.sin(a) * d * 0.75;
+      for (let j = 0; j < 7; j++) {
+        const sm = new THREE.SpriteMaterial({ map: smokeTex, color: 0x5a5652, transparent: true, opacity: 0.32 * (1 - j / 8), depthWrite: false, fog: true });
+        const sp = new THREE.Sprite(sm); const h = 22 + j * 6;
+        sp.position.set(x0 + j * 2.5, h, z0 + j * 1.2); sp.scale.setScalar(6 + j * 3); g.add(sp); this.smoke.push({ s: sp, base: h, ph: k * 3 + j * 0.4 });
+      }
     }
     this.group.add(g); this.city = g;
+  }
+
+  // ---------------------------------------------------------------- the road behind
+  // The country already won does not vanish: back down the road, past the living fields, the village you saved
+  // from the last chapter still stands, its church tower whole again, its chimneys smoking.
+  buildBehind(chIdx) {
+    const r = rng(4400 + chIdx), g = new THREE.Group(), haze = this.haze;
+    const st = stoneTextures(256, true);
+    const stone = hazed(new THREE.MeshStandardMaterial({ color: 0xb0a690, map: st.map, roughness: 0.9 }), haze);
+    const plaster = hazed(new THREE.MeshStandardMaterial({ color: 0xc8bca4, roughness: 0.92 }), haze);
+    const thatch = hazed(new THREE.MeshStandardMaterial({ color: 0x6a5434, roughness: 0.95 }), haze);
+    const slate = hazed(new THREE.MeshStandardMaterial({ color: 0x3c4048, roughness: 0.75 }), haze);
+    const cx = (r() - 0.5) * 120, cz = -128 - 330 - r() * 80;
+    const parts = { stone: [], plaster: [], thatch: [], slate: [] };
+    const put = (list, geo, x, z, y, ry = 0) => { geo.rotateY(ry); geo.translate(x, y, z); list.push(geo); };
+    for (let k = 0; k < 16; k++) {
+      const a = r() * TAU, d = 18 + r() * 70, x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d * 0.6; const y = this.groundAt(x, z) - 0.5;
+      const w = 5 + r() * 4, l = 7 + r() * 6, h = 3.5 + r() * 2.5, ry = r() * Math.PI;
+      put(parts.plaster, new THREE.BoxGeometry(w, h + 1, l), x, z, y + h / 2, ry);
+      const roof = new THREE.CylinderGeometry(0.01, w * 0.78, w * 0.6, 4, 1); roof.rotateY(Math.PI / 4); roof.scale(1, 1, l / w); put(parts.thatch, roof, x, z, y + h + w * 0.3 + 0.3, ry);
+    }
+    // the church: nave, tower and spire
+    const y0 = this.groundAt(cx, cz) - 0.5;
+    put(parts.stone, new THREE.BoxGeometry(11, 9, 24), cx, cz, y0 + 4.5);
+    const nr = new THREE.CylinderGeometry(0.01, 8.6, 5.5, 4, 1); nr.rotateY(Math.PI / 4); nr.scale(1, 1, 24 / 11 * 0.95); put(parts.slate, nr, cx, cz, y0 + 9 + 2.75);
+    put(parts.stone, new THREE.BoxGeometry(6, 21, 6), cx, cz + 14.5, y0 + 10.5);
+    put(parts.slate, new THREE.ConeGeometry(4.6, 13, 4), cx, cz + 14.5, y0 + 27.5, Math.PI / 4);
+    for (const [k, m] of [['stone', stone], ['plaster', plaster], ['thatch', thatch], ['slate', slate]]) if (parts[k].length) { const mesh = new THREE.Mesh(mergeGeometries(parts[k]), m); mesh.castShadow = false; g.add(mesh); }
+    const smokeTex = cloudTexture();
+    for (let k = 0; k < 4; k++) {
+      const a = r() * TAU, d = 20 + r() * 50, x0 = cx + Math.cos(a) * d, z0 = cz + Math.sin(a) * d * 0.6, yb = this.groundAt(x0, z0) + 7;
+      for (let j = 0; j < 6; j++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x6a6662, transparent: true, opacity: 0.3 * (1 - j / 7), depthWrite: false })); sp.position.set(x0 + j * 1.5, yb + j * 3.5, z0 + j * 0.6); sp.scale.setScalar(3 + j * 1.8); g.add(sp); }
+    }
+    this.group.add(g); this.behind = g;
   }
 
   // ---------------------------------------------------------------- the mountain and its storm
@@ -275,8 +312,7 @@ export class Vista {
   // the knights and the dragon, the thunder hard on its heels
   strikePeak() {
     const r = Math.random; let x, z;
-    if (r() < 0.3) { x = PEAK_SPIRE[0] + (r() - 0.5) * 8; z = PEAK_SPIRE[1] + (r() - 0.5) * 8; }
-    else { const a = r() * TAU, d = 45 + r() * 170; x = Math.cos(a) * d; z = Math.sin(a) * d; }
+    const a = r() * TAU, d = 50 + r() * 170; x = Math.cos(a) * d; z = Math.sin(a) * d;
     const target = new THREE.Vector3(x, Math.max(-160, this.groundAt(x, z)), z);
     const top = new THREE.Vector3(x + (r() - 0.5) * 120, 230 + r() * 60, z + (r() - 0.5) * 120);
     this.drawBolt(top, target);
@@ -328,7 +364,7 @@ export class Vista {
       this.storm.U.uTime.value = this.time; this.placeSlices();
     }
     if (this.summitGlow) this.summitGlow.material.opacity = 0.45 + Math.sin(this.time * 0.7) * 0.1;
-    if (this.smoke) for (const s of this.smoke) { s.s.position.y = s.base + Math.sin(this.time * 0.05 + s.ph) * 6; s.s.material.rotation += dt * 0.01; }
+    if (this.smoke) for (const s of this.smoke) { s.s.position.y = s.base + Math.sin(this.time * 0.3 + s.ph) * 0.8; s.s.material.rotation += dt * 0.03; }
     // the backdrop never moves with the camera's small shifts, but follows it far enough to avoid parallax errors at the edges
   }
   dispose() { this.engine.scene.remove(this.group); this.group.traverse((o) => { o.geometry?.dispose?.(); }); }

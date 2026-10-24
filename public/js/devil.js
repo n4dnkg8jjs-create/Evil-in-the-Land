@@ -851,12 +851,14 @@ export class Dragon extends Boss {
     // wings: folded at rest, spread and beating in flight
     for (const [k, s] of [['R', -1], ['L', 1]]) {
       const spread = fly;
-      const sweep = lerp(62, 0, spread), droop = lerp(28, 0, spread), fold2 = lerp(140, 8, spread), finger = lerp(40, 0, spread);
+      // at rest the wing folds like a bat's: the arm swept back and raised along the flank, the forearm folded
+      // forward against it, the hand and its long fingers folded back again, closed together, the membrane furled
+      const sweep = lerp(72, 0, spread), raise = lerp(22, 0, spread), fold2 = lerp(162, 8, spread), fold3 = lerp(158, 0, spread), finger = lerp(62, 0, spread);
       const beat = fl * 38 * spread;
-      e(B['wing1' + k], 0, s * sweep, -s * droop + s * beat);
-      e(B['wing2' + k], 0, -s * fold2, s * beat * 0.4);
-      e(B['wing3' + k], 0, s * lerp(80, 0, spread), 0);
-      e(B['f1' + k], 0, s * finger * 0.3, s * beat * 0.2); e(B['f2' + k], 0, s * finger * 0.7, s * beat * 0.25); e(B['f3' + k], 0, s * finger, s * beat * 0.3);
+      e(B['wing1' + k], 0, s * sweep, s * raise + s * beat);
+      e(B['wing2' + k], 0, -s * fold2, s * beat * 0.4 - s * raise * 0.5);
+      e(B['wing3' + k], 0, s * fold3, 0);
+      e(B['f1' + k], 0, s * finger, s * beat * 0.2); e(B['f2' + k], 0, s * finger * 0.6, s * beat * 0.25); e(B['f3' + k], 0, s * finger * 0.05, s * beat * 0.3);
     }
     // attacks
     if (st === 'bite') { const w = T < 0.6 ? smooth(T / 0.6) : 1 - smooth(clamp((T - 0.75) / 0.5, 0, 1)); const lunge = T > 0.6 && T < 1.0 ? 1 : 0; e(B.neck1, -20 + 30 * w * lunge - 20 * w * (1 - lunge), 0, 0); e(B.neck3, 5 + 25 * lunge * w, 0, 0); e(B.head, 20 - 10 * w, 0, 0); e(B.jaw, 50 * w * (lunge ? 1 : 0.6), 0, 0); }

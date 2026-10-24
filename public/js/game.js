@@ -128,7 +128,7 @@ export class Game {
       shots.push({ dur: 5, from: { pos: V(lead.x + 2.5, lead.y + 1.4, lead.z + 3.5), look: V(lead.x, lead.y + 1.55, lead.z) }, to: { pos: V(lead.x + 1.5, lead.y + 1.7, lead.z - 3.8), look: V(lead.x, lead.y + 1.6, lead.z + 4) }, fov: 46, text: ch.intro[2] });
     }
     this.obj.ph = 'intro';
-    this.setMood(ch.id === 'peak' ? 'boss' : 'dread', 0);
+    this.setMood(ch.id === 'peak' ? 'final' : 'dread', 0);
     this.audio.bell(null, 0.8, 0.25);
     this.cinema.play(shots, () => {
       if (!this.isHost) return;
@@ -583,7 +583,20 @@ export class Game {
   }
 
   // ================================================================ combat
+  // the foe a blow should close on: near, and roughly in front of the knight
+  meleeTarget(k) {
+    const range = (k.wdef.hitTo || 1) + 3.2; let best = null, bs = 1e9;
+    const consider = (x, z, rad) => {
+      const dist = Math.hypot(x - k.pos.x, z - k.pos.z) - rad; if (dist > range) return;
+      const off = Math.abs(angleDiff(k.yaw, Math.atan2(x - k.pos.x, z - k.pos.z))); if (off > 1.05) return;
+      const sc = dist + off * 2.2; if (sc < bs) { bs = sc; best = { x, z, dist: Math.max(0, dist) }; }
+    };
+    for (const d of this.horde.list) if (d.alive) consider(d.pos.x, d.pos.z, d.radius * 0.6);
+    if (this.boss && this.boss.alive && (this.boss.alt || 0) < 3) consider(this.boss.pos.x, this.boss.pos.z, 2.6);
+    return best;
+  }
   resolveKnightCombat(k, dt) {
+    if (!k.findTarget) k.findTarget = (kn) => this.meleeTarget(kn);
     const hits = k.currentHits(); if (!hits) { k._sweepPrev = null; return; }
     const segs = [];
     const pb = k._sweepPrev ? k._sweepPrev[0] : k.base, pt = k._sweepPrev ? k._sweepPrev[1] : k.tip;
@@ -606,7 +619,7 @@ export class Game {
         let dmg = dmgBase; if (d.def.big && kind === 'blunt') dmg *= (k.wdef.armorBreak || 1.25);
         if (kind === 'pierce' && d.def.big) dmg *= 1.15;
         const dir = new THREE.Vector3(d.pos.x - k.pos.x, 0, d.pos.z - k.pos.z).normalize();
-        this.onWeaponHit(k, hitP, kind, d.def.big ? 1.2 : 1, dir);
+        this.onWeaponHit(k, hitP, kind, d.def.big ? 1.2 : 1, dir, false, d);
         if (this.isHost) { if (d.takeHit(dmg, dir, h.stagger || 0.5, this.hostCtx(), k.id)) this.stats.kills++; }
         else this.net.send('hit', { d: d.id, dmg, dx: dir.x, dz: dir.z, st: h.stagger || 0.5 }, this.net.hostId);
       }
@@ -625,12 +638,26 @@ export class Game {
       }
     }
   }
-  onWeaponHit(k, p, kind, weight, dir, boss) {
-    this.fx.ichor(p, dir, weight * (k.fury > 0 ? 1.5 : 1));
-    if (boss) this.fx.sparks(p, 6, [1, 0.5, 0.2]);
+  onWeaponHit(k, p, kind, weight, dir, boss, target) {
+    // how hard the blow lands: the weapon's heft, a heavy or a finishing blow, the size of what it struck
+    const heavy = k.actKind === 'heavy', fin = !heavy && k.combo === 0;
+    const heft = (k.wdef.dmg || 1) * (heavy ? 1.6 : fin ? 1.25 : 1) * weight;
+    // blood and sparks where the edge actually met flesh, thrown along the line of the cut
+    const cut = k.weaponDir ? new THREE.Vector3().subVectors(k.tip, k.prevTip).normalize().lerp(dir, 0.4).normalize() : dir;
+    this.fx.ichor(p, cut, weight * (k.fury > 0 ? 1.5 : 1) * (heavy ? 1.4 : 1));
+    if (boss || kind === 'blunt') this.fx.sparks(p, boss ? 8 : 4, [1, 0.5, 0.2]);
     if (k.fury > 0) this.fx.holyMotes(p, 0.5, 8);
-    this.audio.hit(kind, p, weight);
-    if (k === this.me) { this.ui.hitMark(); this.hitstop = 0.045 * weight; this.engine.shake(0.035 * weight, 0.12); }
+    this.audio.hit(kind, p, weight * (heavy ? 1.3 : 1));
+    // hitstop: the blade bites and everything stops for a beat (the swing itself, and the thing it hit)
+    const stop = Math.min(0.16, (0.05 + (heavy ? 0.05 : fin ? 0.025 : 0)) * heft);
+    k.hitStop = Math.max(k.hitStop || 0, stop);
+    if (target) { target.hitStopT = stop * 1.2; if (dir) target.hitDir = dir.clone(); }
+    if (k === this.me) {
+      this.ui.hitMark(); this.hitstop = stop;
+      // the camera is jolted the way the blow travelled
+      this.engine.kick(cut.clone().setY(-0.35), 0.05 + 0.05 * heft, 0.14 + 0.05 * heft);
+      this.engine.shake(0.025 * heft, 0.1);
+    }
   }
   hostApplyHit(m) { const d = this.horde.byId.get(m.d); if (d && d.alive) { if (d.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx(), m.from)) this.stats.kills++; } }
   hostApplyBossHit(m) { if (this.boss && this.boss.alive) this.boss.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx()); }
@@ -941,10 +968,14 @@ export class Game {
     this.audio.update(dt);
     const near = this.horde.list.filter((d) => d.alive && d.pos.distanceTo(this.me.pos) < 30).length;
     let mood = 'dread', I = Math.min(1, near / 10);
-    if (this.boss && this.boss.alive) { mood = 'boss'; I = 1; }
+    if (this.boss && this.boss.alive) {
+      // the Dragon gets his own score, building with each phase of the fight
+      if (this.boss.kind === 'dragon') { mood = 'final'; I = this.boss.phase >= 3 ? 1 : this.boss.phase === 2 ? 0.82 : this.boss.state === 'intro' ? 0.5 : 0.62; }
+      else { mood = 'boss'; I = 1; }
+    }
     else if (this.obj?.ph === 'pray') { mood = this.me.praying ? 'prayer' : 'dread'; I = Math.max(0.5, I); }
     else if (this.obj?.ph === 'cleansed' || this.obj?.ph === 'outro') { mood = 'triumph'; I = 0; }
-    if (this.cinema.active && this.obj?.ph === 'intro') I = 0.1;
+    if (this.cinema.active && this.obj?.ph === 'intro') { I = 0.1; if (CHAPTERS[this.chapterIdx]?.id === 'peak') { mood = 'final'; I = 0.3; } }
     mu.setMood(mood); mu.setIntensity(I);
     // the Latin of the prayer, line by line, while the local knight kneels
     if (this.me.praying && !this.me.reviving && this.obj?.ph === 'pray') {

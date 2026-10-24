@@ -114,7 +114,7 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
     this.scene.add(this.camera);
     this.time = 0;
-    this.fx = { hurt: 0, holy: 0, desat: 0, flash: 0, shake: 0, shakeT: 0, tint: new THREE.Color(1, 1, 1), lift: new THREE.Color(0, 0, 0) };
+    this.fx = { hurt: 0, holy: 0, desat: 0, flash: 0, shake: 0, shakeT: 0, kickV: new THREE.Vector3(), kickT: 0, kickDur: 0.16, tint: new THREE.Color(1, 1, 1), lift: new THREE.Color(0, 0, 0) };
 
     this.sky = makeSky();
     this.scene.add(this.sky.mesh);
@@ -217,6 +217,8 @@ export class Engine {
   }
 
   shake(amount, dur = 0.35) { this.fx.shake = Math.max(this.fx.shake, amount); this.fx.shakeT = Math.max(this.fx.shakeT, dur); }
+  // a directional jolt of the camera (the weight of a blow landing): snaps along dir, then springs back
+  kick(dir, amount, dur = 0.16) { const f = this.fx; f.kickV.copy(dir).setLength(amount); f.kickT = dur; f.kickDur = dur; }
 
   render(dt) {
     this.time += dt;
@@ -234,7 +236,12 @@ export class Engine {
       ox = (Math.random() - 0.5) * a; oy = (Math.random() - 0.5) * a;
       if (fx.shakeT <= 0) fx.shake = 0;
     }
-    this.camera.position.x += ox; this.camera.position.y += oy;
+    if (fx.kickT > 0) {
+      fx.kickT -= dt; const u = 1 - Math.max(0, fx.kickT) / fx.kickDur;   // 0 -> 1 over the kick
+      const k = u < 0.18 ? u / 0.18 : Math.exp(-(u - 0.18) * 6) * Math.cos((u - 0.18) * 9);   // snap out, damped spring back
+      ox += fx.kickV.x * k; oy += fx.kickV.y * k; this._kz = fx.kickV.z * k;
+    } else this._kz = 0;
+    this.camera.position.x += ox; this.camera.position.y += oy; this.camera.position.z += this._kz;
     if (this.composer) {
       const g = this.grade.uniforms;
       g.uTime.value = this.time % 100; g.uHurt.value = fx.hurt; g.uHoly.value = fx.holy; g.uDesat.value = fx.desat;
@@ -243,6 +250,6 @@ export class Engine {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
-    this.camera.position.x -= ox; this.camera.position.y -= oy;
+    this.camera.position.x -= ox; this.camera.position.y -= oy; this.camera.position.z -= this._kz;
   }
 }

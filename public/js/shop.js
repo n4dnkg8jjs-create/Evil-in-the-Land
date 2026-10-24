@@ -111,6 +111,8 @@ export class Shop {
       const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
       pr.root.position.set(px, world.heightAt(px, pz), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; world.addCollider(px, pz, 0.6);
       this.people = [su, pr];
+      for (const pp of this.people) for (const c of pp.cloths || []) { c.ground = world.heightAt(pr.root.position.x, pr.root.position.z); this.g.scene.add(c.mesh); }
+      if (su.cloths) { su.cloths[0].ground = w.position.y + 1.0; su.cloths[1].ground = w.position.y + 1.47; }
     }
     this.sanctuary = { x, z, r: 13 };
     const ring = this.ring = new THREE.Group(); const flame = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(3), toneMapped: false });
@@ -130,6 +132,7 @@ export class Shop {
   near() { if (!this.spot) return false; const m = this.g.me.pos; return Math.hypot(m.x - this.spot.x, m.z - this.spot.z) < 4.2; }
 
   update(dt) {
+    if (this.people) { const me = this.g.me?.pos, cam = this.g.engine.camera.position; for (const pp of this.people) pp.update?.(dt, cam, me); }
     const g = this.g, I = g.input, me = g.me;
     // nothing unholy crosses the candles: demons that reach the ring are thrown back from it
     if (g.isHost && this.sanctuary) for (const d of g.horde.list) {
@@ -195,5 +198,5 @@ export class Shop {
     g.app.loadout.weapon = key; try { localStorage.setItem('evil.loadout', JSON.stringify(g.app.loadout)); } catch {}
     if (!g.opts.solo) g.net.send('gear', { id: g.meId, weapon: key, maxHp: g.me.maxHp });
   }
-  dispose() { if (this.ring) { this.ring.removeFromParent(); this.ring = null; } if (this.priest) { this.priest.root.removeFromParent(); this.priest = null; } this.sanctuary = null; if (this.wagon) { this.wagon.removeFromParent(); this.wagon.traverse((o) => o.geometry?.dispose?.()); this.wagon = null; } this.spot = null; if (this.open) this.close(); }
+  dispose() { if (this.people) { for (const pp of this.people) pp.dispose?.(); this.people = null; } if (this.ring) { this.ring.removeFromParent(); this.ring = null; } if (this.priest) { this.priest.root.removeFromParent(); this.priest = null; } this.sanctuary = null; if (this.wagon) { this.wagon.removeFromParent(); this.wagon.traverse((o) => o.geometry?.dispose?.()); this.wagon = null; } this.spot = null; if (this.open) this.close(); }
 }

@@ -6,6 +6,7 @@ import { Rig, JOINTS } from './rig.js';
 import { dressBody } from './body.js';
 import { clothTextures } from './textures.js';
 import { lerp } from './util.js';
+import { Cloth } from './cloth.js';
 
 const D2R = Math.PI / 180;
 
@@ -163,7 +164,7 @@ function personMat(look) {
         float wr = uAge > 0.0 ? wrinkle(vObj) * uAge : 0.0;
         skin *= 1.0 - 0.25 * wr;
         // liver spots on an old man's scalp, temples and hands
-        skin = mix(skin, skin * vec3(0.72, 0.6, 0.5), smoothstep(0.78, 0.86, pn(vObj * 55.0 + 9.0)) * uAge * 0.8);
+        skin = mix(skin, skin * vec3(0.82, 0.74, 0.66), smoothstep(0.8, 0.9, pn(vObj * 110.0 + 9.0)) * uAge * 0.6);
         skin = mix(skin, skin * vec3(1.12, 0.86, 0.82), smoothstep(0.55, 0.85, pn(vObj * 14.0 + 3.0)) * 0.6);
         // hair: fine strands running down the head
         float strand = pn(vec3(vObj.x * 420.0, vObj.y * 30.0, vObj.z * 420.0));
@@ -230,17 +231,58 @@ export function makePerson(kind, quality) {
     const band = new THREE.Mesh(new THREE.CylinderGeometry(0.1085, 0.109, 0.018, 24, 1, true), new THREE.MeshStandardMaterial({ color: 0x5a2a1a, roughness: 0.8 })); band.position.y = 0.03; hat.add(band);
     seatOnCrown(hat, body, rig, 0.058); rig.j.head.add(hat);
   }
-  const mat = sutler ? clothMat([110, 70, 44], 'sutlercloak') : clothMat([20, 18, 18], 'cassock');
-  robe(rig, mat, { length: sutler ? 0.95 : 1.42, flare: sutler ? 0.3 : 0.4, seated: sutler });
-  for (const k of ['R', 'L']) {   // sleeves over the arms, open at the wrist
-    const s1 = new THREE.Mesh(lathe([[0.07, 0.03], [0.075, -0.15], [0.072, -0.3]], 14, () => {}), mat); rig.j['uArm' + k].add(s1);
-    const s2 = new THREE.Mesh(lathe([[0.07, 0.02], [0.08, -0.12], [0.092, -0.22]], 14, () => {}), mat); rig.j['fArm' + k].add(s2);
+  const mat = sutler ? clothMat([96, 74, 52], 'sutlertunic') : clothMat([20, 18, 18], 'cassock');
+  const J = rig.j, cloths = [];
+  // the fitted upper garment, folded where it gathers at the waist; skirts, cloak and cape are simulated cloth
+  const bodice = lathe([[0.075, 0.2], [0.17, 0.165], [0.215, 0.07], [0.2, -0.12], [0.18, -0.3], [0.19, -0.44]], 36, (v, an) => {
+    const t = Math.max(0, -v.y); const r = Math.hypot(v.x, v.z) + Math.sin(an * 14) * 0.004 * t + Math.max(0, Math.sin(an * 7 + 1)) * 0.006 * Math.max(0, t - 0.15);
+    v.x = Math.sin(an) * r; v.z = Math.cos(an) * r * 0.78 + 0.012;
+  });
+  const bm = new THREE.Mesh(bodice, mat); bm.castShadow = true; J.chest.add(bm);
+  const fold = (v, an) => { const r = Math.hypot(v.x, v.z) * (1 + Math.sin(an * 9 + v.y * 20) * 0.04); v.x = Math.sin(an) * r; v.z = Math.cos(an) * r; };
+  for (const k of ['R', 'L']) {   // sleeves, creased at the elbow, the priest's wide at the cuff
+    J['uArm' + k].add(new THREE.Mesh(lathe([[0.072, 0.03], [0.078, -0.12], [0.074, -0.3]], 16, fold), mat));
+    J['fArm' + k].add(new THREE.Mesh(lathe(sutler ? [[0.072, 0.02], [0.074, -0.12], [0.06, -0.2], [0.055, -0.235]] : [[0.072, 0.02], [0.085, -0.12], [0.11, -0.25]], 16, fold), mat));
   }
-  if (!sutler) {   // a wooden cross on a cord
+  const beltM = new THREE.MeshStandardMaterial({ color: sutler ? 0x3a2414 : 0x101010, roughness: 0.85 });
+  const ring = (rx, rz, y, bone) => (i, n) => { const an = (i / n) * Math.PI * 2; return { bone, local: new THREE.Vector3(Math.sin(an) * rx, y, Math.cos(an) * rz + 0.01), flare: new THREE.Vector3(Math.sin(an), 0, Math.cos(an)).multiplyScalar(0.18) }; };
+  const legCaps = (c, r = 1) => { for (const k of ['R', 'L']) { c.addCapsule({ a: J['thigh' + k], b: J['shin' + k], r: 0.095 * r }); c.addCapsule({ a: J['shin' + k], b: J['foot' + k], r: 0.07 * r }); } c.addCapsule({ a: J.hips, ao: new THREE.Vector3(0, 0.02, 0), r: 0.16 }); return c; };
+  if (!sutler) {
+    // the cassock's skirt, to the ankles, swinging and settling round his legs
+    const n = 30, pin = ring(0.19, 0.15, 0.03, J.hips);
+    const skirt = legCaps(new Cloth({ cols: n, rows: 18, ring: true, len: 0.98, material: mat, pins: (i) => pin(i, n), axis: J.hips, hold: 0.92 }));
+    cloths.push(skirt);
+    // a short shoulder cape (mozzetta) over the arms
+    const cn = 26; const cpin = (i) => { const an = (i / cn) * Math.PI * 2; return { bone: J.chest, local: new THREE.Vector3(Math.sin(an) * 0.1, 0.19, Math.cos(an) * 0.085 + 0.01), flare: new THREE.Vector3(Math.sin(an), 0, Math.cos(an)).multiplyScalar(1.1) }; };
+    const cape = new Cloth({ cols: cn, rows: 9, ring: true, len: 0.34, material: mat, pins: cpin, stiff: 0.98 });
+    cape.addCapsule({ a: J.spine, b: J.chest, bo: new THREE.Vector3(0, 0.08, 0), r: 0.17 });
+    for (const k of ['R', 'L']) cape.addCapsule({ a: J['uArm' + k], b: J['fArm' + k], r: 0.08 });
+    cloths.push(cape);
+    // a rope cincture with its tassels, buttons down the front
+    const cin = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.012, 6, 32), beltM); cin.rotation.x = Math.PI / 2; cin.scale.set(1, 0.8, 1); cin.position.set(0, 0.06, 0.01); J.hips.add(cin);
+    
+    const btn = new THREE.MeshStandardMaterial({ color: 0x0c0a0a, roughness: 0.4 });
+    for (let i = 0; i < 9; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 4), btn); b.position.set(0, 0.17 - i * 0.065, 0.185 - Math.max(0, 0.1 - i * 0.065) * 0.3); J.chest.add(b); }
     const cr = new THREE.Group(); const wd = new THREE.MeshStandardMaterial({ color: 0x5a4028, roughness: 0.8 });
     cr.add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.1, 0.01), wd)); const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.018, 0.01), wd); arm.position.y = 0.02; cr.add(arm);
-    cr.position.set(0, 0.0, 0.17); rig.j.chest.add(cr);
+    cr.position.set(0, 0.02, 0.2); J.chest.add(cr);
+  } else {
+    // the tunic's skirt, falling over his knees as he sits
+    const n = 26, pin = ring(0.2, 0.16, 0.04, J.hips);
+    cloths.push(legCaps(new Cloth({ cols: n, rows: 9, ring: true, len: 0.42, material: mat, pins: (i) => pin(i, n), axis: J.hips, hold: 0.85 })));
+    // a heavy russet cloak from his shoulders, hanging down his back and over the seat
+    const cm = clothMat([110, 62, 38], 'sutlercloak'); const cn = 20;
+    const cpin = (i) => { const t = i / (cn - 1), an = lerp(-1.75, 1.75, t) + Math.PI; return { bone: J.chest, local: new THREE.Vector3(Math.sin(an) * 0.2, 0.17, Math.cos(an) * 0.13), flare: new THREE.Vector3(Math.sin(an), 0, Math.cos(an)).multiplyScalar(0.3) }; };
+    const cloak = new Cloth({ cols: cn, rows: 16, len: 1.05, material: cm, pins: cpin });
+    cloak.addCapsule({ a: J.spine, b: J.chest, bo: new THREE.Vector3(0, 0.1, 0), r: 0.19 }); cloak.addCapsule({ a: J.hips, r: 0.19 });
+    for (const k of ['R', 'L']) { cloak.addCapsule({ a: J['uArm' + k], b: J['fArm' + k], r: 0.085 }); cloak.addCapsule({ a: J['thigh' + k], b: J['shin' + k], r: 0.1 }); }
+    cloths.push(cloak);
+    // a broad belt with a purse and a knife
+    const belt = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.022, 4, 32), beltM); belt.rotation.x = Math.PI / 2; belt.scale.set(1, 0.8, 1); belt.position.set(0, 0.07, 0.01); J.hips.add(belt);
+    const purse = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), beltM); purse.scale.set(1, 1.2, 0.6); purse.position.set(0.14, -0.02, 0.12); J.hips.add(purse);
+    const knife = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.2, 0.015), beltM); knife.position.set(-0.17, -0.04, 0.06); knife.rotation.z = 0.2; J.hips.add(knife);
   }
+  for (const c of cloths) c.wind.set(1.6, 0, 0.6);
   const e = (j, x, y, z) => rig.j[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
   if (sutler) {   // sitting on the box, forearms on his knees, head a little bowed
     e('spine', 12, 0, 0); e('chest', 8, 0, 0); e('neck', 6, 0, 0); e('head', 6, -15, 0);
@@ -249,6 +291,20 @@ export function makePerson(kind, quality) {
     e('spine', 6, 0, 0); e('chest', 9, 0, 0); e('neck', 14, 0, 0); e('head', -8, 0, 0);
     for (const [k, s] of [['R', -1], ['L', 1]]) { e('uArm' + k, -14, 0, s * 4); e('fArm' + k, -85, -s * 32, 0); e('hand' + k, 0, -s * 15, 0); }
   }
+  // alive: he breathes, shifts his weight, and turns his head to watch whoever comes near
+  const base = {}; for (const n of ['spine', 'chest', 'neck', 'head', 'hips']) base[n] = rig.j[n].rotation.clone();
+  let t0 = Math.random() * 10, look = 0;
+  const update = (dt, camPos, watch) => {
+    t0 += dt; const br = Math.sin(t0 * 1.3);
+    J.chest.rotation.x = base.chest.x - br * 0.02; J.spine.rotation.z = base.spine.z + Math.sin(t0 * 0.23) * 0.02;
+    if (!sutler) J.hips.rotation.z = base.hips.z + Math.sin(t0 * 0.23) * 0.015;
+    let want = 0;
+    if (watch) { J.neck.updateWorldMatrix(true, false); const p = new THREE.Vector3().setFromMatrixPosition(J.neck.matrixWorld); const ry = new THREE.Euler().setFromQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
+      let a = Math.atan2(watch.x - p.x, watch.z - p.z) - ry; a = Math.atan2(Math.sin(a), Math.cos(a)); if (Math.hypot(watch.x - p.x, watch.z - p.z) < 14) want = Math.max(-1.1, Math.min(1.1, a)); }
+    look += (want - look) * Math.min(1, dt * 2);
+    J.head.rotation.y = base.head.y + look * 0.65; J.neck.rotation.y = base.neck.y + look * 0.35;
+    if (!camPos || rig.root.getWorldPosition(new THREE.Vector3()).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
+  };
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
-  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, kind };
+  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, kind, cloths, update, dispose: () => cloths.forEach((c) => c.dispose()) };
 }

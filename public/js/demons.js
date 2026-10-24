@@ -263,7 +263,8 @@ export class Demon {
   // ------------------------------------------------ damage
   takeHit(dmg, dir, stagger, C, byId) {
     if (!this.alive || this.state === ST.spawn && this.stateT < 0.6) return false;
-    this.hp -= dmg; this.hitFlash = 1; this.flinch = 1; this.flinchDir = R() < 0.5 ? -1 : 1; this.lastHitBy = byId;
+    this.hp -= dmg; this.hitFlash = 1; this.flinch = 1; this.lastHitBy = byId;
+    if (dir) { this.hitDir = dir.clone ? dir.clone() : dir; const lx = dir.x * Math.cos(this.yaw) - dir.z * Math.sin(this.yaw); this.flinchDir = lx >= 0 ? 1 : -1; } else this.flinchDir = R() < 0.5 ? -1 : 1;
     if (dir) { const k = 3.5 * stagger / this.def.mass; this.vel.x += dir.x * k; this.vel.z += dir.z * k; }
     if (this.hp <= 0) { this.die(C); return true; }
     if (stagger * this.def.stagger > 0.55 && this.state !== ST.leap) { this.setState(ST.stagger); }
@@ -309,6 +310,18 @@ export class Demon {
     if (h.stutter > 0 && this.state !== ST.dead) return;
     this.mesh.position.set(this.pos.x, this.pos.y + (this.alt || 0), this.pos.z);
     this.mesh.rotation.y = this.yaw;
+    // struck: the whole body is thrown back from the blow and reels, then recovers
+    if (this.mesh.rotation.order !== 'YXZ') this.mesh.rotation.order = 'YXZ';
+    const fl = this.state === ST.dead ? 0 : this.flinch * this.flinch;
+    if (fl > 0.001 && this.hitDir) {
+      const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+      const lx = this.hitDir.x * c - this.hitDir.z * s, lz = this.hitDir.x * s + this.hitDir.z * c;   // the blow's direction in the demon's own frame
+      const k = fl * (this.def.big ? 0.12 : 0.32);
+      this.mesh.rotation.x = lz * k; this.mesh.rotation.z = -lx * k;
+      this.mesh.position.x += this.hitDir.x * fl * 0.18; this.mesh.position.z += this.hitDir.z * fl * 0.18;
+    } else { this.mesh.rotation.x = 0; this.mesh.rotation.z = 0; }
+    // hitstop: frozen for a beat where the blade bit
+    if (this.hitStopT > 0) { this.hitStopT -= dt; return; }
     if (this.lodSkip) return;
     // emerging from the earth
     if (this.state === ST.spawn) this.mesh.position.y -= (1 - smooth(clamp(this.stateT / 1.1, 0, 1))) * this.def.height * this.scale;

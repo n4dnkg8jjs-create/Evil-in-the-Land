@@ -90,10 +90,10 @@ export const CHAPTERS = [
     intro: ['Above the clouds, in the heart of the storm.', 'Lucifer, the Old Serpent, the great Dragon.', 'Exsurgat Deus.'],
     outro: [],
     terrain: { kind: 'peak', amp: 6, hill: 0, edge: 0 },
-    atmos: A({ skyTop: 0x030407, skyMid: 0x0e1016, skyBottom: 0x241612, sunColor: 0x8a4a30, cloud: 0x0c0d12, cloudLit: 0x2e3040, glow: 0x4a140a, cover: 0.97, sunDir: [-0.45, 0.5, -0.75], sunLight: 0xa0a8c0, sunIntensity: 2.0, hemiSky: 0x5a6378, hemiGround: 0x30201a, hemiIntensity: 1.25, fog: 0x262832, fogDensity: 0.0038, exposure: 1.55, fillColor: 0x8a3018, fillIntensity: 0.35 }),
+    atmos: A({ skyTop: 0x0c0e14, skyMid: 0x2a2e3a, skyBottom: 0x4a4c58, sunColor: 0x8a8a98, cloud: 0x22242c, cloudLit: 0x5a5e70, glow: 0x4a140a, cover: 0.97, sunDir: [-0.45, 0.5, -0.75], sunLight: 0xa0a8c0, sunIntensity: 2.0, hemiSky: 0x5a6378, hemiGround: 0x30201a, hemiIntensity: 1.25, fog: 0x343844, fogDensity: 0.0042, exposure: 1.55, fillColor: 0x8a3018, fillIntensity: 0.35 }),
     props: { rocks: 70, crags: 40 },
     pool: { shade: 1.0, crawler: 0.8, wraith: 0.2, herald: 0.08 }, density: 1.0,
-    ambient: 'embers', wind: [2.2, 0.4],
+    ambient: 'snow', wind: [3.0, 0.6],
     boss: 'dragon',
   },
 ];

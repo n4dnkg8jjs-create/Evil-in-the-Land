@@ -62,6 +62,21 @@ function loft(points, nRings, seg, section, upHint = V(0, 1, 0), uvScale = [1, 1
   return { g, ringT, curve };
 }
 const se = (p, q = p) => (th) => { const c = Math.cos(th), s = Math.sin(th); return [Math.sign(s) * Math.abs(s) ** (2 / p), Math.sign(c) * Math.abs(c) ** (2 / (c < 0 ? q : p))]; };
+// a limb as one unbroken tube through its joints, each stretch skinned to its own bone and blended across the
+// joints, so a bent knee or elbow folds the hide rather than opening a gap
+function chainLoft(points, owners, radii, { rings = 40, seg = 18, up = V(0, 1, 0), rootBone = null, shape = se(2.3) } = {}) {
+  const nP = points.length;
+  const at = (u) => { const f = u * (nP - 1), i = Math.min(nP - 2, Math.floor(f)), t = smooth(f - i); const a = radii[i], b = radii[i + 1]; return [lerp(a[0], b[0], t), lerp(a[1], b[1], t)]; };
+  const L = loft(points, rings, seg, (u) => { const [rx, ry] = at(u); const f = u * (nP - 1), t = f - Math.floor(f); const bulge = Math.sin(t * Math.PI) * 0.12; return { rx: rx * (1 + bulge), ry: ry * (1 + bulge * 1.4), shape }; }, up, [2, 1]);
+  const w = L.ringT.map((u) => {
+    const f = u * (nP - 1), k = Math.min(nP - 2, Math.floor(f)), t = f - k; const o = owners[k];
+    if (k === 0 && rootBone && t < 0.35) return [o, 0.5 + t / 0.7, rootBone, 0.5 - t / 0.7];
+    if (t < 0.5 && k > 0 && owners[k - 1] !== o) return [o, 0.5 + t, owners[k - 1], 0.5 - t];
+    if (t >= 0.5 && k < nP - 2 && owners[k + 1] !== o) return [o, 1.5 - t, owners[k + 1], t - 0.5];
+    return [o, 1, o, 0];
+  });
+  return { geo: reg(L.g, SCALE), weights: w };
+}
 // a tapering, ridged horn or claw along a curve
 function tube(points, r0, r1, seg = 8, rings = 24, ridge = 0) {
   const { g } = loft(points, rings, seg, (u) => { const r = lerp(r0, r1, Math.pow(u, 0.8)) * (1 + ridge * Math.sin(u * 46) * (1 - u)); return { rx: r, ry: r, shape: se(2) }; }, V(0, 1, 0.3).normalize());
@@ -99,6 +114,8 @@ export function buildDragonModel() {
       const c = Math.cos(th), s = Math.sin(th);
       let sx = Math.sign(s) * Math.abs(s) ** (2 / 2.4), sy = Math.sign(c) * Math.abs(c) ** (2 / (c < 0 ? 3.2 : 2.2));
       sy += Math.max(0, c) ** 14 * 0.16;                       // the ridge of the spine
+      const hump = Math.exp(-(((u - 0.635) / 0.035) ** 2)) * 0.16 + Math.exp(-(((u - 0.53) / 0.035) ** 2)) * 0.12;   // shoulders, haunches
+      sx *= 1 + hump * Math.max(0, c + 0.2) * Math.abs(s);
       if (c < 0) sy *= 0.9;                                     // a flatter, plated belly
       return [sx, sy];
     } };
@@ -150,6 +167,7 @@ export function buildDragonModel() {
       const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
       if (y < -0.05 && z > 0.1 && Math.abs(x) < 0.22 + 0.0) R[i] = MOUTH;                         // the palate
       if (Math.hypot(Math.abs(x) - 0.36, y - 0.25, z - 0.5) < 0.12) R[i] = MOUTH;                   // deep eye sockets
+      if (Math.hypot(Math.abs(x) - 0.13, y - 0.17, z - 2.02) < 0.045) R[i] = MOUTH;                 // nostrils
     }
     g.setAttribute('region', new THREE.BufferAttribute(R, 1)); toWorld(g, 'head');
     parts.push({ geo: g, weights: new Array(p.count).fill(['head', 1, 'head', 0]) });
@@ -188,6 +206,8 @@ export function buildDragonModel() {
         const t = tube([V(0, 0, 0), V(0, len * 0.6, len * 0.1), V(0, len, 0.0)], 0.03 * Math.sqrt(fang), 0.003, 5, 6); t.translate(s * w, 0.05, z);
         rigid(toWorld(t, 'jaw'), 'jaw', TOOTH);
       }
+      // a beard of spikes under the chin
+      for (let i = 0; i < 3; i++) rigid(toWorld(tube([V(s * (0.06 + i * 0.05), -0.2 + i * 0.03, 1.1 - i * 0.35), V(s * (0.09 + i * 0.07), -0.42 + i * 0.03, 0.85 - i * 0.4)], 0.035, 0.003, 5, 6), 'jaw'), 'jaw', HORN);
       // a frill of spikes from the back of the jaw
       for (let i = 0; i < 3; i++) rigid(toWorld(tube([V(s * 0.34, -0.12 - i * 0.07, -0.55 - i * 0.05), V(s * (0.5 + i * 0.05), -0.25 - i * 0.12, -1.05 - i * 0.1)], 0.05, 0.004, 5, 8), 'jaw'), 'jaw', HORN);
     }
@@ -196,10 +216,9 @@ export function buildDragonModel() {
   // ---- hind legs: heavy thighs, a backward knee, taloned feet
   for (const [s, k] of [[-1, 'R'], [1, 'L']]) {
     const hip = V(s * 0.72, 3.75, 0.05), knee = W['shin' + k], ankle = W['foot' + k];
-    const thigh = loft([hip, hip.clone().lerp(knee, 0.5).add(V(s * 0.12, 0, 0.12)), knee], 20, 20, (u) => ({ rx: lerp(0.62, 0.3, u), ry: lerp(0.78, 0.33, u) * (1 + Math.sin(u * Math.PI) * 0.18), shape: se(2.3) }), V(0, 0, 1), [2, 1]);
-    parts.push({ geo: reg(thigh.g, SCALE), weights: thigh.ringT.map((u) => u < 0.3 ? ['thigh' + k, 0.5 + u / 0.6, 'hips', 0.5 - u / 0.6] : ['thigh' + k, 1, 'thigh' + k, 0]) });
-    const shin = loft([knee.clone().add(V(0, 0.1, 0)), knee.clone().lerp(ankle, 0.45).add(V(0, 0, -0.12)), ankle], 18, 16, (u) => ({ rx: lerp(0.32, 0.15, u), ry: lerp(0.36, 0.17, u) * (1 + Math.sin(u * Math.PI) * 0.25), shape: se(2.2) }), V(0, 0, 1), [2, 1]);
-    parts.push({ geo: reg(shin.g, SCALE), weights: shin.ringT.map((u) => u < 0.2 ? ['shin' + k, 0.5 + u / 0.4, 'thigh' + k, 0.5 - u / 0.4] : ['shin' + k, 1, 'shin' + k, 0]) });
+    const leg = chainLoft([hip, hip.clone().lerp(knee, 0.5).add(V(s * 0.12, 0, 0.14)), knee, knee.clone().lerp(ankle, 0.5).add(V(0, 0, -0.14)), ankle, ankle.clone().add(V(0, -0.08, 0.2))],
+      ['thigh' + k, 'thigh' + k, 'shin' + k, 'shin' + k, 'foot' + k], [[0.66, 0.82], [0.56, 0.7], [0.3, 0.34], [0.24, 0.28], [0.15, 0.17], [0.16, 0.12]], { rings: 54, seg: 20, up: V(0, 0, 1), rootBone: 'hips' });
+    parts.push(leg);
     // the foot: three long toes forward, one back, each ending in a hooked talon
     const toes = [[-0.3, 1.0], [0, 1.15], [0.3, 0.95], [Math.PI, 0.5]];
     for (const [ang, len] of toes) {
@@ -213,13 +232,13 @@ export function buildDragonModel() {
   // ---- wing arms and finger bones
   for (const [s, k] of [[-1, 'R'], [1, 'L']]) {
     const sh = V(s * 0.55, 4.7, 3.1), el = W['wing2' + k], wr = W['wing3' + k];
-    const up = loft([sh, sh.clone().lerp(el, 0.5).add(V(0, 0.15, 0)), el], 16, 14, (u) => ({ rx: lerp(0.42, 0.2, u), ry: lerp(0.5, 0.22, u) * (1 + Math.sin(u * Math.PI) * 0.2), shape: se(2.2) }), V(0, 1, 0), [2, 1]);
-    parts.push({ geo: reg(up.g, SCALE), weights: up.ringT.map((u) => u < 0.3 ? ['wing1' + k, 0.5 + u / 0.6, 'chest', 0.5 - u / 0.6] : ['wing1' + k, 1, 'wing1' + k, 0]) });
-    const fo = loft([el, el.clone().lerp(wr, 0.5).add(V(0, 0.08, 0)), wr], 14, 12, (u) => ({ rx: lerp(0.2, 0.13, u), ry: lerp(0.22, 0.14, u), shape: se(2.2) }), V(0, 1, 0), [2, 1]);
-    parts.push({ geo: reg(fo.g, SCALE), weights: fo.ringT.map((u) => u < 0.15 ? ['wing2' + k, 0.5 + u / 0.3, 'wing1' + k, 0.5 - u / 0.3] : ['wing2' + k, 1, 'wing2' + k, 0]) });
+    const arm = chainLoft([sh, sh.clone().lerp(el, 0.5).add(V(0, 0.15, 0)), el, el.clone().lerp(wr, 0.5).add(V(0, 0.08, 0)), wr, wr.clone().add(V(s * 0.25, 0.02, -0.04))],
+      ['wing1' + k, 'wing1' + k, 'wing2' + k, 'wing2' + k, 'wing3' + k], [[0.44, 0.52], [0.34, 0.4], [0.2, 0.22], [0.16, 0.17], [0.15, 0.15], [0.1, 0.1]], { rings: 50, seg: 14, rootBone: 'chest' });
+    parts.push(arm);
     ['f1', 'f2', 'f3'].forEach((f, i) => {
       const tip = wr.clone().add(V(s * FINGERS[f][0], FINGERS[f][1], FINGERS[f][2]));
       rigid(tube([wr, wr.clone().lerp(tip, 0.5).add(V(0, 0.12, 0)), tip], 0.12 - i * 0.015, 0.02, 7, 18, 0.03), f + k, SCALE);
+      const dir = tip.clone().sub(wr).normalize(); rigid(tube([tip.clone().addScaledVector(dir, -0.05), tip.clone().addScaledVector(dir, 0.18).add(V(0, 0.03, 0)), tip.clone().addScaledVector(dir, 0.3).add(V(0, -0.08, 0))], 0.035, 0.003, 6, 8), f + k, CLAW);
     });
     // the thumb: a hooked claw at the wrist
     rigid(tube([wr.clone().add(V(0, 0.05, 0.05)), wr.clone().add(V(s * 0.15, 0.25, 0.45)), wr.clone().add(V(s * 0.1, 0.05, 0.75))], 0.09, 0.006, 7, 10), 'wing3' + k, CLAW);
@@ -293,7 +312,10 @@ export function dragonHideMaterial() {
         float mott = dn(vBindP * 1.3) * 0.6 + dn(vBindP * 4.0) * 0.4;
         float sh = sc.r, tint = sc.g;   // the scale's height (0 in the gaps, 1 on its keel) and its own shade
         vec3 hide = mix(vec3(0.018, 0.015, 0.015), vec3(0.085, 0.066, 0.056) * (0.7 + 0.6 * tint), smoothstep(0.1, 0.75, sh)) * (0.75 + 0.5 * mott);
-        hide = mix(hide, mix(vec3(0.05, 0.04, 0.032), vec3(0.2, 0.16, 0.12) * (0.8 + 0.4 * tint), smoothstep(0.1, 0.6, sh)), belly * 0.85);
+        // the belly: broad overlapping plates across it rather than scales
+        float plate = fract(vMapUv.y * 0.55); float seam = smoothstep(0.0, 0.08, plate) * smoothstep(1.0, 0.86, plate);
+        vec3 bellyC = vec3(0.21, 0.17, 0.12) * (0.55 + 0.45 * seam) * (0.85 + 0.3 * mott);
+        hide = mix(hide, bellyC, belly * 0.9);
         float rH = step(abs(vReg - 1.0), 0.4), rM = step(abs(vReg - 3.0), 0.4), rT = step(abs(vReg - 4.0), 0.4), rC = step(abs(vReg - 5.0), 0.4);
         float tipK = clamp(dn(vBindP * 9.0) * 0.4 + 0.3, 0.0, 1.0);
         vec3 horn = mix(vec3(0.16, 0.13, 0.1), vec3(0.03, 0.025, 0.025), tipK) * (0.8 + 0.4 * dn(vBindP * 30.0));

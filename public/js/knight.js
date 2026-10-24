@@ -313,6 +313,7 @@ export class Knight {
     this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.yaw = 0; this.spinYaw = 0;
     this.maxHp = 150; this.hp = 150; this.stamina = 100; this.maxStamina = 100;
     this.action = null; this.actT = 0; this.combo = 0; this.queued = null; this.comboReset = 0;
+    this.hitStop = 0; this.buffered = null; this.lungeExtra = 0; this.findTarget = null;
     this.blocking = false; this.blockT = 0; this.blockW = 0; this.sprintW = 0;
     this.praying = false; this.kneel = 0; this.prayT = 0;
     this.downed = false; this.downT = 0; this.reviveProgress = 0; this.dead = false;
@@ -366,11 +367,14 @@ export class Knight {
     return s;
   }
   tryAttack(heavy) {
-    if (!this.canAct || this.downed) return false;
+    if (this.downed) return false;
+    if (!this.canAct) { this.buffered = { heavy, t: 0.3 }; return false; }
     if (this.action) {
       const a = this.action; const t = this.actT;
-      if ((this.actKind === 'light' || this.actKind === 'heavy') && t >= a.chain * 0.85 && t < a.dur) { this.queued = heavy ? 'heavy' : 'light'; return true; }
-      if (this.actKind === 'light' || this.actKind === 'heavy') { if (t > a.chain * 0.5) this.queued = heavy ? 'heavy' : 'light'; }
+      // the next blow is queued as soon as the swing is under way, and chains the moment this one allows
+      if (this.actKind === 'light' || this.actKind === 'heavy') { if (t > Math.min(0.12, a.chain * 0.3) && t < a.dur) { this.queued = heavy ? 'heavy' : 'light'; return true; } return false; }
+      // pressed during a roll, a stagger or getting up: held a moment and thrown the instant he can
+      this.buffered = { heavy, t: 0.35 };
       return false;
     }
     return this.beginAttack(heavy);
@@ -380,6 +384,15 @@ export class Knight {
     const cost = clip.stamina * this.wdef.stamina;
     if (this.stamina < cost * 0.5) { this.events.push({ type: 'tired' }); return false; }
     this.stamina -= cost; this.staminaDelay = 0.9;
+    // close on the nearest foe in front: turn to him and let the step of the blow carry you into reach
+    this.lungeExtra = 0;
+    const tg = this.findTarget ? this.findTarget(this) : null;
+    if (tg) {
+      const reach = (this.wdef.hitTo || 1) * 0.8 + 0.5;
+      const want = Math.atan2(tg.x - this.pos.x, tg.z - this.pos.z), off = angleDiff(this.yaw, want);
+      if (Math.abs(off) < 1.0) this.yaw += off * 0.85;
+      this.lungeExtra = clamp(tg.dist - reach, 0, heavy ? 2.0 : 1.4);
+    }
     this.startAction(clip, heavy ? 'heavy' : 'light');
     if (!heavy) this.combo = (this.combo + 1) % this.lights.length; else this.combo = 0;
     this.comboReset = 1.2;
@@ -471,10 +484,12 @@ export class Knight {
     else this.blocking = false;
 
     // actions
+    if (this.buffered) { this.buffered.t -= dt; if (this.buffered.t <= 0) this.buffered = null; }
     if (this.canAct) {
       if (input.dodge) { const my = Math.hypot(input.mx, input.mz) > 0.2 ? Math.atan2(input.mx, input.mz) : this.yaw; this.tryDodge(my); }
       if (input.attack) this.tryAttack(false);
       if (input.heavy) this.tryAttack(true);
+      if (!input.attack && !input.heavy && this.buffered && !this.action) { const b = this.buffered; this.buffered = null; this.tryAttack(b.heavy); }
       if (input.relic) this.tryRelic();
     }
     if (this.action) this.advanceAction(dt, input, world);
@@ -492,6 +507,10 @@ export class Knight {
       const a = this.action;
       const m = sampleRange(a.moves, 't0', 't1', this.actT);
       let rm = m ? m.v : 0;
+      // the extra step into reach of the target, spread over the blow's own step
+      if (m && this.lungeExtra > 0 && (this.actKind === 'light' || this.actKind === 'heavy')) rm += this.lungeExtra / Math.max(0.1, (m.t1 - m.t0) / this.actionSpeed());
+      // the blade bites: everything stops for a moment
+      if (this.hitStop > 0) rm *= 0.1;
       if (this.actKind === 'roll') { ax = 0; az = 0; }
       else { ax *= 0.15; az *= 0.15; }
       if (a.legs === 'run') { /* charge */ }
@@ -521,7 +540,8 @@ export class Knight {
 
   advanceAction(dt, input, world) {
     const a = this.action;
-    this.actT += dt * (this.actKind === 'roll' || this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
+    const hs = this.hitStop > 0 ? 0.06 : 1; this.hitStop = Math.max(0, this.hitStop - dt);
+    this.actT += hs * dt * (this.actKind === 'roll' || this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
     // sound cues
     if (a.sfx) while (this.sfxIdx < a.sfx.length && this.actT >= a.sfx[this.sfxIdx].t) { this.events.push({ type: 'sfx', k: a.sfx[this.sfxIdx].k }); this.sfxIdx++; }
     if (a.release !== undefined && !this.released && this.actT >= a.release) { this.released = true; this.events.push({ type: 'relic', relic: this.actExtra.relic }); }
@@ -699,7 +719,9 @@ export class Knight {
     const L = this.locomotion(dt);
     // stance weapon channels: stance <-> carry (sprint) <-> block
     const bw = this.blockW = damp(this.blockW, this.blocking ? 1 : 0, 18, dt);
-    const sw = this.sprintW;
+    // carried for running: fully when sprinting, part of the way at a run (never mid-blow or in guard)
+    const runC = this.action || this.blocking ? 0 : clamp((this.speed - 3.4) / 1.6, 0, 1);
+    const sw = this.carryW = damp(this.carryW || 0, Math.max(this.sprintW, runC * 0.85), 8, dt);
     const S0 = this.st.stance, S1 = this.st.carry, S2 = this.st.block;
     const W = this.wNow, Lh = this.lNow, PO = this.polesNow;
     const mixV = (out, off, a, b, c) => { for (let i = 0; i < 3; i++) out[off + i] = a[i] * (1 - sw - bw * (1 - sw)) + b[i] * sw + c[i] * bw * (1 - sw); };
@@ -708,7 +730,7 @@ export class Knight {
       W[i] = S0.w.p[i] * m0 + S1.w.p[i] * sw + S2.w.p[i] * bw * (1 - sw);
       W[3 + i] = S0.w.d[i] * m0 + S1.w.d[i] * sw + S2.w.d[i] * bw * (1 - sw);
       W[6 + i] = S0.w.u[i] * m0 + S1.w.u[i] * sw + S2.w.u[i] * bw * (1 - sw);
-      PO[i] = S0.pr[i] * (1 - bw) + S2.pr[i] * bw; PO[3 + i] = S0.pl[i] * (1 - bw) + S2.pl[i] * bw;
+      PO[i] = (S0.pr[i] * (1 - sw) + S1.pr[i] * sw) * (1 - bw) + S2.pr[i] * bw; PO[3 + i] = (S0.pl[i] * (1 - sw) + S1.pl[i] * sw) * (1 - bw) + S2.pl[i] * bw;
     }
     let hasL = !!S0.l;
     if (S0.l) for (let i = 0; i < 3; i++) {

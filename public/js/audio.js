@@ -180,6 +180,26 @@ const RENDER = {
     for (let v = 0; v < 6; v++) { const o = ctx.createOscillator(); o.type = v % 2 ? 'square' : 'sawtooth'; o.frequency.value = midi(note + (v === 5 ? -12 : 0)) * (1 + (R() - 0.5) * 0.006); o.connect(lp); o.start(); }
     return normalize(await ctx.startRendering(), 0.75);
   },
+  // a snare: a crack of wires over a short tuned body
+  async snare() {
+    const dur = 0.45; const ctx = off(dur);
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(260, 0); o.frequency.exponentialRampToValueAtTime(185, 0.05);
+    const og = gainEnv(ctx, [[0, 0], [0.002, 0.7], [0.12, 0.0001, 'e']]); o.connect(og).connect(ctx.destination); o.start();
+    const n = src(ctx, noiseBuf(ctx, dur, 'white')); const hp = filt(ctx, 'highpass', 1500); const nb = bp(ctx, 4200, 0.7);
+    const ng = gainEnv(ctx, [[0, 0], [0.002, 1], [0.05, 0.45], [0.3, 0.0001, 'e']]); n.connect(hp).connect(nb).connect(ng).connect(ctx.destination); n.start();
+    return normalize(await ctx.startRendering(), 0.8);
+  },
+  // cymbals: a crash, or a rising swell (a roll on a suspended cymbal) that leads into one
+  async cymbal(swell) {
+    const dur = swell ? 1.3 : 3.2; const ctx = off(dur);
+    const n = src(ctx, noiseBuf(ctx, dur, 'white')); const hp = filt(ctx, 'highpass', swell ? 3500 : 2600);
+    const shimmer = bp(ctx, 7000, 0.6); const sg = ctx.createGain(); sg.gain.value = 0.7;
+    const env = swell ? gainEnv(ctx, [[0, 0.0001], [dur - 0.05, 1, 'e'], [dur, 0]]) : gainEnv(ctx, [[0, 0], [0.004, 1], [0.25, 0.5], [dur, 0.0001, 'e']]);
+    n.connect(hp); hp.connect(env); hp.connect(shimmer).connect(sg).connect(env); env.connect(ctx.destination); n.start();
+    // inharmonic metal partials
+    for (const f of [3150, 4270, 5530, 6890, 8120]) { const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = f * (0.97 + R() * 0.06); const g = ctx.createGain(); g.gain.value = 0.015; o.connect(g).connect(env); o.start(); }
+    return normalize(await ctx.startRendering(), swell ? 0.6 : 0.7);
+  },
   // war drums: a skin with real modes, a wooden shell and the hall
   async drum(f, rim) {
     const dur = rim ? 0.4 : 1.6; const ctx = off(dur);
@@ -349,6 +369,9 @@ export class AudioEngine {
     tasks.push(async () => { L.bells.low = await RENDER.bell(110); }, async () => { L.bells.mid = await RENDER.bell(220); });
     tasks.push(async () => { L.drums.low = await RENDER.drum(55); });
     tasks.push(async () => { L.drums.mid = await RENDER.drum(82); }, async () => { L.drums.rim = await RENDER.drum(0, true); });
+    // the final battle's kit: a great drum, snare, cymbals, and horns high enough to carry a theme
+    tasks.push(async () => { L.drums.taiko = await RENDER.drum(39); }, async () => { L.drums.snare = await RENDER.snare(); }, async () => { L.drums.swell = await RENDER.cymbal(true); }, async () => { L.drums.crash = await RENDER.cymbal(false); });
+    L.horn = {}; for (let n = 50; n <= 65; n += 3) tasks.push(async () => { L.horn[n] = await RENDER.brass(n); });
     for (let n = 38; n <= 74; n += 3) for (const v of ['ah', 'oo']) tasks.push(async () => { L.choir[v + n] = await RENDER.choir(n, v); });
     for (let n = 26; n <= 50; n += 3) { tasks.push(async () => { L.strings[n] = await RENDER.strings(n, false); }); tasks.push(async () => { L.spic[n] = await RENDER.strings(n, true); }); }
     for (let n = 29; n <= 47; n += 3) tasks.push(async () => { L.brass[n] = await RENDER.brass(n); });
@@ -571,7 +594,19 @@ const PROG = {
   prayer:  [[38, 45, 50, 54], [43, 50, 55, 59], [36, 43, 48, 52], [38, 45, 50, 54]],
   boss:    [[38, 44, 50, 53], [37, 44, 49, 52], [38, 44, 50, 53], [35, 42, 47, 50]],
   triumph: [[43, 50, 55, 59], [36, 43, 48, 52], [38, 45, 50, 54], [43, 50, 55, 59]],
+  // the last battle: D Phrygian, the flat second (E flat) grinding against the tonic
+  final:   [[38, 45, 50, 53], [39, 46, 51, 55], [38, 45, 50, 53], [36, 43, 48, 51]],
 };
+// every fourth phrase climbs: B flat, G minor, A major, and back to D
+const FINAL_BRIDGE = [[34, 41, 46, 50], [31, 43, 50, 55], [33, 40, 45, 49], [33, 40, 45, 49]];
+// the horn theme over each chord of the phrase: [beat, note, beats]
+const FINAL_THEME = [
+  [[0, 50, 3], [3, 53, 1], [4, 57, 4]],
+  [[0, 58, 3], [3, 57, 1], [4, 55, 2], [6, 51, 2]],
+  [[0, 53, 2], [2, 55, 1], [3, 57, 1], [4, 62, 4]],
+  [[0, 60, 3], [3, 58, 1], [4, 55, 2], [6, 57, 2]],
+];
+const FINAL_BRIDGE_THEME = [[[0, 58, 4], [4, 62, 4]], [[0, 62, 3], [3, 58, 1], [4, 55, 4]], [[0, 57, 4], [4, 61, 4]], [[0, 64, 4], [4, 61, 2], [6, 57, 2]]];
 class Score {
   constructor(a) {
     this.a = a; this.ctx = a.ctx; this.mood = 'dread'; this.intensity = 0; this.targetIntensity = 0;
@@ -606,11 +641,13 @@ class Score {
     const ctx = this.ctx, now = ctx.currentTime;
     this.intensity = lerp(this.intensity, this.targetIntensity, 1 - Math.exp(-dt * 0.7));
     if (this.stems) {
-      const want = { dread: 'dread', combat: 'combat', prayer: 'prayer', boss: 'boss', triumph: 'triumph' }[this.mood === 'dread' && this.intensity > 0.35 ? 'combat' : this.mood];
+      const want = { dread: 'dread', combat: 'combat', prayer: 'prayer', boss: 'boss', final: 'boss', triumph: 'triumph' }[this.mood === 'dread' && this.intensity > 0.35 ? 'combat' : this.mood];
       for (const k in this.stems) this.stems[k].gain.setTargetAtTime(k === want || (!this.stems[want] && k === 'dread') ? 1 : 0, now, 1.5);
       return;
     }
     const L = this.a.lib; if (!L || !L.ready) return;
+    if (this.mood === 'final') { this.choirOut.gain.setTargetAtTime(0, now, 0.35); this.updateFinal(now, L); return; }
+    this.fStep = null;
     const I = this.intensity; const mood = this.mood === 'dread' && I > 0.35 ? 'combat' : this.mood;
     const bpm = mood === 'boss' ? 96 : mood === 'combat' ? 88 : 72; const spb = 60 / bpm;
     if (this.nextBar < now - 0.5) { this.nextBar = now + 0.1; this.nextBeat = this.nextBar; }
@@ -664,6 +701,65 @@ class Score {
       const spic = mood === 'boss' ? 1 : mood === 'combat' ? I : 0;
       if (spic > 0.3) { const [root, fifth] = this.chord; const n = [root, root, fifth, root, root + 12, root, fifth, root][b % 8] - 12; this.sample(L.spic, n, '', t, 0.35 * spic, 0.45, 0.01); }
       this.nextBeat += spb / 2;
+    }
+  }
+
+  // The battle with the Dragon: war drums in 3-3-2, a spiccato ostinato grinding on the flat second, brass stabs,
+  // and over it all a horn theme. Layers enter with the fight (intensity: 0.3 waiting, 0.6 on the ground, 0.82 in
+  // the air over the wards, 1.0 when He is cast down and enraged); snare rolls and a cymbal swell drive every
+  // fourth bar into the next phrase.
+  updateFinal(now, L) {
+    const I = this.intensity, spb = 60 / 108, step = spb / 4;
+    if (this.fStep == null || this.nextStep < now - 0.5) { this.fStep = 0; this.nextStep = now + 0.1; }
+    while (this.nextStep < now + 0.25) {
+      const s = this.fStep++, t = this.nextStep, inChord = s % 32, b16 = s % 16;
+      if (inChord === 0) {
+        const idx = this.chordIdx++, n = idx % 4, bridge = Math.floor(idx / 4) % 4 === 3;
+        this.chord = (bridge ? FINAL_BRIDGE : PROG.final)[n]; this.fN = n; this.fBridge = bridge;
+        const [root, fifth, oct, third] = this.chord, len = spb * 8;
+        // the floor: low strings an octave and two below, and the brass pedal once the fight is on
+        this.sample(L.strings, root - 12, '', t, 0.55, len + 0.6, 0.4);
+        this.sample(L.strings, fifth - 12, '', t, 0.3, len + 0.6, 0.4);
+        if (I > 0.5) this.sample(L.strings, fifth, '', t, 0.18 + I * 0.12, len, 0.5);
+        if (I > 0.85) { this.sample(L.strings, oct + 12, '', t, 0.16, len, 0.6); this.sample(L.strings, third + 12, '', t + spb * 4, 0.12, len - spb * 4, 0.6); }
+        if (n === 0 && I > 0.5) { this.one(L.drums.crash, t, 0.32 + I * 0.15); this.one(L.drums.taiko, t, 0.9); }
+        // the theme
+        if (I > 0.6 && L.horn) {
+          const line = (bridge ? FINAL_BRIDGE_THEME : FINAL_THEME)[n];
+          for (const [bt, note, d] of line) {
+            this.sample(L.horn, note, '', t + bt * spb, 0.38 + (I - 0.6) * 0.3, d * spb + 0.35, 0.05);
+            if (I > 0.9) this.sample(L.brass, note - 12, '', t + bt * spb, 0.3, d * spb + 0.3, 0.05);   // doubled below, when He is enraged
+          }
+        }
+        if (R() < 0.25 * (1 - I)) this.a.stinger('drone', 0.25);
+      }
+      const [root, fifth] = this.chord;
+      // drums: the great drum in 3-3-2, toms answering, a heartbeat of it before the fight begins
+      const taiko = b16 === 0 || b16 === 6 || b16 === 12 || (I > 0.8 && b16 === 14);
+      if (I < 0.45) { if (b16 === 0 || (b16 === 3 && s % 32 < 16)) this.one(L.drums.taiko, t, b16 === 0 ? 0.55 : 0.3); }
+      else {
+        if (taiko) this.one(L.drums.taiko, t, b16 === 0 ? 0.85 : 0.6);
+        if (b16 === 3 || b16 === 9 || (I > 0.7 && (b16 === 10 || b16 === 15))) this.one(L.drums.mid, t, 0.4);
+        if (b16 === 8) this.one(L.drums.low, t, 0.55);
+      }
+      // snare: backbeat once the fight is in the air, and a roll that swells through the last bar of the phrase
+      const lastBar = this.fN === 3 && inChord >= 16;
+      if (L.drums.snare) {
+        if (I > 0.65 && (b16 === 4 || b16 === 12) && !lastBar) this.one(L.drums.snare, t, 0.32 + I * 0.15);
+        if (I > 0.55 && lastBar) this.one(L.drums.snare, t, 0.08 + 0.38 * ((inChord - 16) / 16), 1 + (R() - 0.5) * 0.04);
+      }
+      if (I > 0.85 && s % 2 === 1) this.one(L.drums.rim, t, 0.07);
+      if (this.fN === 3 && inChord === 24 && I > 0.5) this.one(L.drums.swell, t, 0.4);
+      // the ostinato: low spiccato strings, eighths, then sixteenths, leaning on the flat second
+      if (I > 0.35 && (I > 0.6 || s % 2 === 0)) {
+        const pat = [0, 0, 12, 0, 0, 0, 7, 0, 0, 0, 12, 0, 1, 0, 7, 0];
+        this.sample(L.spic, root + pat[b16] - 12, '', t, (b16 % 4 === 0 ? 0.42 : 0.28) * Math.min(1, 0.4 + I), 0.4, 0.008);
+      }
+      // brass stabs on the 3-3-2 accents of the first bar of each chord
+      if (I > 0.45 && inChord < 16 && (b16 === 0 || b16 === 6 || b16 === 12)) {
+        this.sample(L.brass, root, '', t, 0.42 + I * 0.15, 0.55, 0.02); this.sample(L.brass, fifth, '', t, 0.3, 0.55, 0.02);
+      }
+      this.nextStep += step;
     }
   }
 }

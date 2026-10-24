@@ -88,7 +88,8 @@ export class Story {
         const t = t0 + r() * 0.12; const p = world.path.at(t), q = world.path.at(Math.min(1, t + 0.01));
         let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
         const side = r() < 0.5 ? -1 : 1, off = 6 + r() * 5;
-        x = p.x + nx * side * off; z = p.z + nz * side * off; ok = world.okSpot(x, z, 4, 12);
+        const off2 = world.ch.terrain.kind === 'mountain' ? 3 + r() * 2.5 : off;   // in the ravine: on its floor, never up the walls
+        x = p.x + nx * side * off2; z = p.z + nz * side * off2; ok = world.okSpot(x, z, world.ch.terrain.kind === 'mountain' ? 2.5 : 4, 12) && world.normalAt(x, z).y > 0.93;
       }
       const { g, page } = cairn(r);
       g.position.set(x, world.heightAt(x, z) - 0.04, z); g.rotation.y = r() * TAU; this.group.add(g);
