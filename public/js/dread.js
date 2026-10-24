@@ -47,6 +47,7 @@ export class Dread {
       if (others && !allies) { rise = rise * 1.7 + 0.004; this.alone = true; } else this.alone = false;
       fall += Math.min(0.03, this.alliesNear(me, 6) * 0.012);
       if (life > 0.7) fall += 0.02;
+      rise *= 0.7 + 0.8 * (g.terror ? g.terror.level : 0.5);   // deeper into the blight, the fear comes faster
     } else fall += 0.1;
     if (me.praying) fall += 0.07;
     for (const a of w.altars) if (a.state === 'cleansed' && Math.hypot(a.x - me.pos.x, a.z - me.pos.z) < 12) { fall += 0.05; break; }

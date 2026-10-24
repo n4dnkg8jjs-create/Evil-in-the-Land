@@ -13,6 +13,7 @@ import { Story } from './story.js';
 import { Dread } from './dread.js';
 import { fallenKnightSpots } from './battlefield.js';
 import { Shop } from './shop.js';
+import { Terror } from './terror.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, rng, TAU } from './util.js';
 
 const DIFF = { pilgrim: { dmg: 0.55, spawn: 0.75, prayer: 0.85 }, knight: { dmg: 1, spawn: 1, prayer: 1 }, martyr: { dmg: 1.4, spawn: 1.3, prayer: 1.15 } };
@@ -46,7 +47,7 @@ export class Game {
     this.ui.setSelf(this.me);
     let role = 0;
     for (const p of opts.players) if (p.ai) { const k = this.knights.get(p.id); this.companions.push(new Companion(k, role++)); }
-    this.story = new Story(this); this.dread = new Dread(this); this.shop = new Shop(this); this.shop.applyToMe();
+    this.story = new Story(this); this.dread = new Dread(this); this.shop = new Shop(this); this.shop.applyToMe(); this.terror = new Terror(this);
     this.bindNet();
   }
 
@@ -73,7 +74,7 @@ export class Game {
     this.world = new World(this.engine, this.engine.q, n);
     this.story.build(this.world, n); this.dread.clear();
     this.layOutFallen(ch);
-    this.shop.build(this.world);
+    this.shop.build(this.world); this.terror.reset();
     if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
@@ -216,7 +217,7 @@ export class Game {
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
-    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); }
+    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); this.terror.update(dt, this.time); }
     // the sky answers the land beneath you: blue over living country, ember-red in the blight
     if (this.world) {
       const life = this.world.lifeAt(this.me.pos.x, this.me.pos.z);
@@ -963,7 +964,7 @@ export class Game {
     for (const t of this.trails.values()) t.dispose(this.scene);
     this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
-    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); for (const k of this.fallenKnights || []) k.dispose();
+    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); for (const k of this.fallenKnights || []) k.dispose();
     for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'left']) this.net?.off(k);
   }
 }

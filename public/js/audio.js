@@ -534,6 +534,14 @@ export class AudioEngine {
     n.connect(bpf).connect(g).connect(this.amb); n.start(); lfo.start(); lfo2.start(); this.windGain = g;
     const r = ctx.createOscillator(); r.frequency.value = 38; const rg = ctx.createGain(); rg.gain.value = 0.05; r.connect(rg).connect(this.amb); r.start(); this.rumble = rg;
   }
+  // the world goes quiet: music, wind and the battle fall away for a few seconds, then come back
+  silence(sec = 4) {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    for (const [bus, back] of [[this.musicBus, this.vol.music], [this.amb, 0.5], [this.sfx, this.vol.sfx]]) {
+      bus.gain.cancelScheduledValues(t); bus.gain.setTargetAtTime(bus === this.sfx ? back * 0.15 : 0.0001, t, 0.25);
+      bus.gain.setTargetAtTime(back, t + sec, bus === this.sfx ? 0.02 : 1.2);
+    }
+  }
   setAmbience(wind = 0.5, rumble = 0.05) { if (!this.ctx) return; const t = this.ctx.currentTime; this.windGain.gain.setTargetAtTime(wind, t, 1.5); this.rumble.gain.setTargetAtTime(rumble, t, 1.5); }
   update(dt) { if (this.music) this.music.update(dt); }
 }
@@ -616,14 +624,14 @@ class Score {
       }
       // the creeping dread: dissonance, breath and far-off screams, never while the knights pray
       if (dark || fight) {
-        const k = R();
+        const k = R() / (0.7 + 0.6 * (this.a.terror ?? 0.5));   // the deeper the chapter, the more of it
         if (k < (dark ? 0.32 : 0.16)) this.a.stinger('drone', 0.35);
         else if (k < (dark ? 0.52 : 0.28)) this.a.stinger('cluster', dark ? 0.24 : 0.28);
         else if (k < (dark ? 0.62 : 0.34)) this.a.stinger('scrape', 0.18);
         else if (dark && k < 0.74) this.a.stinger('breath', 0.25);
         // high strings hanging a semitone off the chord, barely there
         if (dark && R() < 0.45) this.sample(L.strings, oct + 13, '', bar + spb * 2, 0.07, len - spb * 2, 3);
-        if (dark && R() < 0.3) this.a.distant('scream');
+        if (dark && R() < 0.15 + 0.35 * (this.a.terror ?? 0.5)) this.a.distant('scream');
       }
       this.heart = dark && R() < 0.55;
       this.nextBar += len;
