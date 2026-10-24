@@ -220,7 +220,20 @@ const BONES = (() => {
   return B;
 })();
 const BI = Object.fromEntries(BONES.map((b, i) => [b[0], i]));
-const HEAD_OF = Object.fromEntries(BONES.map((b) => [b[0], b[2]]));
+// Proportions: the legs are lengthened below the belly line (the trunk, neck and head keep their shape), then the
+// whole horse is brought back to its height at the withers. Applied to the finished mesh, hair, tack and skeleton.
+const LEG_K = 1.16, LEG_Y0 = 0.78, FIT = 1.66 / (1.6 + LEG_Y0 * (LEG_K - 1));
+const warpY = (y) => (y < LEG_Y0 ? y * LEG_K : y + LEG_Y0 * (LEG_K - 1));
+const W3 = (p) => [p[0] * FIT, warpY(p[1]) * FIT, p[2] * FIT];
+function warpArrays(pos, nrm) {
+  for (let i = 0; i < pos.length; i += 3) {
+    const low = pos[i + 1] < LEG_Y0;
+    pos[i] *= FIT; pos[i + 1] = warpY(pos[i + 1]) * FIT; pos[i + 2] *= FIT;
+    if (nrm && low) { const x = nrm[i], y = nrm[i + 1] / LEG_K, z = nrm[i + 2], l = Math.hypot(x, y, z) || 1; nrm[i] = x / l; nrm[i + 1] = y / l; nrm[i + 2] = z / l; }
+  }
+}
+const HEAD_RAW = Object.fromEntries(BONES.map((b) => [b[0], b[2]]));
+const HEAD_OF = Object.fromEntries(BONES.map((b) => [b[0], W3(b[2])]));
 function boneReach(name) {
   if (/pelvis|spine|chest/.test(name)) return 0.32;
   if (/neck/.test(name)) return 0.13;
@@ -291,7 +304,7 @@ export function buildHorseData(h = 0.022, target = 0) {
     pos[v * 3] = x; pos[v * 3 + 1] = y; pos[v * 3 + 2] = z;
   }
   const child = {}; for (const [n, p] of BONES) if (p && !child[p]) child[p] = n;
-  const segs = BONES.map(([n], i) => { const a = HEAD_OF[n], c = child[n] ? HEAD_OF[child[n]] : null; return { i, n, a, b: c || [a[0], a[1] - 0.05, a[2]], r: boneReach(n), side: /L$/.test(n) ? 1 : /R$/.test(n) ? -1 : 0, ear: /ear/.test(n), tail: /tail/.test(n) }; }).filter((s) => s.r > 0);
+  const segs = BONES.map(([n], i) => { const a = HEAD_RAW[n], c = child[n] ? HEAD_RAW[child[n]] : null; return { i, n, a, b: c || [a[0], a[1] - 0.05, a[2]], r: boneReach(n), side: /L$/.test(n) ? 1 : /R$/.test(n) ? -1 : 0, ear: /ear/.test(n), tail: /tail/.test(n) }; }).filter((s) => s.r > 0);
   const si = new Uint16Array(nV * 4), sw = new Float32Array(nV * 4), mk = new Float32Array(nV * 4);   // markings: points, hoof, blaze, muzzle
   const w = [];
   for (let v = 0; v < nV; v++) {
@@ -320,7 +333,9 @@ export function buildHorseData(h = 0.022, target = 0) {
   // tack merged per material and bone
   const groups = {}; for (const [g, m, bn] of buildTack()) { const k = m + '|' + bn; (groups[k] = groups[k] || []).push(g.index ? g.toNonIndexed() : g); }
   const tack = Object.entries(groups).map(([k, gs]) => { const [m, bone] = k.split('|'); const P = [], N = []; for (const g of gs) { if (!g.attributes.normal) g.computeVertexNormals(); P.push(...g.attributes.position.array); N.push(...g.attributes.normal.array); } return { m, bone, pos: P, nrm: N }; });
-  return { pos: Array.from(pos), nrm: Array.from(nrm), si: Array.from(si), sw: Array.from(sw), mk: Array.from(mk), idx, hair: geoData(buildHair()), tack };
+  const hair = geoData(buildHair()); warpArrays(hair.position.a, null); for (const t of tack) warpArrays(t.pos, t.nrm);
+  warpArrays(pos, nrm);
+  return { pos: Array.from(pos), nrm: Array.from(nrm), si: Array.from(si), sw: Array.from(sw), mk: Array.from(mk), idx, hair, tack };
 }
 
 // ---------------------------------------------------------------- the data, built offline or here
@@ -538,7 +553,7 @@ export function makeHorse(seed = 1, coat = 0x4a2a18) {
   const B = build(); const r = rng(seed);
   const root = new THREE.Group();
   const bones = {}, list = [];
-  for (const [n, p, h] of BONES) { const b = new THREE.Bone(); b.name = n; const ph = p ? HEAD_OF[p] : [0, 0, 0]; b.position.set(h[0] - ph[0], h[1] - ph[1], h[2] - ph[2]); b.rotation.order = 'YXZ'; bones[n] = b; list.push(b); if (p) bones[p].add(b); }
+  for (const [n, p] of BONES) { const h = HEAD_OF[n]; const b = new THREE.Bone(); b.name = n; const ph = p ? HEAD_OF[p] : [0, 0, 0]; b.position.set(h[0] - ph[0], h[1] - ph[1], h[2] - ph[2]); b.rotation.order = 'YXZ'; bones[n] = b; list.push(b); if (p) bones[p].add(b); }
   const rest = {}; for (const n in bones) rest[n] = bones[n].position.clone();
   const body = new THREE.SkinnedMesh(B.geo, coatMaterial(coat, seed % 2 === 1)); body.add(bones.root); body.castShadow = true; body.receiveShadow = true; body.frustumCulled = false;
   root.add(body); body.updateMatrixWorld(true);
@@ -550,14 +565,14 @@ export function makeHorse(seed = 1, coat = 0x4a2a18) {
   const lidM = coatMaterial(coat, false); const lids = [];
   for (const s of [-1, 1]) {
     const e = H(0.17, 0.058, s * 0.1);
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.024, 18, 12).scale(1, 0.85, 1.1), eyeM); eye.position.set(e[0] - POLL[0], e[1] - POLL[1], e[2] - POLL[2]); bones.head.add(eye);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.024, 18, 12).scale(1, 0.85, 1.1), eyeM); eye.position.set((e[0] - POLL[0]) * FIT, (e[1] - POLL[1]) * FIT, (e[2] - POLL[2]) * FIT); bones.head.add(eye);
     const lid = new THREE.Mesh(new THREE.SphereGeometry(0.0268, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.5).scale(1, 0.85, 1.12), lidM); lid.position.copy(eye.position); lid.rotation.order = 'YXZ'; bones.head.add(lid); lids.push(lid);
   }
   // reins: from the bit rings through the terrets back to the driver's hands, recomputed every frame
   const reinGeo = new THREE.BufferGeometry(); const reinPos = new Float32Array(2 * 14 * 4 * 3); reinGeo.setAttribute('position', new THREE.BufferAttribute(reinPos, 3));
   const ri = []; for (let s = 0; s < 2; s++) for (let k = 0; k < 13; k++) for (let c = 0; c < 2; c++) { const a = (s * 14 + k) * 4 + c * 2, b = a + 4; ri.push(a, b, a + 1, a + 1, b, b + 1); } reinGeo.setIndex(ri);
   const reins = new THREE.Mesh(reinGeo, new THREE.MeshStandardMaterial({ color: 0x24160d, roughness: 0.6, side: THREE.DoubleSide })); reins.frustumCulled = false; root.add(reins);
-  const bits = [v3(...H(0.55, -0.075, 0.075)), v3(...H(0.55, -0.075, -0.075))], ters = [v3(0.25, 1.78, 0.9), v3(-0.25, 1.78, 0.9)];
+  const bits = [v3(...W3(H(0.55, -0.075, 0.075))), v3(...W3(H(0.55, -0.075, -0.075)))], ters = [v3(...W3([0.25, 1.78, 0.9])), v3(...W3([-0.25, 1.78, 0.9]))];
   const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _m = new THREE.Matrix4(), _p = new THREE.Vector3();
 
   const st = { t: r() * 10, ph: r(), toss: 0, earT: 0, ears: [0, 0], blink: 2 + r() * 3, rest: r() < 0.5 ? 'L' : 'R', restT: 3 + r() * 5, gait: 0 };
@@ -621,7 +636,7 @@ export function makeHorse(seed = 1, coat = 0x4a2a18) {
     const drv = v3(-root.position.x * 0.85, 1.66, -2.05);
     bones.head.updateWorldMatrix(true, false); bones.neck1.updateWorldMatrix(true, false);
     for (let s = 0; s < 2; s++) {
-      _a.copy(bits[s]).sub(_p.set(...POLL)).applyMatrix4(bones.head.matrixWorld).applyMatrix4(_m);
+      _a.copy(bits[s]).sub(_p.set(...HEAD_OF.head)).applyMatrix4(bones.head.matrixWorld).applyMatrix4(_m);
       _b.copy(ters[s]).sub(_p.set(...HEAD_OF.neck1)).applyMatrix4(bones.neck1.matrixWorld).applyMatrix4(_m);
       const c = new THREE.CatmullRomCurve3([_a.clone(), _a.clone().lerp(_b, 0.5).add(v3(0, -0.05, 0)), _b.clone(), _b.clone().lerp(drv, 0.5).add(v3(0, -0.2 + gal * 0.14, 0)), drv.clone().add(v3(s ? -0.06 : 0.06, 0, 0))]);
       for (let k = 0; k < 14; k++) { const p = c.getPoint(k / 13); const o = (s * 14 + k) * 12; reinPos.set([p.x - 0.01, p.y, p.z, p.x + 0.01, p.y, p.z, p.x, p.y - 0.006, p.z, p.x, p.y + 0.006, p.z], o); }

@@ -140,7 +140,13 @@ export class Shop {
   updateWagon(dt) {
     const g = this.g, w = this.wagon, W = this.world;
     const speed = this.leave ? this.leave.v : 0;
-    for (const h of w.userData.horses || []) h.update(dt, speed);
+    // each horse stands on the ground under its own hooves, not on the wagon's level
+    w.updateMatrixWorld(true); const wi = new THREE.Matrix4().copy(w.matrixWorld).invert();
+    for (const h of w.userData.horses || []) {
+      h.update(dt, speed);
+      const p = h.root.getWorldPosition(new THREE.Vector3()); p.y = W.groundAt(p.x, p.z); p.applyMatrix4(wi);
+      h.root.position.y += (p.y - h.root.position.y) * Math.min(1, dt * 12 + (h.placed ? 0 : 1)); h.placed = true;
+    }
     for (const wh of w.userData.wheels || []) wh.rotation.z -= speed * dt / 0.58;
     if (this.blessFx > 0) { this.blessFx -= dt; if (this.blessFx <= 0) { g.fx.holyBurst(g.me.pos, 2); g.audio.holy?.(g.me.pos, 0.4); } }
     if (!this.leave) {
