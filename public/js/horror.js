@@ -44,9 +44,10 @@ const BUMP = `
     vec3 vGrad = sign(fDet) * (dHdxy.x * R1 + dHdxy.y * R2);
     return normalize(abs(fDet) * surf_norm - vGrad);
   }`;
-export function demonSkin(rimHex, { skin = 0x141012, glow = 1 } = {}) {
+export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eyes = null } = {}) {
   const dt = demonTextures();
-  const u = { uDissolve: { value: 0 }, uRim: { value: new THREE.Color(rimHex) }, uGlow: { value: glow }, uHit: { value: 0 }, uTime: { value: 0 }, uSeed: { value: Math.random() * 10 } };
+  const u = { uDissolve: { value: 0 }, uRim: { value: new THREE.Color(rimHex) }, uGlow: { value: glow }, uHit: { value: 0 }, uTime: { value: 0 }, uSeed: { value: Math.random() * 10 },
+    uEyeL: { value: new THREE.Vector3(...(eyes ? eyes[0] : [0, -9, 0])) }, uEyeR: { value: new THREE.Vector3(...(eyes ? eyes[1] : [0, -9, 0])) }, uHeadY: { value: eyes ? eyes[2] : 99 } };
   const mat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.5, metalness: 0.0, side: THREE.DoubleSide });
   mat.userData.u = u;
   mat.onBeforeCompile = (sh) => {
@@ -57,7 +58,7 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1 } = {}) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vDPos; varying vec3 vDN; varying float vReg;
-        uniform float uDissolve, uGlow, uHit, uTime, uSeed; uniform vec3 uRim; uniform sampler2D tA, tE;
+        uniform float uDissolve, uGlow, uHit, uTime, uSeed, uHeadY; uniform vec3 uRim, uEyeL, uEyeR; uniform sampler2D tA, tE;
         float dh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
         float dn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(dh(i), dh(i+vec3(1,0,0)), f.x), mix(dh(i+vec3(0,1,0)), dh(i+vec3(1,1,0)), f.x), f.y),
@@ -71,13 +72,32 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1 } = {}) {
         vec4 skinB = tri(tA, vDPos * 7.1 + 0.37, tw);
         float veins = tri(tE, vDPos * 1.7, tw).r;
         float hgt = clamp((dot(skinA.rgb, vec3(0.33)) * 0.55 + dot(skinB.rgb, vec3(0.33)) * 0.45 - 0.05) * 9.0, 0.0, 1.0);
-        float teeth = step(0.5, vReg);`)
+        float teeth = step(0.5, vReg);
+        #ifdef DEAD_SKIN
+        if (teeth > 0.5) discard;   // no fangs on Him: a shut, bloodless mouth
+        #endif`)
       .replace('#include <map_fragment>', `
+        #ifdef DEAD_SKIN
+          // a corpse's face: waxy grey-white, the blood settled blue-grey under it, veins showing through,
+          // bruised hollows round the eyes, the lips dry and dark (no teeth showing, nothing shining)
+          float ash = smoothstep(0.3, 0.95, hgt);
+          vec3 base = diffuseColor.rgb * mix(0.8, 1.15, ash);
+          base = mix(base, base * vec3(0.78, 0.84, 0.9), smoothstep(0.4, 0.8, dn(vDPos * 3.0)) * 0.6);   // livor, mottled
+          base *= 1.0 - smoothstep(0.62, 0.95, veins) * 0.09 * vec3(0.9, 0.8, 0.6);                      // faint veins under the skin
+          float sock = min(length(vDPos - uEyeL), length(vDPos - uEyeR));
+          base *= mix(vec3(0.6, 0.58, 0.68), vec3(1.0), smoothstep(0.03, 0.09, sock));                  // sunken sockets, the skin there bruised grey-violet
+          diffuseColor.rgb = mix(base, vec3(0.16, 0.11, 0.12), teeth);
+        #else
         // ash-grey where the skin is stretched over bone, near black in the folds
         float ash = smoothstep(0.35, 0.9, hgt);
         diffuseColor.rgb = mix(diffuseColor.rgb * 0.55, diffuseColor.rgb * 2.4 + vec3(0.03, 0.025, 0.02), ash);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.55, 0.42), teeth);
-        if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.03, 0.0, 0.0);   // throat and sockets`)
+        #endif
+        #ifdef DEAD_SKIN
+        if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.035, 0.03, 0.032);
+        #else
+        if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.03, 0.0, 0.0);   // throat and sockets
+        #endif`)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(clamp(roughness + (0.5 - hgt) * 0.45, 0.25, 0.9), 0.28, teeth);')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         vec2 dHdxy = vec2(dFdx(hgt), dFdy(hgt)) * 0.007 * (1.0 - teeth) * (gl_FrontFacing ? 1.0 : 0.0);
@@ -85,19 +105,49 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1 } = {}) {
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         float pulse = 0.55 + 0.45 * sin(uTime * 2.3 + uSeed + vDPos.y * 4.0);
         float ff = gl_FrontFacing ? 1.0 : 0.0;
+        #ifndef DEAD_SKIN
         totalEmissiveRadiance += uRim * pow(veins, 4.0) * 0.35 * pulse * uGlow * (1.0 - teeth) * ff;
         float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
         totalEmissiveRadiance += uRim * fres * 0.18 * uGlow * ff;
+        #endif
         totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit * 1.6;
         if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);
   };
-  mat.customProgramCacheKey = () => 'demonSkin-v3';
+  if (dead) { mat.defines = { DEAD_SKIN: '' }; mat.roughness = 0.62; }
+  mat.customProgramCacheKey = () => dead ? 'demonSkin-dead-v1' : 'demonSkin-v3';
   return mat;
 }
 // Eyes: blank, white, burning. Shared by every demon.
 const EYE_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 1, 1).multiplyScalar(5), toneMapped: false });
 const EYE_GEO = new THREE.SphereGeometry(1, 14, 10);
 const PUPIL_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.05, 0.02).multiplyScalar(3), toneMapped: false });
+// His eyes are not lamps: real, wet eyes, the whites shot with red veins from the corners, the iris milked over
+// almost to white like a dead man's, a faint grey pupil. Painted once onto the sphere (the front is u .25, v .5).
+let _realEye = null;
+function realEyeMat() {
+  if (_realEye) return _realEye;
+  const W = 512, H = 256, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  const sc = x.createRadialGradient(W * 0.25, H * 0.5, 4, W * 0.25, H * 0.5, W * 0.3);
+  sc.addColorStop(0, '#e4e2da'); sc.addColorStop(0.6, '#d6cfc2'); sc.addColorStop(1, '#a89484');
+  x.fillStyle = sc; x.fillRect(0, 0, W, H);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // veins creeping in from the corners toward the iris, forking as they go
+  const vein = (px, py, ang, len, w) => {
+    x.strokeStyle = `rgba(${150 + rnd() * 40 | 0}, ${20 + rnd() * 25 | 0}, ${25 + rnd() * 20 | 0}, ${0.35 + rnd() * 0.4})`; x.lineWidth = w; x.beginPath(); x.moveTo(px, py);
+    let a = ang, X = px, Y = py;
+    for (let i = 0; i < len; i++) { a += (rnd() - 0.5) * 0.7; X += Math.cos(a) * 4; Y += Math.sin(a) * 2.2; x.lineTo(X, Y); if (w > 0.6 && rnd() < 0.08) vein(X, Y, a + (rnd() - 0.5) * 1.6, len * 0.5, w * 0.6); }
+    x.stroke();
+  };
+  for (let k = 0; k < 26; k++) { const side = k % 2 ? 1 : -1; const px = W * 0.25 + side * (W * 0.12 + rnd() * W * 0.08), py = H * (0.3 + rnd() * 0.4); vein(px, py, side > 0 ? Math.PI + (rnd() - 0.5) * 0.8 : (rnd() - 0.5) * 0.8, 6 + rnd() * 10, 1.2 + rnd() * 1.4); }
+  // the iris, filmed over; a limbal ring; a dim pupil
+  const ir = x.createRadialGradient(W * 0.25, H * 0.5, 2, W * 0.25, H * 0.5, 34);
+  ir.addColorStop(0, 'rgba(120,124,128,0.9)'); ir.addColorStop(0.25, 'rgba(176,182,186,0.85)'); ir.addColorStop(0.8, 'rgba(198,204,206,0.8)'); ir.addColorStop(0.95, 'rgba(120,124,126,0.85)'); ir.addColorStop(1, 'rgba(120,124,126,0)');
+  x.fillStyle = ir; x.beginPath(); x.ellipse(W * 0.25, H * 0.5, 34, 30, 0, 0, Math.PI * 2); x.fill();
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  _realEye = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.12, metalness: 0, envMapIntensity: 0.8 });
+  return _realEye;
+}
+const REAL_EYE_GEO = new THREE.SphereGeometry(1, 32, 20);
 
 // ---------------------------------------------------------------- extras
 function wingGeometry(s, span) {
@@ -182,7 +232,7 @@ function robeGeo(top, bottom, len) {
 // ---------------------------------------------------------------- build a body
 export function buildHorror(kind, def) {
   const K = DB.kinds[kind];
-  const mat = demonSkin(def.rim, { skin: def.skin ?? 0x141012 });
+  const mat = demonSkin(def.rim, { skin: def.skin ?? 0x141012, dead: !!def.dead });
   const bones = K.joints.map((j) => { const b = new THREE.Bone(); b.name = j.name; b.position.fromArray(j.pos); b.rotation.order = 'YXZ'; return b; });
   const idx = {}; K.joints.forEach((j, i) => (idx[j.name] = i));
   K.joints.forEach((j, i) => { if (j.parent) bones[idx[j.parent]].add(bones[i]); });
@@ -194,8 +244,14 @@ export function buildHorror(kind, def) {
   const B = {}; K.joints.forEach((j, i) => (B[j.name] = bones[i]));
   // eyes, sunk in the sockets
   for (const e of K.eyes) {
-    const m = new THREE.Mesh(EYE_GEO, EYE_MAT); m.scale.setScalar(e[3] * 0.92); m.position.set(e[0], e[1], e[2] - e[3] * 0.1);
-    B.head.add(m);
+    const real = !!def.realEyes;
+    const m = new THREE.Mesh(real ? REAL_EYE_GEO : EYE_GEO, real ? realEyeMat() : EYE_MAT); m.scale.setScalar(e[3] * (real ? 1.0 : 0.92)); m.position.set(e[0], e[1], e[2] - e[3] * (real ? 0.32 : 0.1));
+    if (real) m.rotation.y = e[0] * 1.5;   // a slight outward turn: eyes that look past you as much as at you
+    m.userData.eye = true; B.head.add(m);
+  }
+  if (def.dead) {   // where the eyes sit in the mesh's own space, for the bruised sockets in the skin shader
+    mesh.updateMatrixWorld(true); const ey = B.head.children.filter((m) => m.userData.eye).map((m) => m.getWorldPosition(new THREE.Vector3()));
+    if (ey.length === 2) { mat.userData.u.uEyeL.value.copy(ey[0]); mat.userData.u.uEyeR.value.copy(ey[1]); }
   }
   // extras that ride on the bones (in their bind-pose frames)
   const extras = [];
@@ -250,7 +306,7 @@ export function buildHorror(kind, def) {
     g.computeVertexNormals();
     const c = new THREE.Mesh(g, CLOTH_MAT); c.position.set(0, 0.22 * hs, 0); c.castShadow = true; B.chest.add(c);
   }
-  if (def.eyeScale) for (const m of B.head.children) if (m.material === EYE_MAT) {
+  if (def.eyeScale) for (const m of B.head.children) if (m.userData.eye) {
     m.scale.multiplyScalar(def.eyeScale);
     // a pinprick of red at the centre of each (He alone has eyes of pure white)
     if (!def.hooded) { const pu = new THREE.Mesh(EYE_GEO, PUPIL_MAT); pu.scale.setScalar(0.22); pu.position.set(0, 0, 0.93); m.add(pu); }
@@ -315,7 +371,7 @@ function dressDevil(B, K, def) {
   // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
   if (def.horns) for (const s of [-1, 1]) {
     const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), HORN_MAT); h.castShadow = true;
-    h.position.set(s * 0.09, 0.19, 0.1); h.rotation.set(-0.55, s * 0.3, -s * 0.42);
+    h.position.set(s * 0.1, 0.2, 0.08); h.rotation.set(-0.35, s * 0.45, -s * 0.7);
     B.head.add(h);
   }
 }

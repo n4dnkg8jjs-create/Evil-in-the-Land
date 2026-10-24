@@ -54,7 +54,7 @@ function dragonMaterial() {
 // knee, ram horns, a ragged cloak, and two wide white eyes that never blink.
 // He stands perfectly still. Only the head moves, in sudden snaps, and at the
 // end it turns all the way round before he is gone.
-const WATCHER_DEF = { rim: 0x1a0606, skin: 0x8a8c8a, horns: [0.58, 0.055, 3.1], hooded: true, eyeScale: 1.7 };
+const WATCHER_DEF = { rim: 0x000000, skin: 0x8e9592, horns: [0.95, 0.07, 3.0], hooded: true, dead: true, realEyes: true, eyeScale: 1.15 };
 
 export class Watcher {
   constructor(scene, fx) {
@@ -140,7 +140,7 @@ export class Watcher {
     const ny = clamp(this.headYaw, -0.6, 0.6) * 0.3;
     B.neck.rotation.set(0.14 - Math.abs(this.headRoll) * 0.1, ny, this.headRoll * 0.25, 'YXZ');
     B.head.rotation.set(-0.08 + Math.abs(this.headRoll) * 0.12 + tremor, this.headYaw - ny, this.headRoll * 0.8 + tremor, 'YXZ');
-    e(B.jaw, 4, 0, 0);
+    e(B.jaw, 0, 0, 0);   // the mouth stays shut
     for (const [k, sg] of [['R', -1], ['L', 1]]) { e(B['clav' + k], 0, 0, 0); e(B['thigh' + k], 0, 0, sg * 3); e(B['shin' + k], 2, 0, 0); e(B['foot' + k], 0, 0, 0); }
     if (this.mode === 'army') { // arms raised, presenting his legion
       e(B.uArmR, -155 + Math.sin(time * 0.7) * 5, 0, -28); e(B.uArmL, -155 + Math.cos(time * 0.7) * 5, 0, 28); e(B.fArmR, -8, 0, 0); e(B.fArmL, -8, 0, 0); e(B.handR, 10, 0, 0); e(B.handL, 10, 0, 0);
