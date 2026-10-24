@@ -105,7 +105,7 @@ export class Shop {
     const n = world.normalAt(x, z); w.rotation.x = Math.atan2(n.z, n.y) * 0.5; w.rotation.z = -Math.atan2(n.x, n.y) * 0.5;
     this.g.scene.add(w); world.addCollider(x, z, 2.0);
     this.spot = { x, z };
-    // the sutler on his box seat, and Father Bertram standing by the wagon, inside a ring of candles: sanctuary
+    // the sutler on his box seat, and Father Bertram standing by the wagon, a sanctuary round the wagon
     if (bodyReady()) {
       const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 2.08); w.add(su.root);
       const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
@@ -115,16 +115,7 @@ export class Shop {
       if (su.cloths) { su.cloths[0].ground = w.position.y + 1.0; su.cloths[1].ground = w.position.y + 1.47; }
     }
     this.sanctuary = { x, z, r: 13 };
-    const ring = this.ring = new THREE.Group(); const flame = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(3), toneMapped: false });
-    const wax = new THREE.MeshStandardMaterial({ color: 0xd8ccb0, roughness: 0.6 });
-    for (let k = 0; k < 28; k++) {
-      const a = (k / 28) * Math.PI * 2, cx = x + Math.cos(a) * 13, cz = z + Math.sin(a) * 13; if (!world.inBounds(cx, cz)) continue;
-      const cy = world.heightAt(cx, cz), h = 0.25 + (k % 3) * 0.08;
-      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, h, 8), wax); c.position.set(cx, cy + h / 2, cz); ring.add(c);
-      const f = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), flame); f.scale.y = 1.8; f.position.set(cx, cy + h + 0.04, cz); ring.add(f);
-    }
-    this.g.scene.add(ring);
-    this.g.ui.toast('Sanctuary: inside the ring of candles you are safe. Trade with the sutler, speak to Father Bertram, then ride on.', 6);
+    this.g.ui.toast('Sanctuary: near the wagon and Father Bertram you are safe. Trade with the sutler, ask his blessing, then ride on.', 6);
     this.blessed = false;
   }
   inSanctuary(p, pad = 0) { const S = this.sanctuary; return !!S && Math.hypot(p.x - S.x, p.z - S.z) < S.r + pad; }
@@ -134,7 +125,7 @@ export class Shop {
   update(dt) {
     if (this.people) { const me = this.g.me?.pos, cam = this.g.engine.camera.position; for (const pp of this.people) pp.update?.(dt, cam, me); }
     const g = this.g, I = g.input, me = g.me;
-    // nothing unholy crosses the candles: demons that reach the ring are thrown back from it
+    // nothing unholy comes near the priest: demons that reach the sanctuary are thrown back from it
     if (g.isHost && this.sanctuary) for (const d of g.horde.list) {
       if (!d.alive) continue; const S = this.sanctuary; const dx = d.pos.x - S.x, dz = d.pos.z - S.z, l = Math.hypot(dx, dz);
       if (l < S.r + 0.5) { const k = (S.r + 0.6) / (l || 1); d.pos.x = S.x + dx * k; d.pos.z = S.z + dz * k; d.flinch = 1; if (Math.random() < dt * 2) g.fx.holyMotes(d.chest, 0.6, 3); }

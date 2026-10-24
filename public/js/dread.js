@@ -50,7 +50,7 @@ export class Dread {
       rise *= 0.7 + 0.8 * (g.terror ? g.terror.level : 0.5);   // deeper into the blight, the fear comes faster
     } else fall += 0.1;
     if (me.praying) fall += 0.07;
-    if (g.shop?.inSanctuary(me.pos)) fall += 0.12;   // the candles keep it off
+    if (g.shop?.inSanctuary(me.pos)) fall += 0.12;   // the priest's sanctuary keeps it off
     for (const a of w.altars) if (a.state === 'cleansed' && Math.hypot(a.x - me.pos.x, a.z - me.pos.z) < 12) { fall += 0.05; break; }
     // wounds feed it; kills starve it
     if (this.lastHp !== null && me.hp < this.lastHp - 0.5) rise += (this.lastHp - me.hp) / me.maxHp * 0.6 / Math.max(dt, 1e-3);
