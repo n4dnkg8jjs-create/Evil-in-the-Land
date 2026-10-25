@@ -285,6 +285,91 @@ export function headBox(mesh) {
   for (let i = 0; i < P.count; i++) if (SI.getX(i) === hi && SW.getX(i) > 0.8) box.expandByPoint(v.fromBufferAttribute(P, i).applyMatrix4(inv));
   return box;
 }
+// ---------------------------------------------------------------- rope
+// A laid three-strand rope along a line of points: each strand a helical ridge winding along it, so the twist
+// shows in the light. The tube is rebuilt in place (fixed topology), so a hanging end can swing.
+function ropeGeometry(nPts, radial = 12) {
+  const g = new THREE.BufferGeometry(), idx = [];
+  for (let i = 0; i < nPts - 1; i++) for (let j = 0; j < radial; j++) { const a = i * radial + j, b = i * radial + (j + 1) % radial, c = a + radial, d = b + radial; idx.push(a, b, c, b, d, c); }
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nPts * radial * 3), 3).setUsage(THREE.DynamicDrawUsage)); g.setIndex(idx);
+  g.userData.rope = { nPts, radial };
+  return g;
+}
+const _rT = new THREE.Vector3(), _rN = new THREE.Vector3(), _rB = new THREE.Vector3();
+// pts: the rope's centre line; twist: radians of lay per metre; prof(u, th): radius scale along it (knots, the frayed end)
+function ropeFill(g, pts, rad, twist, prof, closed = false) {
+  const { nPts, radial } = g.userData.rope, P = g.attributes.position.array;
+  let s = 0;
+  for (let i = 0; i < nPts; i++) {
+    const p = pts[i], a = i > 0 ? pts[i - 1] : closed ? pts[nPts - 2] : p, b = i < nPts - 1 ? pts[i + 1] : closed ? pts[1] : p;
+    _rT.subVectors(b, a).normalize();
+    if (i === 0) { _rN.set(0, 1, 0); if (Math.abs(_rT.y) > 0.9) _rN.set(1, 0, 0); _rN.cross(_rT).normalize(); }
+    else { _rN.addScaledVector(_rT, -_rN.dot(_rT)).normalize(); s += p.distanceTo(a); }   // carried along without spin
+    _rB.crossVectors(_rT, _rN);
+    const u = i / (nPts - 1);
+    for (let j = 0; j < radial; j++) {
+      const th = (j / radial) * Math.PI * 2, k = prof ? prof(u, th) : 1;
+      const r = rad * k * (0.94 + 0.17 * Math.cos(3 * (th - s * twist)));   // three strands, laid right-handed
+      const c = Math.cos(th) * r, sn = Math.sin(th) * r, o = (i * radial + j) * 3;
+      P[o] = p.x + _rN.x * c + _rB.x * sn; P[o + 1] = p.y + _rN.y * c + _rB.y * sn; P[o + 2] = p.z + _rN.z * c + _rB.z * sn;
+    }
+  }
+  g.attributes.position.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingSphere();
+}
+// The two ends of the cincture, hanging from its knot: chains of points under gravity (verlet), held off the
+// swinging cassock and its wearer's legs, each ending in a knot and a frayed tassel. Shaped like a Cloth (mesh,
+// wind, ground, update, dispose) so whoever adds his cloth to the scene and steps it does the same for these.
+function ropeTails(bone, local, side, mat, skirt) {
+  const N = 15, tails = [{ len: 0.62, off: -0.014 }, { len: 0.5, off: 0.014 }].map((t) => ({ ...t, seg: t.len / (N - 1), p: [], q: [], geo: ropeGeometry(N, 10) }));
+  const mesh = new THREE.Group();
+  for (const t of tails) { const m = new THREE.Mesh(t.geo, mat); m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; mesh.add(m); }
+  const o = { mesh, wind: new THREE.Vector3(), ground: -1e9, inited: false, time: Math.random() * 9 };
+  const A = new THREE.Vector3(), H = new THREE.Vector3(), X = new THREE.Vector3(), d = new THREE.Vector3(), out = new THREE.Vector3(), q = new THREE.Vector3();
+  // a fat knot a little above the end, then the rope unlaid into a frayed tassel
+  const prof = (u, th) => u < 0.82 ? 1 : u < 0.9 ? 1 + Math.sin(((u - 0.82) / 0.08) * Math.PI) * (0.95 + Math.cos(th * 2) * 0.12) : 1.05 + ((u - 0.9) / 0.1) * 0.45 + Math.max(0, Math.cos(th * 7)) * 0.25 * (u - 0.9) / 0.1;
+  const twist = (Math.PI * 2) / 0.075;
+  o.update = (dt) => {
+    bone.updateWorldMatrix(true, false); const M = bone.matrixWorld;
+    A.copy(local).applyMatrix4(M); H.setFromMatrixPosition(M); X.copy(side).transformDirection(M);
+    const h = Math.min(dt, 1 / 30); o.time += h;
+    const wind = Math.sin(o.time * 1.7) * 0.5 + 0.5;
+    for (const t of tails) {
+      const a0 = d.copy(A).addScaledVector(X, t.off);
+      if (!o.inited) { for (let i = 0; i < N; i++) { t.p.push(a0.clone().add(new THREE.Vector3(0, -i * t.seg, 0))); t.q.push(t.p[i].clone()); } }
+      for (let i = 1; i < N; i++) {   // verlet: what it was moving, damped, with gravity and a breath of the wind
+        const p = t.p[i], pv = t.q[i];
+        const vx = (p.x - pv.x) * 0.965, vy = (p.y - pv.y) * 0.965, vz = (p.z - pv.z) * 0.965; pv.copy(p);
+        p.x += vx + o.wind.x * 0.004 * wind * h; p.y += vy - 9.8 * h * h; p.z += vz + o.wind.z * 0.004 * wind * h;
+      }
+      for (let it = 0; it < 8; it++) {
+        t.p[0].copy(a0);
+        for (let i = 1; i < N; i++) {
+          const a = t.p[i - 1], b = t.p[i]; q.subVectors(b, a); const l = q.length() || 1e-6, e = (l - t.seg) / l;
+          if (i === 1) b.addScaledVector(q, -e); else { a.addScaledVector(q, e * 0.5); b.addScaledVector(q, -e * 0.5); }
+        }
+      }
+      t.p[0].copy(a0);
+      // never inside the cassock: push each point out past the nearest cloth of the skirt, away from his middle
+      if (skirt?.inited) {
+        const C = skirt.cols, R = skirt.rows, S = skirt.pos;
+        for (let i = 1; i < N; i++) {
+          const p = t.p[i], jc = Math.round((A.y - p.y) / skirt.lenAlong); let best = 1e9, bi = -1;
+          for (let j = Math.max(0, jc - 2); j <= Math.min(R - 1, jc + 2); j++) for (let c = 0; c < C; c++) { const k = (j * C + c) * 3, dd = (S[k] - p.x) ** 2 + (S[k + 1] - p.y) ** 2 + (S[k + 2] - p.z) ** 2; if (dd < best) { best = dd; bi = k; } }
+          if (bi < 0) continue;
+          q.set(S[bi], S[bi + 1], S[bi + 2]); out.set(q.x - H.x, 0, q.z - H.z); const ol = out.length(); if (ol < 1e-4) continue; out.divideScalar(ol);
+          const pen = (p.x - q.x) * out.x + (p.z - q.z) * out.z;
+          if (pen < 0.02) { p.x += out.x * (0.02 - pen); p.z += out.z * (0.02 - pen); }
+        }
+      }
+      for (let i = 1; i < N; i++) if (t.p[i].y < o.ground + 0.012) t.p[i].y = o.ground + 0.012;
+      ropeFill(t.geo, t.p, 0.0105, twist, prof);
+    }
+    o.inited = true;
+  };
+  o.dispose = () => { mesh.removeFromParent(); for (const t of tails) t.geo.dispose(); };
+  return o;
+}
+
 // standing: turn each foot so its sole lies flat (heel and toe level), and report how far the soles sit above or
 // below the root, so he can be stood exactly on the ground
 function levelFeet(mesh, rig) {
@@ -392,9 +477,7 @@ export function makePerson(kind, quality) {
     cape.addCapsule({ a: J.spine, b: J.chest, bo: new THREE.Vector3(0, 0.08, 0), r: 0.17 });
     for (const k of ['R', 'L']) cape.addCapsule({ a: J['uArm' + k], b: J['fArm' + k], r: 0.08 });
     cloths.push(cape);
-    // a rope cincture with its tassels, buttons down the front
-    const cin = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.012, 6, 32), beltM); cin.rotation.x = Math.PI / 2; cin.scale.set(1, 0.8, 1); cin.position.set(0, 0.06, 0.01); J.hips.add(cin);
-    
+    // buttons down the front (the rope cincture is laid round him below, once his outline is measured)
     const btn = new THREE.MeshStandardMaterial({ color: 0x0c0a0a, roughness: 0.4 });
     for (let i = 0; i < 9; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 4), btn); b.position.set(0, 0.17 - i * 0.065, 0.185 - Math.max(0, 0.1 - i * 0.065) * 0.3); J.chest.add(b); }
     const cr = new THREE.Group(); const wd = new THREE.MeshStandardMaterial({ color: 0x5a4028, roughness: 0.8 });
@@ -428,58 +511,320 @@ export function makePerson(kind, quality) {
   let groundOffset = 0;
   if (body && !sutler) groundOffset = levelFeet(body, rig);
   if (body) measureHull(body, rig, hull);
-  // alive: he breathes, shifts his weight, and turns his head to watch whoever comes near
   const base = {}; for (const n of ['spine', 'chest', 'neck', 'head', 'hips', 'uArmR', 'fArmR', 'handR', 'uArmL', 'fArmL', 'handL', 'thighR', 'shinR', 'footR', 'thighL', 'shinL', 'footL']) base[n] = rig.j[n].rotation.clone();
-  let t0 = Math.random() * 10, look = 0, act = null;
   const setE = (j, x, y, z) => rig.j[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
-  const blendE = (j, x, y, z, w) => { const b = base[j]; rig.j[j].rotation.set(lerp(b.x, x * D2R, w), lerp(b.y, y * D2R, w), lerp(b.z, z * D2R, w), 'YXZ'); };
-  // the blessing: he raises his right hand and makes the sign of the cross over the knight, head to breast, shoulder to shoulder
-  const bless = () => { act = { kind: 'bless', t: 0 }; };
-  // walking to a point (world space), then whatever comes next
-  const walkTo = (target, done, ground) => { act = { kind: 'walk', target: target.clone(), done, ground, t: 0 }; };
-  // sat down on a bench: the sutler's pose
-  const sit = () => {
-    act = null;
-    setE('spine', 4, 0, 0); setE('chest', 6, 0, 0); setE('neck', 10, 0, 0); setE('head', -4, 0, 0); setE('hips', 0, 0, 0);
-    for (const [k, s] of [['R', -1], ['L', 1]]) { setE('thigh' + k, -88, 0, s * 6); setE('shin' + k, 84, 0, 0); setE('foot' + k, 6, 0, 0); setE('uArm' + k, -30, 0, s * 8); setE('fArm' + k, -70, -s * 25, 0); setE('hand' + k, 0, 0, 0); }
-    for (const n in base) base[n] = rig.j[n].rotation.clone();
-  };
-  const update = (dt, camPos, watch) => {
-    t0 += dt; const br = Math.sin(t0 * 1.3);
-    if (act?.kind === 'bless') {
-      const T = (act.t += dt), D = 3.4;
-      const w = smoothstep01(T / 0.5) * (1 - smoothstep01((T - (D - 0.5)) / 0.5));
-      // the hand traces: up at the brow, down to the breast, then from his left shoulder across to his right
-      let ux = -78, uy = 8, fx = -48;
-      if (T > 0.9 && T < 1.5) ux = lerp(-78, -42, smoothstep01((T - 0.9) / 0.6));
-      else if (T >= 1.5 && T < 1.85) ux = lerp(-42, -62, smoothstep01((T - 1.5) / 0.35));
-      if (T >= 1.85) { ux = -62; uy = lerp(30, -22, smoothstep01((T - 1.85) / 0.7)); }
-      blendE('uArmR', ux, uy, -6, w); blendE('fArmR', fx, 15, 0, w); blendE('handR', -10, 0, -70, w);
-      blendE('uArmL', -18, 0, 4, w); blendE('fArmL', -100, -48, 0, w);   // the left hand to his breast
-      if (T > D) { act = null; for (const n of ['uArmR', 'fArmR', 'handR', 'uArmL', 'fArmL']) rig.j[n].rotation.copy(base[n]); }
-    } else if (act?.kind === 'walk') {
-      const root = rig.root, d = new THREE.Vector3(act.target.x - root.position.x, 0, act.target.z - root.position.z), L = d.length();
-      act.t += dt; const a = Math.sin(act.t * 7.5);
-      if (L < 0.12) { const done = act.done; act = null; J.hips.position.y = rig.basePos.y; for (const n of ['thighR', 'shinR', 'thighL', 'shinL', 'uArmR', 'uArmL']) rig.j[n].rotation.copy(base[n]); done?.(); }
-      else {
-        const step = Math.min(L, dt * 1.25); d.multiplyScalar(step / L); root.position.add(d);
-        let ry = Math.atan2(d.x, d.z) - root.rotation.y; ry = Math.atan2(Math.sin(ry), Math.cos(ry)); root.rotation.y += ry * Math.min(1, dt * 6);
-        if (act.ground) root.position.y = act.ground(root.position.x, root.position.z);
-        setE('thighR', a * 24, 0, 0); setE('thighL', -a * 24, 0, 0); setE('shinR', Math.max(0, -a) * 35, 0, 0); setE('shinL', Math.max(0, a) * 35, 0, 0);
-        J.hips.position.y = rig.basePos.y + Math.abs(a) * 0.015;
-      }
-    }
-    J.chest.rotation.x = base.chest.x - br * 0.02; J.spine.rotation.z = base.spine.z + Math.sin(t0 * 0.23) * 0.02;
-    if (!sutler) J.hips.rotation.z = base.hips.z + Math.sin(t0 * 0.23) * 0.015;
-    let want = 0;
-    if (watch) { J.neck.updateWorldMatrix(true, false); const p = new THREE.Vector3().setFromMatrixPosition(J.neck.matrixWorld); const ry = new THREE.Euler().setFromQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
-      let a = Math.atan2(watch.x - p.x, watch.z - p.z) - ry; a = Math.atan2(Math.sin(a), Math.cos(a)); if (Math.hypot(watch.x - p.x, watch.z - p.z) < 14) want = Math.max(-1.1, Math.min(1.1, a)); }
-    look += (want - look) * Math.min(1, dt * 2);
-    J.head.rotation.y = base.head.y + look * 0.65; J.neck.rotation.y = base.neck.y + look * 0.35;
-    if (!camPos || rig.root.getWorldPosition(new THREE.Vector3()).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
-  };
+  const dispose = () => cloths.forEach((c) => c.dispose());
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
-  return { rig, root: rig.root, hipsY: rig.j.hips.position.y, groundOffset, kind, cloths, update, bless, walkTo, sit, get busy() { return !!act; }, dispose: () => cloths.forEach((c) => c.dispose()) };
+  if (sutler) {
+    // alive: he breathes, shifts on his seat, and turns his head to watch whoever comes near
+    let t0 = Math.random() * 10, look = 0;
+    const update = (dt, camPos, watch) => {
+      t0 += dt; const br = Math.sin(t0 * 1.3);
+      J.chest.rotation.x = base.chest.x - br * 0.02; J.spine.rotation.z = base.spine.z + Math.sin(t0 * 0.23) * 0.02;
+      let want = 0;
+      if (watch) { J.neck.updateWorldMatrix(true, false); const p = new THREE.Vector3().setFromMatrixPosition(J.neck.matrixWorld); const ry = new THREE.Euler().setFromQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
+        let a = Math.atan2(watch.x - p.x, watch.z - p.z) - ry; a = Math.atan2(Math.sin(a), Math.cos(a)); if (Math.hypot(watch.x - p.x, watch.z - p.z) < 14) want = Math.max(-1.1, Math.min(1.1, a)); }
+      look += (want - look) * Math.min(1, dt * 2);
+      J.head.rotation.y = base.head.y + look * 0.65; J.neck.rotation.y = base.neck.y + look * 0.35;
+      if (!camPos || rig.root.getWorldPosition(new THREE.Vector3()).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
+    };
+    return { rig, root: rig.root, hipsY: rig.j.hips.position.y, groundOffset, kind, cloths, update, bless() {}, sit() {}, busy: false, dispose };
+  }
+
+  // ---------------------------------------------------------------- the cincture
+  // A laid hemp rope round his waist over the cassock, lying just outside the measured outline of his body and
+  // over the seam where the skirt is gathered, knotted at his left front; its two ends hang from the knot and swing.
+  {
+    const hemp = new THREE.MeshStandardMaterial({ color: 0x9c8864, roughness: 0.92, side: THREE.DoubleSide });
+    const n = 120, yL = 0.045, rr = [];
+    for (let i = 0; i < n; i++) { const an = (i / n) * Math.PI * 2; rr.push(Math.max(Math.hypot(Math.sin(an) * 0.198, Math.cos(an) * 0.162), hullR(an, yL) + 0.04)); }
+    for (let pass = 0; pass < 4; pass++) { const r0 = rr.slice(); for (let i = 0; i < n; i++) rr[i] = Math.max(r0[i], (r0[(i + n - 1) % n] + r0[i] + r0[(i + 1) % n]) / 3); }
+    const at = (an, out = 0) => { const r = rr[Math.round((((an % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * n) % n] + out; return new THREE.Vector3(Math.sin(an) * r, yL - Math.max(0, Math.cos(an)) * 0.012, Math.cos(an) * r + 0.006); };
+    const pts = []; for (let i = 0; i <= n; i++) pts.push(at(((i % n) / n) * Math.PI * 2));
+    let L = 0; for (let i = 1; i <= n; i++) L += pts[i].distanceTo(pts[i - 1]);
+    const loop = ropeGeometry(n + 1, 12); ropeFill(loop, pts, 0.0115, (Math.round((3 * L) / 0.075) * Math.PI * 2) / (3 * L), null, true);
+    const lm = new THREE.Mesh(loop, hemp); lm.castShadow = true; lm.receiveShadow = true; J.hips.add(lm);
+    // the knot, at his left front, and the ends hanging from it
+    const ka = 0.8, ko = new THREE.Vector3(Math.sin(ka), 0, Math.cos(ka));
+    const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.016, 0.0085, 72, 8, 2, 3), hemp); knot.position.copy(at(ka, 0.014)); knot.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), ko); knot.scale.set(1, 1.15, 0.75); knot.castShadow = true; J.hips.add(knot);
+    const tails = ropeTails(J.hips, at(ka, 0.022).add(new THREE.Vector3(0, -0.018, 0)), new THREE.Vector3(Math.cos(ka), 0, -Math.sin(ka)), hemp, cloths[0]);
+    tails.wind.set(1.6, 0, 0.6); cloths.push(tails);
+  }
+
+  // ---------------------------------------------------------------- the priest in motion
+  // His feet are set down in the world and his legs found from them by IK, so they never slide or float: a foot
+  // moves only by stepping, one at a time, lifting and setting down where his body is going, and his hips sink
+  // when a leg must reach. Over this the upper body is posed (idle, walking, climbing, sitting) and blended.
+  const V3 = THREE.Vector3, Q = THREE.Quaternion, root = rig.root;
+  const SIDES = [['R', -1], ['L', 1]];
+  const lr = (f) => { const o = {}; for (const [k, s] of SIDES) Object.assign(o, f(k, s)); return o; };
+  const torso = (sp, ch, nk, hd) => ({ spine: [sp, 0, 0], chest: [ch, 0, 0], neck: [nk, 0, 0], head: [hd, 0, 0] });
+  const foldA = lr((k, s) => ({ ['uArm' + k]: [-14, 0, s * 4], ['fArm' + k]: [-85, -s * 32, 0], ['hand' + k]: [0, -s * 15, 0] }));
+  const POSE = {
+    stand: { ...torso(6, 9, 14, -8), ...foldA },                                                                                   // hands folded at his breast
+    low: { ...torso(5, 8, 17, -4), ...lr((k, s) => ({ ['uArm' + k]: [-6, 0, s * 5], ['fArm' + k]: [-60, -s * 40, 0], ['hand' + k]: [0, -s * 12, 0] })) },   // clasped low before him
+    walk: { ...torso(11, 8, 12, -2), ...foldA },
+    climb: { ...torso(24, 12, 2, 16), ...lr((k, s) => ({ ['uArm' + k]: [-45, 0, s * 10], ['fArm' + k]: [-50, 0, 0], ['hand' + k]: [0, 0, 0] })) },
+    sit: { ...torso(3, 6, 10, -4), ...lr((k, s) => ({ ['uArm' + k]: [-26, 0, s * 8], ['fArm' + k]: [-74, -s * 30, 0], ['hand' + k]: [0, -s * 12, 0] })) },
+  };
+  const PJ = Object.keys(POSE.stand), cur = {};
+  const mix = (list) => { for (const j of PJ) { let x = 0, y = 0, z = 0, W = 0; for (const [p, w] of list) { const v = p[j]; if (!v || !(w > 0)) continue; x += v[0] * w; y += v[1] * w; z += v[2] * w; W += w; } cur[j] = W > 0 ? [x / W, y / W, z / W] : [0, 0, 0]; } };
+  const over = (j, v, w) => { const c = cur[j]; cur[j] = [lerp(c[0], v[0], w), lerp(c[1], v[1], w), lerp(c[2], v[2], w)]; };
+  // where each ankle sits standing, in his own frame, and how the foot is turned
+  root.updateMatrixWorld(true);
+  const rq = root.getWorldQuaternion(new Q()).invert(), rest = {};
+  for (const [k] of SIDES) { const f = J['foot' + k]; const a = root.worldToLocal(f.getWorldPosition(new V3())); rest[k] = { x: a.x, z: a.z, h: a.y + groundOffset, q: rq.clone().multiply(f.getWorldQuaternion(new Q())) }; }
+  const hips0 = J.hips.position.clone(), REACH = 0.86;
+  const feet = {}; for (const [k] of SIDES) feet[k] = { p: new V3(), yaw: 0, pitch: 0, sw: null };
+  let space = null, mode = 'stand', planted = false, lastStep = 'L', ground = null, drop = 0, gap = 0, act = null, walk = null, script = null;
+  let t0 = Math.random() * 10, look = 0, lookX = 0, gaze = 0, gazeDown = 0, gazeT = 2, lowW = 0, lowGoal = 0, lowT = 6 + Math.random() * 6, turning = false, hipSh = 0;
+  const vel = new V3(), prev = new V3(), _a = new V3(), _b = new V3(), _c = new V3(), _q = new Q(), _q2 = new Q(), _q3 = new Q(), _e = new THREE.Euler(), _X = new V3(1, 0, 0);
+  const angD = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+  const yawOf = (o) => _e.setFromQuaternion(o.getWorldQuaternion(_q3), 'YXZ').y;
+  const spaceYaw = () => space ? yawOf(space) : 0;
+  const toWorld = (v, o) => space ? o.copy(v).applyMatrix4(space.matrixWorld) : o.copy(v);
+  const toSpace = (v, o) => space ? space.worldToLocal(o.copy(v)) : o.copy(v);
+  const plantHere = () => {
+    root.updateMatrixWorld(true); const ry = yawOf(root) - spaceYaw();
+    for (const [k] of SIDES) { const r = rest[k], w = root.localToWorld(_a.set(r.x, -groundOffset, r.z)); if (ground && !space) w.y = ground(w.x, w.z); toSpace(w, feet[k].p); feet[k].yaw = ry; feet[k].sw = null; }
+    prev.copy(root.position); planted = true;
+  };
+  // the frame the feet are kept in: the world, or the wagon once he climbs onto it (so he rides with it)
+  const setSpace = (s) => {
+    const all = []; for (const [k] of SIDES) { const f = feet[k]; all.push(f.p, ...(f.sw ? [f.sw.from, f.sw.to] : [])); f.yaw += spaceYaw(); if (f.sw) { f.sw.y0 += spaceYaw(); f.sw.y1 += spaceYaw(); } }
+    for (const v of all) toWorld(v, v);
+    space = s; if (s) s.updateWorldMatrix(true, false);
+    for (const v of all) toSpace(v, v);
+    for (const [k] of SIDES) { const f = feet[k]; f.yaw -= spaceYaw(); if (f.sw) { f.sw.y0 -= spaceYaw(); f.sw.y1 -= spaceYaw(); } }
+  };
+  const step = (k, to, yaw, D, lift = 0.06) => { const f = feet[k]; f.sw = { from: f.p.clone(), to: to.clone(), y0: f.yaw, y1: yaw, t: 0, D, lift }; lastStep = k; };
+  const advanceSteps = (dt) => {
+    for (const [k] of SIDES) {
+      const f = feet[k], S = f.sw; if (!S) continue;
+      S.t += dt; const s = Math.min(1, S.t / S.D), hz = smoothstep01((s - 0.1) / 0.8);
+      // up a step the foot rises first and then goes in; down, it goes out first and then drops
+      const vy = S.to.y > S.from.y + 0.05 ? smoothstep01(s * 1.6) : S.to.y < S.from.y - 0.05 ? smoothstep01((s - 0.3) / 0.7) : s;
+      f.p.set(lerp(S.from.x, S.to.x, hz), lerp(S.from.y, S.to.y, vy) + S.lift * Math.sin(Math.PI * s), lerp(S.from.z, S.to.z, hz));
+      f.yaw = S.y0 + angD(S.y1, S.y0) * hz; f.pitch = Math.sin(Math.PI * 2 * s) * 0.32;   // toe down as it leaves the ground, up as the heel comes down
+      if (s >= 1) { f.p.copy(S.to); f.yaw = S.y1; f.pitch = 0; f.sw = null; }
+    }
+  };
+  const swingOf = () => { for (const [k, s] of SIDES) if (feet[k].sw) return { k, s, u: Math.min(1, feet[k].sw.t / feet[k].sw.D) }; return null; };
+  // on the ground: step whichever foot has been left behind (or turned from) by where his body has gone
+  const autoStep = (moving) => {
+    if (feet.R.sw || feet.L.sw) return true;
+    const ry = root.rotation.y, c = Math.cos(ry), s = Math.sin(ry), D = moving ? 0.46 : 0.42;
+    let best = null, bs = 0, any = false;
+    for (const [k] of SIDES) {
+      const r = rest[k], f = feet[k], hx = root.position.x + r.x * c + r.z * s, hz = root.position.z - r.x * s + r.z * c;
+      const need = Math.hypot(f.p.x - hx, f.p.z - hz) / (moving ? 0.15 : 0.07) + Math.abs(angD(f.yaw, ry)) / 0.42;
+      if (need <= 1) continue;
+      any = true; const sc = need - (k === lastStep ? 0.5 : 0);
+      if (sc > bs) { bs = sc; const lead = moving ? D + 0.25 : 0; best = [k, hx + vel.x * lead, hz + vel.z * lead]; }
+    }
+    if (best && gap <= 0) { const [k, x, z] = best; step(k, _c.set(x, ground ? ground(x, z) : feet[k].p.y, z), ry, D, moving ? 0.075 : 0.05); gap = moving ? 0.05 : 0.12; }
+    return any;
+  };
+  // the legs: hips sunk as far as the farther foot needs, each ankle put on its foot's place, the foot set flat
+  const legs = (dt, lift = 0) => {
+    if (space) space.updateWorldMatrix(true, false);
+    J.hips.position.y = hips0.y + lift; root.updateMatrixWorld(true);
+    let need = 0;
+    for (const [k] of SIDES) {
+      toWorld(feet[k].p, _a); _a.y += rest[k].h; J['thigh' + k].getWorldPosition(_b);
+      const h2 = (_a.x - _b.x) ** 2 + (_a.z - _b.z) ** 2, dy = _b.y - _a.y, dd = REACH * REACH > h2 ? dy - Math.sqrt(REACH * REACH - h2) : dy;
+      need = Math.max(need, dd);
+    }
+    drop = need > drop ? need : Math.max(need, drop - dt * 0.6); drop = Math.min(drop, 0.5);
+    J.hips.position.y = hips0.y + lift - drop;
+    root.updateMatrixWorld(true);
+    const ry = yawOf(root), sy = spaceYaw();
+    for (const [k, s] of SIDES) {
+      const f = feet[k]; toWorld(f.p, _a); _a.y += rest[k].h;
+      const ox = s * 0.25;   // knees forward, a little out
+      _b.set(ox * Math.cos(ry) + Math.sin(ry), 0, -ox * Math.sin(ry) + Math.cos(ry));
+      rig.solveLeg(k, _a, _b);
+      _q.setFromEuler(_e.set(0, sy + f.yaw, 0, 'YXZ')).multiply(rest[k].q);
+      if (f.pitch) _q.multiply(_q2.setFromAxisAngle(_X, f.pitch));
+      const sh = J['shin' + k]; sh.updateWorldMatrix(true, false);
+      J['foot' + k].quaternion.copy(sh.getWorldQuaternion(_q2).invert().multiply(_q));
+    }
+  };
+  // a hand to a world point (a grab iron, the seat's edge), blended over the posed arm by w
+  const reachArm = (k, s, tgt, w) => {
+    if (!(w > 0.002)) return;
+    const U = J['uArm' + k], F = J['fArm' + k], qu = U.quaternion.clone(), qf = F.quaternion.clone();
+    U.getWorldPosition(_a); _b.copy(tgt).sub(_a); const l = _b.length(); _b.multiplyScalar(Math.max(0.05, l - 0.075) / (l || 1)).add(_a);
+    const ry = yawOf(root), ox = s * 0.7; _c.set(ox * Math.cos(ry) - 0.4 * Math.sin(ry), -1, -ox * Math.sin(ry) - 0.4 * Math.cos(ry));   // elbow down, out and back
+    rig.solveArm(k, _b, _c);
+    U.quaternion.copy(qu.slerp(U.quaternion, w)); F.quaternion.copy(qf.slerp(F.quaternion, w));
+  };
+
+  // the blessing: he raises his right hand and makes the sign of the cross over the knight, head to breast, shoulder to shoulder
+  const bless = () => { if (mode === 'stand') act = { kind: 'bless', t: 0 }; };
+  const blessPose = (dt) => {
+    const T = (act.t += dt), D = 3.6;
+    const w = smoothstep01((T - 0.2) / 0.55) * (1 - smoothstep01((T - (D - 0.55)) / 0.55));
+    // the hand traces: up at the brow, down to the breast, then from his left shoulder across to his right
+    let ux = -78, uy = 8; const fx = -48;
+    if (T > 1.0 && T < 1.6) ux = lerp(-78, -42, smoothstep01((T - 1.0) / 0.6));
+    else if (T >= 1.6 && T < 1.95) ux = lerp(-42, -62, smoothstep01((T - 1.6) / 0.35));
+    if (T >= 1.95) { ux = -62; uy = lerp(30, -22, smoothstep01((T - 1.95) / 0.75)); }
+    over('uArmR', [ux, uy, -6], w); over('fArmR', [fx, 15, 0], w); over('handR', [-10, 0, -70], w);
+    over('uArmL', [-18, 0, 4], w); over('fArmL', [-100, -48, 0], w);   // the left hand to his breast
+    // he bows his head as he begins, looks up at the knight to bless him, and bows again at the end
+    const bow = smoothstep01(T / 0.4) * (1 - smoothstep01((T - 0.8) / 0.4)) + smoothstep01((T - (D - 0.7)) / 0.3) * (1 - smoothstep01((T - D) / 0.4));
+    over('head', [cur.head[0] + 22, 0, 0], bow); over('chest', [cur.chest[0] + 5, 0, 0], Math.max(bow, w * 0.6));
+    if (T > D + 0.4) act = null;
+  };
+  // walking to a point (world space), turning at the end to face `face` (a world yaw) if given, then whatever comes next
+  const walkTo = (target, done, gfn, face) => { if (gfn) ground = gfn; if (space) setSpace(null); mode = 'walk'; act = null; walk = { target: target.clone(), done, face, v: 0, settle: 0 }; };
+  const walkUpdate = (dt) => {
+    const W = walk, dx = W.target.x - root.position.x, dz = W.target.z - root.position.z, L = Math.hypot(dx, dz);
+    if (L > 0.05) {
+      const h = Math.atan2(dx, dz), da = angD(h, root.rotation.y);
+      root.rotation.y += Math.sign(da) * Math.min(Math.abs(da), dt * 2.0);
+      const want = Math.min(0.85, L * 0.8 + 0.12) * Math.max(0.15, 1 - Math.abs(da) * 0.7);
+      W.v += Math.max(-dt * 1.6, Math.min(dt * 0.9, want - W.v));
+      const st = Math.min(L, W.v * dt); root.position.x += (dx / L) * st; root.position.z += (dz / L) * st;
+    } else {
+      W.v = 0;
+      if (W.face !== undefined) { const da = angD(W.face, root.rotation.y); root.rotation.y += Math.sign(da) * Math.min(Math.abs(da), dt * 1.5); }
+    }
+    if (ground) root.position.y += (ground(root.position.x, root.position.z) + groundOffset - root.position.y) * Math.min(1, dt * 10);
+    const moving = W.v > 0.08, needs = autoStep(moving);
+    const faced = W.face === undefined || Math.abs(angD(W.face, root.rotation.y)) < 0.03;
+    W.settle = L <= 0.05 && faced && !needs && !feet.R.sw && !feet.L.sw ? W.settle + dt : 0;
+    if (W.settle > 0.15) { const done = W.done; walk = null; mode = 'stand'; done?.(); }
+  };
+
+  // ---- climbing up onto the wagon's box and sitting down beside the sutler
+  // S: places on the wagon in its own frame: stand [x, z] on the ground beside the step; step, fbR, fbL (where his
+  // feet go on the step iron and the footboard), turnR, turnL (his feet once he has turned to face forward),
+  // grip (the grab iron), grip2 (the seat's end), seat (where his hips come to rest)
+  const board = (wagon, S, done, gfn) => {
+    if (gfn) ground = gfn;
+    wagon.updateMatrixWorld(true);
+    const st = new V3(S.stand[0], 0, S.stand[1]).applyMatrix4(wagon.matrixWorld); if (ground) st.y = ground(st.x, st.z);
+    walkTo(st, () => startBoard(wagon, S, done), ground, yawOf(wagon) - Math.PI / 2);
+  };
+  const startBoard = (wagon, S, done) => {
+    setSpace(wagon); mode = 'board';
+    const v = (a) => new V3(a[0], a[1], a[2]), go = groundOffset;
+    const r0 = wagon.worldToLocal(root.position.clone()), y0 = angD(root.rotation.y, spaceYaw());
+    const haul = new V3(S.step[0] + 0.16, S.step[1] + go - 0.03, S.step[2] - 0.1);
+    const top = new V3((S.fbR[0] + S.fbL[0]) / 2, S.fbR[1] + go, (S.fbR[2] + S.fbL[2]) / 2);
+    const turned = new V3((S.turnR[0] + S.turnL[0]) / 2, S.turnR[1] + go, (S.turnR[2] + S.turnL[2]) / 2 - 0.02);
+    const seat = new V3(S.seat[0] - hips0.x, S.seat[1] - hips0.y, S.seat[2] - hips0.z);
+    const lean = r0.clone().add(new V3(-0.06, 0, 0));
+    script = { wagon, done, i: 0, t: 0, from: r0.clone(), yawFrom: y0, grip: v(S.grip), grip2: v(S.grip2), phases: [
+      // he takes hold of the grab iron with his right hand, looking down at the step
+      { D: 0.8, root: lean, yaw: y0, climb: (s) => s * 0.7, hR: (s) => smoothstep01(s / 0.85), hL: () => 0 },
+      // left foot up onto the step iron
+      { D: 0.75, root: lean, yaw: y0, climb: () => 0.7, hR: () => 1, hL: () => 0, steps: [[0, 'L', v(S.step), y0, 0.68, 0.16]] },
+      // hauls himself up on it, the right foot coming up onto the footboard, the left hand to the seat's end
+      { D: 1.25, root: haul, yaw: y0, climb: (s) => 0.7 + s * 0.3, hR: () => 1, hL: (s) => smoothstep01((s - 0.25) / 0.5), steps: [[0.28, 'R', v(S.fbR), y0, 0.78, 0.15]], ease: (s) => smoothstep01(s * 1.1) },
+      // and up onto the footboard, the left foot after it, letting go
+      { D: 1.15, root: top, yaw: y0, climb: (s) => 1 - s * 0.6, hR: (s) => 1 - smoothstep01((s - 0.45) / 0.4), hL: (s) => 1 - smoothstep01((s - 0.3) / 0.4), steps: [[0.18, 'L', v(S.fbL), y0, 0.72, 0.14]], ease: (s) => smoothstep01(s * 1.15) },
+      // turns round on the footboard to face the horses, his back to the seat
+      { D: 1.0, root: turned, yaw: 0, climb: (s) => 0.4 * (1 - s), hR: () => 0, hL: () => 0, steps: [[0.0, 'R', v(S.turnR), 0, 0.45, 0.05], [0.5, 'L', v(S.turnL), 0, 0.45, 0.05]] },
+      // and sits down, reaching back for the seat with his right hand
+      { D: 1.3, root: seat, yaw: 0, climb: (s) => Math.sin(Math.PI * s) * 0.55, sit: (s) => smoothstep01(s), hR: (s) => Math.sin(Math.PI * Math.min(1, s * 1.2)) * 0.8, hL: () => 0, grip3: v([S.seat[0] - 0.22, S.seat[1] - 0.05, S.seat[2] - 0.1]), ease: (s) => smoothstep01(s) },
+    ] };
+    for (const P of script.phases) if (P.steps) P.steps = P.steps.map((s) => ({ at: s[0], k: s[1], to: s[2], yaw: s[3], D: s[4], lift: s[5], go: false }));
+  };
+  const seated = () => {
+    const w = script.wagon, done = script.done; script = null;
+    w.attach(root); mode = 'seated'; for (const n of PJ) base[n] = rig.j[n].rotation.clone();
+    done?.();
+  };
+  // if something has gone wrong and he cannot be walked there: put him on the seat (the old way), feet on the footboard
+  const seatNow = (wagon, S) => {
+    act = null; walk = null; script = null; wagon.updateMatrixWorld(true);
+    if (root.parent !== wagon) { if (root.parent) root.removeFromParent(); wagon.add(root); }
+    root.position.set(S.seat[0] - hips0.x, S.seat[1] - hips0.y, S.seat[2] - hips0.z); root.rotation.set(0, 0, 0);
+    space = wagon; for (const [k, key] of [['R', 'turnR'], ['L', 'turnL']]) { feet[k].p.set(...S[key]); feet[k].yaw = 0; feet[k].sw = null; }
+    planted = true; mode = 'seated';
+  };
+  const boardUpdate = (dt) => {
+    const B = script, P = B.phases[B.i]; B.t += dt; const s = Math.min(1, B.t / P.D);
+    for (const st of P.steps || []) if (!st.go && s >= st.at) { st.go = true; step(st.k, st.to, st.yaw, st.D, st.lift); }
+    const e = (P.ease || smoothstep01)(s);
+    _a.copy(B.from).lerp(P.root, e); const yaw = B.yawFrom + angD(P.yaw, B.yawFrom) * e;
+    B.wagon.updateMatrixWorld(true); root.position.copy(B.wagon.localToWorld(_a)); root.rotation.set(0, yawOf(B.wagon) + yaw, 0);
+    const climb = P.climb(s), sit = P.sit ? P.sit(s) : 0;
+    mix([[POSE.stand, Math.max(0, 1 - climb - sit)], [POSE.climb, climb], [POSE.sit, sit]]);
+    B.cur = { hR: P.hR(s), hL: P.hL(s), P };
+    if (s >= 1 && !(P.steps || []).some((st) => feet[st.k].sw)) {
+      B.from = P.root.clone(); B.yawFrom = P.yaw; B.t = 0; B.i++;
+      if (B.i >= B.phases.length) return true;
+    }
+    return false;
+  };
+
+  const update = (dt, camPos, watch) => {
+    dt = Math.min(dt, 0.1); t0 += dt; gap -= dt;
+    if (!planted) plantHere();
+    advanceSteps(dt);
+    const br = Math.sin(t0 * 1.25);
+    let lift = 0, finished = false;
+    if (mode === 'walk' && walk) {
+      walkUpdate(dt);
+      mix([[POSE.walk, 1]]);
+    } else if (mode === 'board' && script) {
+      finished = boardUpdate(dt);
+    } else if (mode === 'seated') {
+      mix([[POSE.sit, 1]]);
+    } else {
+      // standing: now and then he lets his folded hands down before him and takes them up again
+      lowT -= dt; if (lowT < 0) { lowT = 8 + Math.random() * 9; lowGoal = 1 - lowGoal; }
+      lowW += (lowGoal - lowW) * Math.min(1, dt * 1.1);
+      mix([[POSE.stand, 1 - lowW], [POSE.low, lowW]]);
+      // he turns to face a knight who comes to him, stepping round
+      if (watch && !act) {
+        const dx = watch.x - root.position.x, dz = watch.z - root.position.z, dd = Math.hypot(dx, dz);
+        if (dd < 6 && dd > 0.7) { const da = angD(Math.atan2(dx, dz), root.rotation.y); if (Math.abs(da) > 0.6) turning = true; if (Math.abs(da) < 0.1) turning = false; if (turning) root.rotation.y += Math.sign(da) * Math.min(Math.abs(da), dt * 1.2); }
+        else turning = false;
+      }
+      if (ground) root.position.y += (ground(root.position.x, root.position.z) + groundOffset - root.position.y) * Math.min(1, dt * 10);
+      autoStep(false);
+      if (act?.kind === 'bless') blessPose(dt);
+    }
+    // weight: over the foot that is standing while the other steps; idling, shifted slowly from one to the other
+    const sw = swingOf();
+    if (mode === 'walk' || mode === 'board') { hipSh += ((sw ? -sw.s * 0.03 * Math.sin(Math.PI * sw.u) : 0) - hipSh) * Math.min(1, dt * 8); if (sw && mode === 'walk') lift = -0.012 + 0.016 * Math.sin(Math.PI * sw.u); else if (mode === 'walk') lift = -0.012; }
+    else if (mode === 'stand') hipSh += (Math.sin(t0 * 0.37) * 0.026 - hipSh) * Math.min(1, dt * 3);
+    else hipSh *= 0.9;
+    J.hips.position.x = hips0.x + hipSh;
+    J.hips.rotation.set(base.hips.x, base.hips.y + (sw && mode === 'walk' ? sw.s * 0.06 * Math.sin(Math.PI * sw.u) : 0), base.hips.z - hipSh * 0.9, 'YXZ');
+    // breathing, the shoulders rising with it; his head turned toward whoever is near, or wandering
+    cur.chest[0] -= br * 1.2; cur.spine[2] += Math.sin(t0 * 0.23) * 1.0;
+    for (const [k, s] of SIDES) cur['uArm' + k][2] += s * br * 0.8;
+    let want = 0, wantX = 0;
+    if (watch && mode !== 'board') {
+      J.neck.updateWorldMatrix(true, false); const p = _a.setFromMatrixPosition(J.neck.matrixWorld), ry = yawOf(root);
+      const a = angD(Math.atan2(watch.x - p.x, watch.z - p.z), ry), dd = Math.hypot(watch.x - p.x, watch.z - p.z);
+      if (dd < 14) { want = Math.max(-1.1, Math.min(1.1, a)); wantX = Math.max(-12, Math.min(14, (p.y - (watch.y + 1.5)) / Math.max(1, dd) * 40)); }
+    }
+    if (!want && mode === 'stand' && !act) { gazeT -= dt; if (gazeT < 0) { gazeT = 2.5 + Math.random() * 4; gaze = (Math.random() - 0.5) * 1.0; gazeDown = Math.random() < 0.3 ? 16 : 0; } want = gaze; wantX = gazeDown; }
+    if (mode === 'board') { want = 0; wantX = 12; }
+    look += (want - look) * Math.min(1, dt * 2.2); lookX += (wantX - lookX) * Math.min(1, dt * 2);
+    cur.head[1] += look * 0.62 / D2R; cur.neck[1] += look * 0.33 / D2R; cur.chest[1] += (mode === 'stand' ? look * 0.12 : 0) / D2R;
+    cur.head[0] += lookX * 0.6; cur.neck[0] += lookX * 0.4;
+    for (const j of PJ) setE(j, cur[j][0], cur[j][1], cur[j][2]);
+    // the legs, from the feet
+    legs(dt, lift);
+    // and the hands to whatever he is holding on to as he climbs
+    if (script?.cur) {
+      root.updateMatrixWorld(true); const W = script.wagon, C = script.cur;
+      reachArm('R', -1, W.localToWorld(_c.copy(C.P.grip3 || script.grip)).clone(), C.hR);
+      reachArm('L', 1, W.localToWorld(_c.copy(script.grip2)).clone(), C.hL);
+    }
+    if (finished) seated();
+    prev.sub(root.position).multiplyScalar(-1 / Math.max(dt, 1e-3)); vel.lerp(prev.setY(0), Math.min(1, dt * 6)); prev.copy(root.position);
+    if (!camPos || root.getWorldPosition(_a).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
+  };
+  return { rig, root, hipsY: J.hips.position.y, groundOffset, kind, cloths, update, bless, walkTo, board, seatNow, sit: () => {}, setGround: (f) => { ground = f; }, get busy() { return !!act || mode !== 'stand'; }, get mode() { return mode; }, feet, rest, dispose };
 }
 
 

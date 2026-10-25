@@ -139,6 +139,239 @@ function lotsOverlap(A, B, pad = 0) {
   return true;
 }
 
+// ================================================================ THE CAVE ON THE ASCENT (planned here, built in cave.js)
+// Near the top the track goes into the mountain. The cave is not a tube along the track: it has its own winding
+// line, from a mouth low on the shoulder to a mouth above it, by long low tunnels and three great chambers, with
+// blind galleries running off them into the black. It is planned before the ground is made: the walkable floor
+// goes into the heightfield (so feet, collision and heightAt agree with what is drawn), while the ground that is
+// drawn (Hv) keeps the mountain whole over it, cut open only at the two mouths.
+export const CAVE_POW = 2.2;   // a passage's cross-section: a superellipse, fuller in the shoulders than an ellipse
+export function caveProfile(q) { q = Math.abs(q); return q >= 1 ? 0 : Math.pow(1 - Math.pow(q, CAVE_POW), 1 / CAVE_POW); }
+
+class CavePlan {
+  constructor(W) {
+    this.W = W; const C = W.cave, P = W.path, PT = 400, r = rng(W.ch.seed + 4242); this.n = W.noise;
+    const ph = (t) => W.pathH[Math.round(clamp(t, 0, 1) * PT)];
+    // the mountain as it would be with no shoulder over the track (the track itself), and as it is
+    this.bare = (x, z) => W.rawHeight(x, z, false);
+    this.lid = (x, z) => W.rawHeight(x, z, true);
+    // the mouths: where the shoulder first stands high enough over the track to hold a roof
+    const cover = (t) => { const p = P.at(t); return this.lid(p.x, p.z) - this.bare(p.x, p.z); };
+    let tA = C.t0 - C.e; while (tA < C.t0 + 0.03 && cover(tA) < 7.5) tA += 0.0005;
+    let tB = C.t1 + C.e; while (tB > C.t1 - 0.03 && cover(tB) < 7.5) tB -= 0.0005;
+    this.tA = tA; this.tB = tB;
+    const tan = (t) => { const a = P.at(t - 0.002), b = P.at(t + 0.002), l = Math.hypot(b.x - a.x, b.z - a.z) || 1; return { x: (b.x - a.x) / l, z: (b.z - a.z) / l }; };
+    const O = P.at(C.t0), E = P.at(C.t1); let ux = E.x - O.x, uz = E.z - O.z; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+    const L = (u, v) => ({ x: O.x + ux * u - uz * v, z: O.z + uz * u + ux * v });   // u along the shoulder, v to the left of the way up
+    this.L = L;
+    const pA = P.at(tA), pB = P.at(tB), dA = tan(tA), dB = tan(tB);
+    const yA = this.yA = this.bare(pA.x, pA.z), yB = this.yB = this.bare(pB.x, pB.z), rise = yB - yA;
+    const off = (p, d, k) => ({ x: p.x + d.x * k, z: p.z + d.z * k });
+    // three chambers: the Hall, low and full of dripping water; the Nave, high, its floor climbing in terraces of
+    // flowstone under a crack far up in its roof; the Vault, round, its floor deep mud
+    const mk = (id, name, p, R, Hc, fc) => ({ id, name, x: p.x, z: p.z, R, Hc, fc: yA + fc, a1: r.range(0.06, 0.13), p1: r() * TAU, a2: r.range(0.04, 0.09), p2: r() * TAU, mouths: [] });
+    const C1 = mk(0, 'hall', L(14, 10), 8, 7, -2.0), C2 = mk(1, 'nave', L(47, 19), 9.5, 10.5, 3.6), C3 = mk(2, 'vault', L(35, -7), 7, 8, 9.6);
+    this.chambers = [C1, C2, C3];
+    // the line through it all: point, half-width, height, floor above the lower mouth's (null: the chamber's)
+    const K = (p, Wd, Ht, f, extra = {}) => ({ x: p.x, z: p.z, W: Wd, Ht, f, ...extra });
+    const main = [];
+    for (let k = 4; k >= 1; k--) main.push(K(P.at(tA - 0.0055 * k), lerp(2.1, 13, k / 4), 3.4, 0));
+    main.push(K(pA, 2.1, 3.4, 0, { portal: 'A' }), K(off(pA, dA, 3.2), 1.9, 3.1, -0.1), K(L(4.5, 1.8), 1.8, 2.9, -0.3), K(L(8.5, 4.5), 2.2, 3.4, -0.6),
+      K(C1, 2.4, 3.4, null),
+      K(L(21.4, 13.2), 1.9, 3.0, -1.6), K(L(25, 16.5), 1.5, 2.5, -0.4), K(L(29, 16), 1.35, 2.3, 0.8), K(L(31.5, 12.5), 1.5, 2.6, 1.9), K(L(35.5, 12), 1.6, 2.8, 2.8), K(L(38.5, 15), 2.0, 3.2, 3.6),
+      K(C2, 2.4, 3.6, null),
+      K(L(47.2, 9.4), 1.8, 3.8, 6.4), K(L(45, 5), 1.6, 4.2, 7.6), K(L(40.5, 1.5), 1.8, 3.8, 9.0),
+      K(C3, 2.4, 3.6, null),
+      K(L(42.5, -6), 2.2, 3.6, 10.2), K(L(46.5, -2.5), 1.7, 3.0, 11.6), K(L(50, -4.2), 1.9, 3.2, 13.2), K(L(53, -1.8), 2.0, 3.4, rise - 2.6), K(off(pB, dB, -3.2), 2.0, 3.3, rise - 0.4),
+      K(pB, 2.1, 3.4, rise, { portal: 'B' }));
+    for (let k = 1; k <= 4; k++) main.push(K(P.at(tB + 0.0055 * k), lerp(2.1, 13, k / 4), 3.4, rise));
+    this.main = this.spline(main, 0.5);
+    this.sA = main.find((c) => c.portal === 'A').s; this.sB = main.find((c) => c.portal === 'B').s;
+    for (const m of this.main) { m.fb = yA + m.fc; m.out = m.s < this.sA - 1e-6 || m.s > this.sB + 1e-6; }
+    // the passages: the runs of the line outside the chambers, each reaching a little way into the chamber it meets
+    const qOf = (Ch, x, z) => { const dx = x - Ch.x, dz = z - Ch.z; return Math.hypot(dx, dz) / this.rAt(Ch, Math.atan2(dz, dx)); };
+    this.qOf = qOf;
+    const inCh = (m) => this.chambers.find((c) => qOf(c, m.x, m.z) < 0.8) || null;
+    this.tubes = []; let run = null;
+    for (let j = 0; j < this.main.length; j++) {
+      const m = this.main[j], c = inCh(m);
+      if (!c) { if (!run) { run = { id: 3 + this.tubes.length, kind: 'main', S: [], from: j ? inCh(this.main[j - 1]) : null, to: null }; this.tubes.push(run); } run.S.push(m); m.tube = run.id; }
+      else { if (run) { run.to = c; run = null; } m.ch = c.id; }
+    }
+    // blind galleries off each chamber, running into the black and ending in a crack
+    const gal = [
+      [C1, [K(L(11, 14), 1.6, 2.7, -0.9), K(L(8.6, 17.5), 1.5, 2.6, -0.9), K(L(5.5, 21), 1.3, 2.3, -0.4), K(L(3.5, 24.5), 1.1, 2.0, 0.3), K(L(2.6, 26.4), 0.25, 0.35, 0.4)]],
+      [C2, [K(L(47.5, 24), 1.7, 2.9, 4.6), K(L(48.2, 29.2), 1.6, 2.8, 4.6), K(L(47, 33), 1.4, 2.5, 5.0), K(L(44.5, 36), 1.2, 2.2, 5.2), K(L(43.2, 37.6), 0.25, 0.35, 5.2)]],
+      [C3, [K(L(33.5, -11), 1.6, 2.7, 9.8), K(L(32, -15), 1.5, 2.6, 9.8), K(L(30.5, -18.5), 1.4, 2.4, 9.5), K(L(32, -21.5), 1.1, 2.1, 9.3), K(L(33, -23), 0.25, 0.35, 9.3)]],
+    ];
+    for (const [Ch, pts] of gal) {
+      const S = this.spline(pts, 0.5).filter((m) => qOf(Ch, m.x, m.z) >= 0.8); for (const m of S) { m.fb = yA + m.fc; m.out = false; }
+      this.tubes.push({ id: 3 + this.tubes.length, kind: 'gallery', S, from: Ch, to: null });
+    }
+    for (const T of this.tubes) for (const m of T.S) m.tube = T.id;
+    // the climb from the Nave to the Vault goes up in ledges
+    { const T = this.tubes[2], f0 = T.S[0].fb; for (const m of T.S) { const v = (m.fb - f0) / 0.6, k = Math.floor(v), fr = v - k; m.fb = f0 + 0.6 * (k + smooth(clamp((fr - 0.55) / 0.45, 0, 1))); } }
+    // where each passage meets its chamber, and how high the floor is there
+    for (const T of this.tubes) for (const [end, Ch] of [[0, T.from], [1, T.to]]) {
+      if (!Ch) continue; const S = end ? [...T.S].reverse() : T.S; let m = S.find((p) => qOf(Ch, p.x, p.z) >= 1) || S[S.length - 1];
+      const sg = end ? -1 : 1, M = { x: m.x, z: m.z, y: m.fb, tube: T.id, dx: m.tx * sg, dz: m.tz * sg, W: m.W, Ht: m.Ht, end: S[0] };
+      Ch.mouths.push(M); T['mouth' + end] = M;
+    }
+    // the Nave's floor climbs in terraces from the passage that comes up into it to the one that goes on
+    { const a = C2.mouths.find((m) => m.tube === 4), b = C2.mouths.find((m) => m.tube === 5); const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz);
+      C2.fc = a.y; C2.terr = { ax: a.x, az: a.z, dx: dx / l, dz: dz / l, len: l, h: b.y - a.y }; }
+    // passages' floors run smoothly into their chambers'
+    for (const T of this.tubes) for (const m of T.S) for (const Ch of [T.from, T.to]) {
+      if (!Ch) continue; const q = qOf(Ch, m.x, m.z); if (q < 1.3) m.fb = lerp(m.fb, this.floorSmooth(Ch, m.x, m.z), smooth(clamp((1.3 - q) / 0.5, 0, 1)));
+    }
+    for (const m of this.main) if (m.ch !== undefined) m.fb = this.floorSmooth(this.chambers[m.ch], m.x, m.z);
+    // standing water: a pool in the Hall, rimstone pools on the Nave's terraces, a mud-hole in the Vault, a pool
+    // at the end of the Vault's gallery (and the stream down the long tunnel, made in cave.js)
+    this.pools = [{ ...L(16.5, 7.5), r: 2.8, dip: 0.42 }, { ...L(44.5, 15.5), r: 1.3, dip: 0.2 }, { ...L(50.5, 18), r: 1.1, dip: 0.2 }, { ...L(45.5, 22.5), r: 1.0, dip: 0.18 },
+      { ...L(36.2, -11.4), r: 2.2, dip: 0.5, mud: 1 }, { ...L(31.4, -19.8), r: 1.5, dip: 0.35 }];
+    this.fissure = { ...L(48.5, 17.5) };   // the crack in the Nave's roof that lets in a little grey light
+    // the mouths, for the ground to be cut round and the arches built in
+    this.portals = [{ x: pA.x, z: pA.z, dx: dA.x, dz: dA.z, y: yA, W: 2.1, Ht: 3.4, s: this.sA }, { x: pB.x, z: pB.z, dx: -dB.x, dz: -dB.z, y: yB, W: 2.1, Ht: 3.4, s: this.sB }];
+    for (const T of this.tubes) { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, wm = 0; for (const m of T.S) { x0 = Math.min(x0, m.x); x1 = Math.max(x1, m.x); z0 = Math.min(z0, m.z); z1 = Math.max(z1, m.z); wm = Math.max(wm, m.W); } const p = wm + 13; Object.assign(T, { x0: x0 - p, x1: x1 + p, z0: z0 - p, z1: z1 + p }); }
+    // the junctions, for the walls of each piece to be opened where another runs into it (see cave.js)
+    this.cuts = [];
+    for (const Ch of this.chambers) for (const M of Ch.mouths) {
+      this.cuts.push([Ch.x, Ch.z, 1, M.tube, Ch.R, Ch.Hc, M.y, Ch.a1, Ch.p1, Ch.a2, Ch.p2, 0]);
+      const A = { x: M.x + M.dx * 2.2, z: M.z + M.dz * 2.2 }, B = { x: M.end.x - M.dx * 0.6, z: M.end.z - M.dz * 0.6 };
+      this.cuts.push([A.x, A.z, 2, Ch.id, B.x, B.z, M.W * 0.97, M.Ht * 0.97, M.y, 0, 0, 0]);
+    }
+    for (const P2 of this.pools) P2.y = this.eval(P2.x, P2.z, false).floor - 0.07;
+    this.buildGrid();
+  }
+  // a Catmull-Rom line through the control points, resampled every step metres, carrying their widths, heights, floors
+  spline(ctrl, step) {
+    const dense = [], SUB = 24;
+    for (let i = 0; i < ctrl.length - 1; i++) {
+      const p0 = ctrl[Math.max(0, i - 1)], p1 = ctrl[i], p2 = ctrl[i + 1], p3 = ctrl[Math.min(ctrl.length - 1, i + 2)];
+      for (let k = 0; k < SUB; k++) {
+        const f = k / SUB, f2 = f * f, f3 = f2 * f, cr = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * f + (2 * a - 5 * b + 4 * c - d) * f2 + (-a + 3 * b - 3 * c + d) * f3);
+        dense.push({ x: cr(p0.x, p1.x, p2.x, p3.x), z: cr(p0.z, p1.z, p2.z, p3.z), i, f });
+      }
+    }
+    const last = ctrl[ctrl.length - 1]; dense.push({ x: last.x, z: last.z, i: ctrl.length - 2, f: 1 });
+    dense[0].s = 0; for (let k = 1; k < dense.length; k++) dense[k].s = dense[k - 1].s + Math.hypot(dense[k].x - dense[k - 1].x, dense[k].z - dense[k - 1].z);
+    for (let i = 0; i < ctrl.length; i++) ctrl[i].s = dense[Math.min(i * SUB, dense.length - 1)].s;
+    const total = dense[dense.length - 1].s, nS = Math.max(2, Math.ceil(total / step)), out = [], fc = ctrl.filter((c) => c.f !== null && c.f !== undefined);
+    let k = 0;
+    for (let j = 0; j <= nS; j++) {
+      const s = total * j / nS; while (k < dense.length - 2 && dense[k + 1].s < s) k++;
+      const a = dense[k], b = dense[k + 1], u = clamp((s - a.s) / ((b.s - a.s) || 1), 0, 1);
+      const i = a.i, fl = smooth(clamp(lerp(a.f, b.i === a.i ? b.f : 1, u), 0, 1)), c0 = ctrl[i], c1 = ctrl[i + 1];
+      let lo = null, hi = null; for (const c of fc) { if (c.s <= s) lo = c; else if (!hi) hi = c; }
+      const f = lo && hi ? lerp(lo.f, hi.f, (s - lo.s) / ((hi.s - lo.s) || 1)) : (lo || hi).f;
+      out.push({ x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u), s, W: lerp(c0.W, c1.W, fl), Ht: lerp(c0.Ht, c1.Ht, fl), fc: f, tx: 0, tz: 1 });
+    }
+    for (let j = 0; j < out.length; j++) { const a = out[Math.max(0, j - 1)], b = out[Math.min(out.length - 1, j + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1; out[j].tx = (b.x - a.x) / l; out[j].tz = (b.z - a.z) / l; }
+    return out;
+  }
+  rAt(Ch, a) { return Ch.R * (1 + Ch.a1 * Math.cos(a - Ch.p1) + Ch.a2 * Math.cos(2 * a - Ch.p2)); }
+  // a chamber's floor without its small roughness: its lowest, rising toward each passage's floor where it comes in
+  floorSmooth(Ch, x, z) {
+    let base = Ch.fc; const T = Ch.terr;
+    if (T) { const pr = clamp(((x - T.ax) * T.dx + (z - T.az) * T.dz) / T.len, 0, 1), v = pr * 6, k = Math.floor(v), fr = v - k; base = Ch.fc + T.h * Math.min(1, (k + smooth(clamp((fr - 0.62) / 0.38, 0, 1))) / 6); }
+    let sum = 0, ws = 0;
+    for (const M of Ch.mouths) { const w = smooth(clamp(1 - Math.hypot(x - M.x, z - M.z) / (0.85 * Ch.R), 0, 1)); sum += (M.y - base) * w; ws += w; }
+    return base + sum / Math.max(1, ws);
+  }
+  // the floor's small roughness: grit and stones; the stream's bed down one side of the long tunnel; mud in waves
+  feat(x, z, id, lat = 0, Wd = 2) {
+    const n = this.n; let f = (n.fbm(x * 0.55 + id * 7.1, z * 0.55, 2) - 0.45) * 0.2;
+    if (id === 4) f -= 0.26 * Math.exp(-(((lat - 0.42 * Wd) / 0.42) ** 2));
+    if (id === 2) f += (n.fbm(x * 0.22, z * 0.22, 2) - 0.45) * 0.3;
+    return f;
+  }
+  // everything about a point in plan: how far inside the rock (sdf < 0: in the open of the cave), the walkable floor,
+  // the roof over it, how far along the way through it lies (prog), which piece it is in, and whether that is the
+  // open track below a mouth rather than the cave
+  eval(x, z, pools = true) {
+    let prog = 0, pd = 1e9; const M = this.main;
+    for (let i = 0; i < M.length - 1; i++) {
+      const a = M[i], b = M[i + 1], abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz || 1; const t = clamp(((x - a.x) * abx + (z - a.z) * abz) / l2, 0, 1);
+      const d = (x - a.x - abx * t) ** 2 + (z - a.z - abz * t) ** 2; if (d < pd) { pd = d; prog = lerp(a.s, b.s, t); }
+    }
+    const cands = [];
+    for (const T of this.tubes) {
+      if (x < T.x0 || x > T.x1 || z < T.z0 || z > T.z1) continue;
+      let sd = 1e9, bi = 0, bt = 0; const S = T.S;
+      for (let i = 0; i < S.length - 1; i++) {
+        const a = S[i], b = S[i + 1], abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz || 1; const t = clamp(((x - a.x) * abx + (z - a.z) * abz) / l2, 0, 1);
+        const s2 = Math.hypot(x - a.x - abx * t, z - a.z - abz * t) - lerp(a.W, b.W, t) * 0.92; if (s2 < sd) { sd = s2; bi = i; bt = t; }
+      }
+      if (S.length < 2) continue;
+      const a = S[bi], b = S[bi + 1], tx = lerp(a.tx, b.tx, bt), tz = lerp(a.tz, b.tz, bt), cx = lerp(a.x, b.x, bt), cz = lerp(a.z, b.z, bt);
+      const lat = (x - cx) * -tz + (z - cz) * tx, s = lerp(a.s, b.s, bt), Wd = lerp(a.W, b.W, bt), Ht = lerp(a.Ht, b.Ht, bt), fb = lerp(a.fb, b.fb, bt);
+      const out = T.kind === 'main' && (s < this.sA || s > this.sB);
+      if (out) { const fl = this.bare(x, z); cands.push({ id: T.id, sd, fl, rf: fl + 60, out }); }
+      else cands.push({ id: T.id, sd, fl: fb + this.feat(x, z, T.id, lat, Wd), rf: fb + Ht * caveProfile(lat / Wd), out });
+    }
+    for (const Ch of this.chambers) {
+      const dx = x - Ch.x, dz = z - Ch.z, rho = Math.hypot(dx, dz); if (rho > Ch.R * 1.4 + 13) continue;
+      const rr = this.rAt(Ch, Math.atan2(dz, dx)), fs = this.floorSmooth(Ch, x, z);
+      cands.push({ id: Ch.id, sd: rho - rr * 0.93, fl: fs + this.feat(x, z, Ch.id), rf: fs + Ch.Hc * caveProfile(rho / rr), out: false });
+    }
+    if (!cands.length) return null;
+    let best = null, ws = 0, fs = 0, rf = -1e9;
+    for (const c of cands) if (!best || c.sd < best.sd) best = c;
+    for (const c of cands) { const w = clamp((0.6 - c.sd) / 1.2, 0, 1); if (w > 0 && c.out === best.out) { ws += w; fs += c.fl * w; } if (c.sd < 0.6) rf = Math.max(rf, c.rf); }
+    let floor = best.out ? best.fl : ws > 0 ? fs / ws : best.fl; if (rf < -1e8) rf = best.rf;
+    if (pools && !best.out) for (const P2 of this.pools) { const d = Math.hypot(x - P2.x, z - P2.z); if (d < P2.r) floor -= P2.dip * smooth(1 - d / P2.r); }
+    return { sdf: best.sd, floor, roof: rf, prog, piece: best.id, out: best.out };
+  }
+  // the plan on a half-metre grid, for quick questions every frame
+  buildGrid() {
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    const grow = (x, z, p) => { x0 = Math.min(x0, x - p); x1 = Math.max(x1, x + p); z0 = Math.min(z0, z - p); z1 = Math.max(z1, z + p); };
+    for (const T of this.tubes) for (const m of T.S) grow(m.x, m.z, m.W + 12);
+    for (const Ch of this.chambers) grow(Ch.x, Ch.z, Ch.R * 1.3 + 12);
+    const st = this.step = 0.5; this.gx0 = x0; this.gz0 = z0; const nx = this.gnx = Math.ceil((x1 - x0) / st) + 1, nz = this.gnz = Math.ceil((z1 - z0) / st) + 1;
+    const sdf = this.gsdf = new Float32Array(nx * nz), fl = this.gfloor = new Float32Array(nx * nz), rf = this.groof = new Float32Array(nx * nz), pr = this.gprog = new Float32Array(nx * nz);
+    const pc = this.gpiece = new Int8Array(nx * nz), go = this.gout = new Uint8Array(nx * nz);
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      const k = j * nx + i, x = x0 + i * st, z = z0 + j * st, e = this.eval(x, z);
+      if (!e) { sdf[k] = 50; pc[k] = -1; continue; }
+      sdf[k] = e.sdf; fl[k] = e.floor; pr[k] = e.prog; pc[k] = e.piece; go[k] = e.out ? 1 : 0;
+      rf[k] = !e.out && e.sdf < 1.2 ? Math.min(e.roof, this.lid(x, z) - 0.8) : e.roof;   // never closer than that under the mountain's skin
+    }
+  }
+  // the grid's answer at a point (shared object: copy what you need before asking again), or null off the grid
+  sample(x, z, o = this._o || (this._o = {})) {
+    const fx = (x - this.gx0) / this.step, fz = (z - this.gz0) / this.step, nx = this.gnx;
+    if (!(fx >= 0 && fz >= 0 && fx < nx - 1 && fz < this.gnz - 1)) return null;
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, k = j * nx + i, k2 = k + nx;
+    const bl = (A) => (A[k] * (1 - u) + A[k + 1] * u) * (1 - v) + (A[k2] * (1 - u) + A[k2 + 1] * u) * v, S = this.gsdf;
+    o.sdf = bl(S); o.floor = bl(this.gfloor); o.roof = bl(this.groof); o.prog = bl(this.gprog);
+    o.gx = ((S[k + 1] - S[k]) * (1 - v) + (S[k2 + 1] - S[k2]) * v) / this.step; o.gz = ((S[k2] - S[k]) * (1 - u) + (S[k2 + 1] - S[k + 1]) * u) / this.step;
+    const kn = (v < 0.5 ? j : j + 1) * nx + (u < 0.5 ? i : i + 1); o.piece = this.gpiece[kn]; o.out = this.gout[kn] === 1;
+    return o;
+  }
+  // keep a body inside the cave's walls (and, below each mouth, inside the gully that leads to it)
+  collide(p, rad, nr) {
+    let e = this.sample(p.x, p.z); if (!e) return false;
+    if (!(e.sdf < 0.3 || (nr.t > this.tA - 0.024 && nr.t < this.tB + 0.024 && e.sdf < 11.5))) return false;
+    const lim = -(rad + 0.18);
+    for (let k = 0; k < 5 && e && e.sdf > lim; k++) { const g = Math.hypot(e.gx, e.gz); if (g < 1e-4) break; const m = e.sdf - lim + 0.02; p.x -= e.gx / g * m; p.z -= e.gz / g * m; e = this.sample(p.x, p.z); }
+    return true;
+  }
+  // can one walk (or see) straight from a to b without going through rock?
+  clear(ax, az, bx, bz, margin = 0.2) {
+    const n = Math.max(2, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5));
+    for (let i = 1; i < n; i++) { const e = this.sample(lerp(ax, bx, i / n), lerp(az, bz, i / n)); if (!e || e.sdf > -margin) return false; }
+    return true;
+  }
+  // the way through at a distance s along it
+  mainAt(s) {
+    const M = this.main; s = clamp(s, 0, M[M.length - 1].s); let lo = 0, hi = M.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (M[mid].s <= s) lo = mid; else hi = mid; }
+    const a = M[lo], b = M[hi], u = clamp((s - a.s) / ((b.s - a.s) || 1), 0, 1);
+    return { x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u), tx: lerp(a.tx, b.tx, u), tz: lerp(a.tz, b.tz, u), W: lerp(a.W, b.W, u), Ht: lerp(a.Ht, b.Ht, u), s };
+  }
+}
+
 export class World {
   constructor(engine, quality, chapterIdx) {
     this.engine = engine; this.q = quality; this.idx = chapterIdx; this.ch = CHAPTERS[chapterIdx];
@@ -181,17 +414,16 @@ export class World {
     }
     this.path = pathSampler(pts);
     if (kind === 'mountain') {
-      // near the top the way goes into the mountain: a cave through a shoulder of rock (see cave.js)
+      // near the top the way goes into the mountain: under a shoulder of rock between t0 and t1 (e: how far the rock
+      // runs out past them), by a cave system of its own (planned in CavePlan, built in cave.js)
       this.ledge = null; this.crevasse = null;
-      this.cave = { t0: 0.655, t1: 0.80, R: 3.6, W: 9.6, e: 0.016 };
-      // side passages off the main cave, running into the black: where along it, which side (of the path's left normal), how long, how deep
-      { const C = this.cave, sp = C.t1 - C.t0; C.passages = [{ t: C.t0 + sp * 0.24, side: 1, len: sp * 0.035, depth: 6 }, { t: C.t0 + sp * 0.5, side: -1, len: sp * 0.04, depth: 8 }, { t: C.t0 + sp * 0.77, side: 1, len: sp * 0.03, depth: 7 }]; }   // e: how far the rock (and the tunnel) runs out past each mouth
+      this.cave = { t0: 0.655, t1: 0.80, e: 0.016 };
     }
     // altars along the path
     const n = this.ch.altars; this.altarT = [];
     if (kind === 'peak') {
       for (let i = 0; i < n; i++) { const a = -PI / 2 + (i / n) * TAU + PI / n; this.altarT.push({ x: Math.cos(a) * 22, z: Math.sin(a) * 22 }); }
-    } else if (this.ch.terrain.kind === 'mountain' && n === 4) { for (const t of [0.12, 0.34, 0.55, 0.9]) this.altarT.push({ t, ...this.path.at(t) }); }   // clear of the cave and its rock
+    } else if (this.ch.terrain.kind === 'mountain' && n === 4) { for (const t of [0.12, 0.34, 0.55, 0.9]) this.altarT.push({ t, ...this.path.at(t) }); }   // clear of the cave and its rock (each on a broad shelf: rawHeight)
     else for (let i = 0; i < n; i++) { const t = lerp(0.14, 0.86, n === 1 ? 0.5 : i / (n - 1)); this.altarT.push({ t, ...this.path.at(t) }); }
     // Devil vantage hills, off to the side of the road
     this.devilSpots = [];
@@ -256,47 +488,40 @@ export class World {
     const H = this.H = new Float32Array(N * N);
     const T = this.ch.terrain;
     this.makePathHeights();
+    if (this.cave && !this.caveSys) this.caveSys = new CavePlan(this);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) H[j * N + i] = this.rawHeight(-HALF + i * CELL, -HALF + j * CELL);
     this.flattenLots();
+    if (this.caveSys) this.cutCave();
     for (const a of this.altarT) a.y = this.heightAt(a.x, a.z);
     for (const s of this.devilSpots) s.y = this.groundAt(s.x, s.z);
   }
   // the ground as generated, before any building pad is levelled into it (needs the path heights)
-  rawHeight(x, z) {
+  rawHeight(x, z, shoulder = true) {
     const T = this.ch.terrain, PT = 400, pathH = this.pathH;
     let h = this.baseHeight(x, z);
     if (T.kind !== 'peak') {
       const nr = this.path.nearest(x, z);
       const ph = pathH[Math.round(nr.t * PT)];
-      if (T.kind === 'mountain') h = this.gorgeHeight(x, z, nr, ph, h);
+      if (T.kind === 'mountain') h = this.lidHeight(x, z, nr, ph, h, shoulder);
       else h = lerp(ph, h, smooth(clamp((nr.d - 4) / 14, 0, 1)));
     }
     // flatten altar sites
     for (const a of this.altarT) {
       const d = Math.hypot(x - a.x, z - a.z);
-      const fr = T.kind === 'peak' ? 5.5 : 9;
+      const fr = T.kind === 'peak' ? 5.5 : T.kind === 'mountain' ? 12 : 9;   // on the Ascent, a broad level shelf, so no slope of the gorge comes near the stones
       if (d < fr * 2) { const ah = this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - fr) / fr, 0, 1))); }
     }
     return h;
   }
   // half the width of the Ascent's track at t: wide at the foot where the company gathers, narrow above
   trackHalf(t) { return 4.6 + this.noise.fbm(t * 9, 3.1, 2) * 2.2 + 9 * (1 - smooth(clamp(t / 0.07, 0, 1))); }
-  gorgeHeight(x, z, nr, ph, h) {
-    // the Ascent: the track climbs a mountain valley. Away from it the ground rises in natural slopes, steepening,
-    // broken by spurs, gullies and outcrops (where the noise is steep the rock shows); above, the snowfields.
-    const y = this.lidHeight(x, z, nr, ph, h);
-    const C = this.cave;
-    if (C && nr.t > C.t0 - C.e - 0.002 && nr.t < C.t1 + C.e + 0.002 && nr.d < this.caveWidthAt(nr.t, this.pathSide(x, z, nr.t))) return ph + this.noise.fbm(x * 0.35, z * 0.35, 2) * 0.1;   // the cave floor
-    return y;
-  }
   // which side of the path a point lies: +1 on the side of the path's left normal (-tz, tx), -1 on the other
   pathSide(x, z, t) { const p = this.path.at(t), a = this.path.at(Math.max(0, t - 0.003)), b = this.path.at(Math.min(1, t + 0.003)); return ((x - p.x) * -(b.z - a.z) + (z - p.z) * (b.x - a.x)) >= 0 ? 1 : -1; }
-  // how far the side passages carry the cave out from the path, beyond its own width (0 away from them)
-  passageAt(t, side) { let e = 0; for (const P of this.cave?.passages || []) { if (P.side !== side) continue; const u = (t - P.t) / P.len; if (Math.abs(u) < 1) e = Math.max(e, P.depth * Math.pow(1 - u * u, 1.5)); } return e; }
-  // half-width of the trench the cave is cut in, on one side
-  caveWidthAt(t, side) { return this.cave.W + this.passageAt(t, side) * 1.15; }
-  // the mountain's surface before the cave is cut under it (the cave's roof is built from this)
-  lidHeight(x, z, nr, ph, h) {
+  // the Ascent: the track climbs a mountain valley. Away from it the ground rises in natural slopes, steepening,
+  // broken by spurs, gullies and outcrops (where the noise is steep the rock shows); above, the snowfields. Near
+  // the top a shoulder of rock stands over the track (shoulder: with it, or as the ground would be without it);
+  // the cave under it is cut afterwards (cutCave)
+  lidHeight(x, z, nr, ph, h, shoulder = true) {
     const n = this.noise, t = nr.t;
     const half = this.trackHalf(t), w = Math.max(0, nr.d - half);
     let rise = w * 0.42 + Math.pow(w, 1.45) * 0.045;
@@ -307,13 +532,38 @@ export class World {
     y += n.fbm(x * 0.3, z * 0.3, 2) * 0.14 * (1 - smooth(clamp(w, 0, 1)));                 // the track: rough, gritty
     // the shoulder of rock the cave runs under: it rises steeply right from the entrance
     const C = this.cave;
-    if (C) {
+    if (C && shoulder) {
       const k = smooth(clamp((t - C.t0 + C.e) / 0.024, 0, 1)) * smooth(clamp((C.t1 + C.e - t) / 0.024, 0, 1));
       y += k * (16 + n.fbm(x * 0.05, z * 0.05, 3) * 7) * (1 - smooth(clamp((nr.d - 18) / 30, 0, 1)));
     }
     return y;
   }
-  inCaveZone(x, z, pad = 2) { const C = this.cave; if (!C) return false; const nr = this.path.nearest(x, z); return nr.t > C.t0 - C.e - 0.01 && nr.t < C.t1 + C.e + 0.01 && nr.d < this.caveWidthAt(nr.t, this.pathSide(x, z, nr.t)) + pad; }
+  // in the cave (pad metres out into its rock), or over the stretch of the track the shoulder has buried
+  inCaveZone(x, z, pad = 2) {
+    const S = this.caveSys; if (!S) return false; const e = S.sample(x, z); if (!e) return false;
+    if (e.sdf < pad && !e.out) return true;
+    if (e.sdf < 40) { const nr = this.path.nearest(x, z); if (nr.t > S.tA && nr.t < S.tB && nr.d < 16 + pad) return true; }
+    return false;
+  }
+  // cut the cave into the ground: its floor into H (what is walked on), while Hv (what is drawn) keeps the mountain
+  // whole over it; below each mouth a gully is cut down to the track in both, leading in
+  cutCave() {
+    const S = this.caveSys, H = this.H, Hv = this.Hv = H.slice();
+    const i0 = Math.max(0, Math.floor((S.gx0 + HALF) / CELL)), i1 = Math.min(N - 1, Math.ceil((S.gx0 + S.gnx * S.step + HALF) / CELL));
+    const j0 = Math.max(0, Math.floor((S.gz0 + HALF) / CELL)), j1 = Math.min(N - 1, Math.ceil((S.gz0 + S.gnz * S.step + HALF) / CELL));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const x = -HALF + i * CELL, z = -HALF + j * CELL, e = S.eval(x, z); if (!e || e.sdf > 2.2) continue;
+      const k = j * N + i;
+      if (e.out) { const w = smooth(clamp((0.6 - e.sdf) / 1.2, 0, 1)); H[k] = Hv[k] = lerp(H[k], e.floor, w); }
+      else H[k] = e.floor;
+    }
+  }
+  // the height of the ground as drawn (over the cave, the mountain's skin rather than the cave's floor)
+  visualHeightAt(x, z) {
+    const Hv = this.Hv || this.H, fx = clamp((x + HALF) / CELL, 0, N - 1.001), fz = clamp((z + HALF) / CELL, 0, N - 1.001);
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, a = Hv[j * N + i], b = Hv[j * N + i + 1], c = Hv[(j + 1) * N + i], d = Hv[(j + 1) * N + i + 1];
+    return u + v <= 1 ? a + (b - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (b - d) * (1 - v);
+  }
   // ---------------------------------------------------------------- settlement
   // Farms and the village are laid out on purpose: houses front the road at a set-back, turned to face it, with
   // yards behind; a farmstead is a house and a barn round a yard beside a fenced field; each building stands on
@@ -568,7 +818,7 @@ export class World {
     const seg = N - 1;   // one vertex per height sample, so what is drawn is exactly the ground things stand on
     const g = new THREE.PlaneGeometry(HALF * 2, HALF * 2, seg, seg); g.rotateX(-PI / 2);
     const p = g.attributes.position;
-    for (let i = 0; i < p.count; i++) p.setY(i, this.heightAt(p.getX(i), p.getZ(i)));
+    for (let i = 0; i < p.count; i++) p.setY(i, this.visualHeightAt(p.getX(i), p.getZ(i)));   // (the same as heightAt, but over the cave)
     g.computeVertexNormals();
     const tt = terrainTextures(this.q.tex >= 1024 ? 512 : 512);
     // blight mask: R channel = life
@@ -585,7 +835,9 @@ export class World {
       uAliveTint: { value: new THREE.Color(T.kind === 'mountain' ? 0x9aa080 : 0xffffff) },
       uWet: WX.uWet, uRainA: WX.uRain, uWTime: WX.uWTime, uSnowAcc: WX.uSnowAcc,
       uHoles: { value: [0, 1, 2, 3, 4, 5].map(() => new THREE.Vector4(0, 0, 0, 0)) },   // well shafts: no ground across their mouths
+      uCaveCut: { value: [0, 1, 2, 3, 4, 5].map(() => new THREE.Vector4(0, 0, 0, 0)) },   // the cave's mouths: no ground across their arches
     };
+    if (this.caveSys) this.caveSys.portals.forEach((M, k) => { const U = uniforms.uCaveCut.value; U[k * 3].set(M.x, M.z, M.dx, M.dz); U[k * 3 + 1].set(M.y, M.W + 0.16, M.Ht + 0.16, -1.9); U[k * 3 + 2].set(5.0, 0, 0, 1); });
     this.terrainUniforms = uniforms;
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
     mat.onBeforeCompile = (sh) => {
@@ -596,7 +848,7 @@ export class World {
         varying vec3 vWPos; varying vec3 vWNorm;
         uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask;
         uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow, uSnowFrom, uStrata; uniform vec3 uDeadTint, uAliveTint;
-        uniform float uWet, uRainA, uWTime, uSnowAcc; uniform vec4 uHoles[6];
+        uniform float uWet, uRainA, uWTime, uSnowAcc; uniform vec4 uHoles[6]; uniform vec4 uCaveCut[6];
         float wxh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float wxn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(wxh(i), wxh(i + vec2(1, 0)), f.x), mix(wxh(i + vec2(0, 1)), wxh(i + vec2(1, 1)), f.x), f.y); }
         // rain rings: in each cell a drop lands now and then and a ring runs out from it; returns the slope of the ripples
@@ -614,6 +866,11 @@ export class World {
         }`)
         .replace('#include <map_fragment>', `
         for (int hi = 0; hi < 6; hi++) { vec4 HH = uHoles[hi]; if (HH.w > 0.5 && length(vWPos.xz - HH.xy) < HH.z) discard; }
+        for (int ci = 0; ci < 2; ci++) {   // a cave mouth's arch (the passage's own superellipse, a little larger), run a few metres into the face
+          vec4 CA = uCaveCut[ci * 3], CB = uCaveCut[ci * 3 + 1], CC = uCaveCut[ci * 3 + 2]; if (CC.w < 0.5) continue;
+          vec2 cd = vWPos.xz - CA.xy; float cal = dot(cd, CA.zw), cla = abs(dot(cd, vec2(-CA.w, CA.z))) / CB.y, chy = (vWPos.y - CB.x) / CB.z;
+          if (cal > CB.w && cal < CC.x && chy > -0.9 && (chy < 0.0 ? cla < 1.0 : pow(cla, 2.2) + pow(chy, 2.2) < 1.0)) discard;
+        }
         vec2 wuv = vWPos.xz * uTile;
         vec2 muv = vWPos.xz / uSize + 0.5;
         float life = texture2D(tMask, muv).r;
@@ -821,7 +1078,8 @@ export class World {
       // stay in the ravine
       const nr = this.path.nearest(p.x, p.z);
       // along the ledge, the outer edge is the edge of the world
-      let lim = 13; const L = this.ledge; const CV = this.cave; if (CV && nr.t > CV.t0 - CV.e && nr.t < CV.t1 + CV.e) lim = this.caveHalf ? this.caveHalf(nr.t, this.pathSide(p.x, p.z, nr.t)) : CV.R - 0.9;
+      if (this.caveSys && this.caveSys.collide(p, radius, nr)) return;   // in and about the cave: its own walls
+      let lim = 13; const L = this.ledge;
       if (L && nr.t > L.t0 && nr.t < L.t1) { const a = this.path.at(nr.t), b = this.path.at(Math.min(1, nr.t + 0.004)); const side = Math.sign((p.x - a.x) * -(b.z - a.z) + (p.z - a.z) * (b.x - a.x)); if (side === L.side) lim = 3.0; }
       if (nr.d > lim) { const q = this.path.at(nr.t); const k = lim / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
       // the crevasse: only the bridge crosses it
@@ -1593,7 +1851,7 @@ export class World {
     const nearAltar = (x, z, m) => this.altarT.some((a) => Math.hypot(x - a.x, z - a.z) < m);
     // boulders lying where they came to rest (on ground flat enough to hold them, half sunk in it), and fans of
     // scree spread below the gullies; nothing perched on a slope or sticking out of a face
-    const rest = (x, z) => this.inBounds(x, z) && !this.inCaveZone(x, z, 3) && !nearAltar(x, z, 9) && !this.inLot(x, z, 1) && this.normalAt(x, z).y > 0.8;
+    const rest = (x, z) => this.inBounds(x, z) && !this.inCaveZone(x, z, 3) && !nearAltar(x, z, 15) && !this.inLot(x, z, 1) && this.normalAt(x, z).y > 0.8;   // (well clear of an altar's shelf and its ring of stones)
     for (let k = 0; k < 160; k++) {
       const t = r.range(0.02, 0.98), F = frame(t), side = r.sign();
       const d = half(t) + r.range(0.5, 14), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
@@ -1606,7 +1864,7 @@ export class World {
       const cx = F.p.x + F.nx * side * (half(t) + 4 + r() * 6), cz = F.p.z + F.nz * side * (half(t) + 4 + r() * 6);
       for (let k = 0; k < 26; k++) {
         const a = r() * TAU, d2 = Math.sqrt(r()) * 5, x = cx + Math.cos(a) * d2, z = cz + Math.sin(a) * d2;
-        if (!this.inBounds(x, z) || this.inCaveZone(x, z, 2) || this.path.nearest(x, z).d < half(t) - 0.5 || this.normalAt(x, z).y < 0.6) continue;
+        if (!this.inBounds(x, z) || this.inCaveZone(x, z, 2) || nearAltar(x, z, 11) || this.path.nearest(x, z).d < half(t) - 0.5 || this.normalAt(x, z).y < 0.6) continue;
         const s = r.range(0.1, 0.38); put({ x, y: this.heightAt(x, z) - s * 0.3, z, s, sy: s * 0.6, ry: r() * TAU, rx: r() * 2, rz: r() * 2 });
       }
     }

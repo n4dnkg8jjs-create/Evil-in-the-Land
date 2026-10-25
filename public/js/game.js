@@ -84,7 +84,7 @@ export class Game {
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
-    if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); if (ch.devil.army) this.watcher.mode = 'army'; this.watcher.audio = this.audio; this.watcher.view = this.engine.camera; this.watcher.prewarm(this.engine.renderer, this.engine.camera); }
+    if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); this.watcher.world = this.world; if (ch.devil.army) this.watcher.mode = 'army'; this.watcher.audio = this.audio; this.watcher.view = this.engine.camera; this.watcher.prewarm(this.engine.renderer, this.engine.camera); }
     phantomDevil(this);   // the scares' Devil, built and compiled now rather than the first time he appears
     if (ch.devil?.crevice) this.crevices = new Crevices(this.scene, this.world.creviceSpots);
     this.obj = { ch: n, ph: 'intro', a: 0, p: this.world.altars.map(() => 0), s: this.world.altars.map(() => 'blighted'), waveT: 6, roamT: 14, checkpoint: null, wards: false, bossDone: [] };
@@ -528,7 +528,7 @@ export class Game {
     else if (kind === 'dragon') this.boss = new Dragon(this.scene, n, this.fx);
     this.boss.world = this.world;
     this.boss.pos.copy(pos);
-    if (kind === 'serpent') { this.boss.headPos.copy(pos); for (const c of this.boss.chain) c.set(pos.x, pos.y - 6, pos.z); }
+    if (kind === 'serpent') this.boss.placeAt(pos);   // coiled under the ground there, about to rise
     if (kind === 'dragon') { this.boss.alt = 40; this.boss.fly = 1; }
     return this.boss;
   }
@@ -556,8 +556,9 @@ export class Game {
       ], null, { skippable: this.isHost });
       this.audio.bell(null, 0.4, 0.6);
     } else {
-      const bp = b.pos;
-      this.cinema.play([{ dur: 3.5, from: { pos: V(bp.x + 6, bp.y + 2.5, bp.z + 8), look: V(bp.x, bp.y + 1.2, bp.z) }, to: { pos: V(bp.x + 4, bp.y + 1.8, bp.z + 6), look: V(bp.x, bp.y + 1.5, bp.z) }, fov: 40 }], null, { skippable: this.isHost });
+      // (the great ones are framed from further off, looking up at them)
+      const bp = b.pos, h = b.camH || 1.2, f = b.camD || 1;
+      this.cinema.play([{ dur: kind === 'hound' ? 3.5 : 4.2, from: { pos: V(bp.x + 6 * f, bp.y + 2.5 + h * 0.2, bp.z + 8 * f), look: V(bp.x, bp.y + h, bp.z) }, to: { pos: V(bp.x + 4 * f, bp.y + 1.8 + h * 0.1, bp.z + 6 * f), look: V(bp.x, bp.y + h * 1.1, bp.z) }, fov: 42 }], null, { skippable: this.isHost });
     }
   }
   bossSfx(kind) {
@@ -574,6 +575,8 @@ export class Game {
     }
   }
   bossPhaseFx(n) {
+    const b = this.boss;
+    if (b && b.kind !== 'dragon') { if (b.phaseLine) this.ui.toast(b.phaseLine(n), 3); this.audio.roar((b.headPos || b.pos).clone().add(V(0, 3, 0)), 1, 2.4); this.engine.shake(0.2, 1); return; }
     if (n === 2) { this.ui.toast('He takes to the air', 3); this.ui.subtitle(['Pray at the wards.', 'Their light will cast Him down.'], 5); this.audio.roar(this.boss?.pos || this.me.pos, 1.2, 3); }
     if (n === 3) { this.ui.toast('The Dragon is cast down', 3); this.engine.fx.flash = 0.4; this.ui.subtitle(['Et proiectus est draco ille magnus.', 'And that great dragon was cast out.'], 5); }
   }
@@ -702,7 +705,7 @@ export class Game {
   hostApplyHit(m) { const d = this.horde.byId.get(m.d); if (d && d.alive) { if (d.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx(), m.from)) this.stats.kills++; } }
   hostApplyBossHit(m) { if (this.boss && this.boss.alive) this.boss.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx()); }
   hostParried(srcId) {
-    if (srcId === 'boss') { if (this.boss && this.boss.kind !== 'dragon' && this.boss.setState) this.boss.setState(this.boss.kind === 'cryptid' ? 'stagger' : this.boss.state); return; }
+    if (srcId === 'boss') { if (this.boss && this.boss.alive) this.boss.parried?.(this.hostCtx()); return; }   // a parry wears down a boss's poise
     const d = this.horde.byId.get(srcId); if (d && d.alive) { d.setState(ST.stagger); d.vel.multiplyScalar(-1); }
   }
 

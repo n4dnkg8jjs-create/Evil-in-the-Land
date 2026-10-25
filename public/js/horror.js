@@ -427,7 +427,7 @@ export function buildHumanDevil(def) {
 let _robeMat = null;
 // The Devil's garments, horns, eyes and hands come and go with his flesh: the same burning dissolve as his skin,
 // driven by the same uniform, so nothing pops in whole while the face is still forming out of the air.
-function dissolvable(mat, DU) {
+export function dissolvable(mat, DU) {
   if (!DU) return mat;
   const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey ? mat.customProgramCacheKey() : mat.type;
   mat.onBeforeCompile = (sh, r) => {
@@ -478,6 +478,26 @@ function robeMat(sway, top, DU) {
   return dissolvable(m, DU);
 }
 export function tickRobes(time) { ROBE_U.uTime.value = time; }
+// The robe hangs. Whatever the body inside it is doing (stooped, lunging, crouched), the cloth falls plumb from the
+// collar and its hem lies on the ground, gathered a little there (sink), rather than swinging stiffly with the chest
+// and lifting off the earth behind him. root: the model's own group, whose y = 0 is the ground under him.
+const _rbM = new THREE.Matrix4(), _rbQ = new THREE.Quaternion(), _rbP = new THREE.Vector3(), _rbS = new THREE.Vector3(), _rbC = new THREE.Vector3();
+export function plantRobe(B, root, sink = 0.04) {
+  const robe = B.robe; if (!robe || !robe.visible || robe.userData.L === undefined) return;
+  const u = robe.userData;
+  root.updateMatrixWorld(true);
+  // the chest in the model's own (unscaled) frame: a rigid transform, the chain of bones down from the hips
+  _rbM.copy(root.matrixWorld).invert().multiply(B.chest.matrixWorld); _rbM.decompose(_rbP, _rbQ, _rbS);
+  // where the collar sits on him now, in that frame
+  _rbC.copy(u.pos0); _rbC.y += u.top; _rbC.applyQuaternion(_rbQ).add(_rbP);
+  // the length that takes it from the collar to the ground
+  const sy = clamp((_rbC.y + sink) / (u.top + u.L), 0.55, 1.25);
+  // undo the chest's turn so the robe is upright in the model's frame, hanging from the collar
+  _rbQ.invert(); robe.quaternion.copy(_rbQ);
+  robe.scale.set(u.base.x, sy, u.base.z);
+  // position (chest frame) = R^-1 (collar - scale * collar-in-robe - chest origin)
+  robe.position.set(_rbC.x - _rbP.x, _rbC.y - sy * u.top - _rbP.y, _rbC.z - _rbP.z).applyQuaternion(_rbQ);
+}
 // wind on the Devil's robes, in his own frame (+x his left)
 export function robeWind(x, z) { ROBE_U.uWind.value.set(x, z); }
 function lathe(profile, segs, shape) {
@@ -506,7 +526,7 @@ function dressDevil(B, K, def, DU) {
     if (t > 0.96) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.1 - 0.02;   // the hem, uneven, dragging
   });
   const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
-  robe.userData.base = robe.scale.clone();
+  robe.userData.base = robe.scale.clone(); robe.userData.pos0 = robe.position.clone(); robe.userData.top = neckTop + 0.03; robe.userData.L = L;
   // sleeves: wide and long, falling in folds, the hands hang out of them
   for (const k of ['R', 'L']) {
     const ul = Math.abs(B['fArm' + k].position.y), fl = Math.abs(B['hand' + k].position.y);

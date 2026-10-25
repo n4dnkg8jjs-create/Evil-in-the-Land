@@ -3,7 +3,7 @@
 // win: from the demons they cut down, the altars they hallow, the pages they find.
 // What a knight owns and has had tempered is kept between pilgrimages.
 import * as THREE from 'three';
-import { WEAPONS } from './weapons.js';
+import { WEAPONS, buildWeapon } from './weapons.js';
 import { clothTextures } from './textures.js';
 import { makePerson } from './people.js';
 import { bodyReady } from './body.js';
@@ -33,7 +33,7 @@ export function saveArmoury(a) { try { localStorage.setItem(KEY, JSON.stringify(
 export function upgradesFor(a, weapon) { return { edge: (a.up['edge:' + weapon] || 0), proof: a.up.proof || 0, blessing: a.up.blessing || 0 }; }
 
 // ---------------------------------------------------------------- the wagon
-function wagonModel() {
+function wagonModel(quality) {
   const g = new THREE.Group();
   const wood = new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 0.9 });
   const ct = clothTextures([150, 136, 106], false, 256, 'tilt');
@@ -50,7 +50,7 @@ function wagonModel() {
     const gw = new THREE.Group(); parts.forEach((pg, k) => { const o = new THREE.Mesh(pg, k === 1 ? iron : wood); o.castShadow = true; gw.add(o); }); return gw;
   };
   g.userData.wheels = [];
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = wheel(); w.position.set(sx * 1.02, 0.6, sz * 1.15); w.rotation.y = Math.PI / 2; w.rotation.z = sz * 0.3; g.add(w); g.userData.wheels.push(w); }
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = wheel(); w.position.set(sx * 1.02, 0.6, sz * 1.15); w.rotation.y = Math.PI / 2; w.rotation.z = sz * 0.3; w.userData.front = sz > 0; g.add(w); g.userData.wheels.push(w); }
   for (const sz of [-1, 1]) add(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 8), wood, [0, 0.6, sz * 1.15], [0, 0, Math.PI / 2]);
   // the tilt: canvas over five bows, sagging between them, creased, gathered and puckered at each end by its cord
   { const NU = 40, NV = 60, pos = [], uv = [], idx = [];
@@ -79,9 +79,24 @@ function wagonModel() {
   // a pair of draught horses in harness either side of the pole
   g.userData.horses = [];
   for (const [sx, seed, coat] of [[-0.62, 3, 0x7a4426], [0.62, 7, 0x4a2c1c]]) { const h = makeHorse(seed, coat); h.root.position.set(sx, 0, 4.25); g.add(h.root); g.userData.horses.push(h); }
-  // a rack of arms and a hanging lantern at the tailboard
-  add(new THREE.BoxGeometry(1.4, 0.08, 0.08), wood, [0, 2.0, -2.18]);
-  for (let i = 0; i < 4; i++) { add(new THREE.BoxGeometry(0.04, 1.0 + i * 0.1, 0.01), steel, [-0.5 + i * 0.33, 1.4 + i * 0.05, -2.2]); add(new THREE.BoxGeometry(0.18, 0.025, 0.03), iron, [-0.5 + i * 0.33, 1.9 + i * 0.05 - 0.05, -2.2]); }
+  // an iron rod between two points (the step's hangers, the grab iron)
+  const rod = (a, b, r, m) => { const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b); const o = new THREE.Mesh(new THREE.CylinderGeometry(r, r, A.distanceTo(B), 6), m); o.position.copy(A).add(B).multiplyScalar(0.5); o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.sub(A).normalize()); o.castShadow = true; g.add(o); return o; };
+  // a step iron hung from the end of the footboard, and a grab iron at the end of the box seat, for climbing up
+  for (const z of [2.575, 2.705]) rod([0.7, 0.95, z], [0.86, 0.565, z], 0.012, iron);
+  add(new THREE.BoxGeometry(0.17, 0.025, 0.15), iron, [0.9, 0.5575, 2.64]);
+  rod([0.74, 1.44, 1.98], [0.88, 1.48, 1.98], 0.014, iron); rod([0.88, 1.48, 1.98], [0.88, 1.87, 1.98], 0.014, iron); rod([0.88, 1.87, 1.98], [0.6, 1.97, 1.66], 0.014, iron);
+  // a rack of arms at the tailboard: the armourer's own blades (the very models the knights carry), hung point down
+  // by their cross-guards between pegs on a bar, and a hanging lantern
+  add(new THREE.BoxGeometry(1.5, 0.08, 0.08), wood, [0, 1.76, -2.18]);
+  for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.07, 0.95, 0.07), wood, [sx * 0.72, 1.32, -2.06]);
+  g.userData.rack = [];
+  ['zweihander', 'longsword', 'mace', 'longsword'].forEach((key, i) => {
+    const x = -0.5 + i * 0.33;
+    for (const px of [-0.045, 0.045]) add(new THREE.CylinderGeometry(0.012, 0.012, 0.12, 6), wood, [x + px, 1.79, -2.27], [Math.PI / 2, 0, 0]);
+    const wpn = buildWeapon(key, quality); wpn.rotation.set(Math.PI, 0, (i % 2 ? 1 : -1) * 0.02); wpn.position.set(x, 1.815, -2.28);
+    wpn.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    g.add(wpn); g.userData.rack.push(wpn);
+  });
   for (let i = 0; i < 2; i++) add(new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10), wood, [1.4, 0.43, -1.2 + i * 0.7]);
   add(new THREE.BoxGeometry(0.7, 0.55, 0.6), wood, [-1.4, 0.28, -1.5]);
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(4), toneMapped: false }));
@@ -89,6 +104,61 @@ function wagonModel() {
   const light = new THREE.PointLight(0xffb060, 6, 9, 2); light.position.copy(lamp.position); g.add(light);
   return g;
 }
+
+// Where Father Bertram climbs up, in the wagon's own frame: he stands on the ground beside the step iron, takes the
+// grab iron, puts his left foot on the step and hauls himself up onto the footboard, turns, and sits beside the sutler.
+const BOARD = { stand: [1.3, 2.42], step: [0.96, 0.57, 2.64], fbR: [0.42, 1.02, 2.5], fbL: [0.6, 1.02, 2.7], turnR: [0.36, 1.02, 2.58], turnL: [0.64, 1.02, 2.58], grip: [0.88, 1.68, 1.98], grip2: [0.74, 1.5, 2.3], seat: [0.5, 1.53, 2.08] };
+// The wagon's height and lean from the ground under its four wheels (its rotation order is YXZ: heading, then pitch and roll)
+const _wv = new THREE.Vector3();
+function wheelGround(W, w) {
+  const c = Math.cos(w.rotation.y), s = Math.sin(w.rotation.y), h = {};
+  for (const [k, lx, lz] of [['fl', 1.02, 1.15], ['fr', -1.02, 1.15], ['rl', 1.02, -1.15], ['rr', -1.02, -1.15]]) {
+    const x = w.position.x + lx * c + lz * s, z = w.position.z - lx * s + lz * c; h[k] = W.groundAt(x, z);
+  }
+  const front = (h.fl + h.fr) / 2, rear = (h.rl + h.rr) / 2, left = (h.fl + h.rl) / 2, right = (h.fr + h.rr) / 2;
+  return { y: (front + rear) / 2, pitch: Math.atan2(rear - front, 2.3), roll: Math.atan2(left - right, 2.04) };
+}
+// The way out: on along the road, down the valley it runs through. A line is found along it (a little to the right
+// of the crown where it can) that keeps the wagon clear of everything standing near the road: the standing stones
+// and cross of an altar's circle (it threads between them, or swings out round them), trees and rocks; off steep
+// banks; and never turning more sharply than the pole lets it.
+function roadRoute(W, from, far = 230) {
+  const N = 800, S = [0]; let a = W.path.at(0);
+  for (let i = 1; i <= N; i++) { const b = W.path.at(i / N); S.push(S[i - 1] + Math.hypot(b.x - a.x, b.z - a.z)); a = b; }
+  const tAt = (d) => { let lo = 0, hi = N; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (S[m] < d) lo = m; else hi = m; } return (lo + (d - S[lo]) / Math.max(1e-6, S[hi] - S[lo])) / N; };
+  const t0 = W.path.nearest(from.x, from.z).t, s0 = S[Math.round(t0 * N)];
+  let tEnd = 0.97; if (W.cave) tEnd = Math.min(tEnd, W.cave.t0 - W.cave.e - 0.04);
+  const sEnd = Math.min(S[Math.round(tEnd * N)], s0 + far);
+  const frame = (t) => { const p = W.path.at(t), q = W.path.at(Math.min(1, t + 0.002)), o = W.path.at(Math.max(0, t - 0.002)); let tx = q.x - o.x, tz = q.z - o.z; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; return { p, tx, tz, rx: -tz, rz: tx }; };
+  const cols = (W.colliders || []).filter((c) => c.r > 0 && c.r < 20);
+  const OFF = []; for (let o = -11; o <= 11.001; o += 0.5) OFF.push(o);
+  const pts = [], cost = [];
+  for (let d = s0 + 5; d < sEnd; d += 2.5) {
+    const f = frame(tAt(d)); pts.push(f);
+    const near = cols.filter((c) => (c.x - f.p.x) ** 2 + (c.z - f.p.z) ** 2 < 16 * 16);
+    cost.push(OFF.map((o) => {
+      const x = f.p.x + f.rx * o, z = f.p.z + f.rz * o;
+      if (!W.inBounds(x, z)) return Infinity;
+      for (const k of [-1.7, 0, 1.7]) { const qx = x + f.tx * k, qz = z + f.tz * k; for (const c of near) if ((c.x - qx) ** 2 + (c.z - qz) ** 2 < (c.r + 1.3) ** 2) return Infinity; }
+      const ny = W.normalAt(x, z).y; if (ny < 0.85) return Infinity;
+      return 0.08 * Math.abs(o - 0.4) + 40 * (1 - ny) + 0.5 * Math.max(0, Math.abs(W.groundAt(x, z) - W.groundAt(f.p.x, f.p.z)) - 0.25);
+    }));
+  }
+  if (!pts.length) return [];
+  // the cheapest line through them (dynamic programming over the offsets, easing across from one to the next)
+  const n = pts.length, M = OFF.length, best = [cost[0].slice()], back = [];
+  for (let i = 1; i < n; i++) {
+    const row = new Array(M).fill(Infinity), bk = new Array(M).fill(-1);
+    for (let j = 0; j < M; j++) { if (cost[i][j] === Infinity) continue; for (let dj = -3; dj <= 3; dj++) { const k = j + dj; if (k < 0 || k >= M || best[i - 1][k] === Infinity) continue; const c = best[i - 1][k] + cost[i][j] + 0.25 * dj * dj; if (c < row[j]) { row[j] = c; bk[j] = k; } } }
+    if (row.every((c) => c === Infinity)) { for (let j = 0; j < M; j++) { row[j] = Math.min(...best[i - 1]) + 50 + Math.abs(OFF[j] - 0.9); bk[j] = best[i - 1].indexOf(Math.min(...best[i - 1])); } }   // nothing clear: go on along the road
+    best.push(row); back.push(bk);
+  }
+  let j = best[n - 1].indexOf(Math.min(...best[n - 1])); const offs = new Array(n);
+  for (let i = n - 1; i >= 0; i--) { offs[i] = OFF[j]; if (i > 0) j = back[i - 1][j]; }
+  const sm = offs.slice(); for (let i = 1; i < n - 1; i++) sm[i] = (offs[i - 1] + offs[i] * 2 + offs[i + 1]) / 4;
+  return pts.map((f, i) => ({ x: f.p.x + f.rx * sm[i], z: f.p.z + f.rz * sm[i] }));
+}
+const _frustum = new THREE.Frustum(), _pm = new THREE.Matrix4();
 
 export class Shop {
   constructor(game) {
@@ -117,15 +187,15 @@ export class Shop {
       for (const [a, b] of [[2, 0], [-2, 0], [0, 2.5], [0, -2.5], [0, 5]]) { const qx = cx + nx * a + fx * b, qz = cz + nz * a + fz * b; if (Math.abs(world.heightAt(qx, qz) - py) > 0.9) ok = false; }
       if (ok) { x = cx; z = cz; break search; }
     }
-    const w = this.wagon = wagonModel(); w.position.set(x, world.heightAt(x, z), z); w.rotation.y = Math.atan2(q.x - p.x, q.z - p.z) + 0.3;
-    const n = world.normalAt(x, z); w.rotation.x = Math.atan2(n.z, n.y) * 0.5; w.rotation.z = -Math.atan2(n.x, n.y) * 0.5;
+    const w = this.wagon = wagonModel(this.g.engine.q); w.rotation.order = 'YXZ'; w.position.set(x, world.heightAt(x, z), z); w.rotation.y = Math.atan2(q.x - p.x, q.z - p.z) + 0.3;
+    { const s = wheelGround(world, w); w.position.y = s.y; w.rotation.x = s.pitch; w.rotation.z = s.roll; }
     this.g.scene.add(w); this.cols = [world.addCollider(x, z, 2.0), world.addCollider(x + Math.sin(w.rotation.y) * 4.2, z + Math.cos(w.rotation.y) * 4.2, 1.1)];
     this.spot = { x, z };
     // the sutler on his box seat, and Father Bertram standing by the wagon, a sanctuary round the wagon
     if (bodyReady()) {
       const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 2.08); w.add(su.root);
       const pr = makePerson('priest', this.g.engine.q); const px = x + Math.cos(w.rotation.y) * 3.2, pz = z - Math.sin(w.rotation.y) * 3.2;
-      pr.root.position.set(px, world.heightAt(px, pz) + (pr.groundOffset || 0), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; this.g.scene.add(pr.root); this.priest = pr; this.cols.push(world.addCollider(px, pz, 0.6));
+      pr.root.position.set(px, world.heightAt(px, pz) + (pr.groundOffset || 0), pz); pr.root.rotation.y = w.rotation.y + Math.PI / 2; pr.setGround?.((gx, gz) => world.heightAt(gx, gz)); this.g.scene.add(pr.root); this.priest = pr; this.cols.push(world.addCollider(px, pz, 0.6));
       this.people = [su, pr];
       for (const pp of this.people) for (const c of pp.cloths || []) { c.ground = world.heightAt(pr.root.position.x, pr.root.position.z); this.g.scene.add(c.mesh); }
       if (su.cloths) { su.cloths[0].ground = w.position.y + 1.0; su.cloths[1].ground = w.position.y + 1.47; }
@@ -135,7 +205,7 @@ export class Shop {
     this.blessed = false; this.world = world;
     this.tradeT = TRADE_TIME; this.leave = null; this.awayT = 0;
   }
-  // the trading time: the sutler waits, then the priest climbs up beside him and they drive off fast, back down the road
+  // the trading time: the sutler waits, then the priest climbs up beside him and they drive off fast, on along the road
   tradeLabel() { if (!this.wagon || this.leave || this.tradeT <= 0) return ''; const s = Math.ceil(this.tradeT); return `Trade with the sutler, ask Father Bertram's blessing · the wagon leaves in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
   updateWagon(dt) {
     const g = this.g, w = this.wagon, W = this.world;
@@ -160,43 +230,54 @@ export class Shop {
       return;
     }
     const L = this.leave; L.t += dt;
-    if (L.stage === 'board') return;   // the priest is walking to the wagon
-    // whip up the horses and away down the road
-    L.v = Math.min(11, L.v + dt * 4);
-    const tgt = L.route[L.i]; if (!tgt) { this.dispose(); return; }
-    const dx = tgt.x - w.position.x, dz = tgt.z - w.position.z, d = Math.hypot(dx, dz);
-    if (d < 4) { L.i++; return; }
-    let dy = Math.atan2(dx, dz) - w.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); w.rotation.y += dy * Math.min(1, dt * 2.2);
+    if (L.stage === 'board') {   // Father Bertram is climbing up; if something has stopped him, put him on the seat
+      if (L.t > 30 && this.priest?.seatNow) { this.priest.seatNow(w, BOARD); L.stage = 'drive'; }
+      return;
+    }
+    // whip up the horses and away along the road: the pace picked up from a walk, slowed for bends and hills
+    const R = L.route, px = w.position.x, pz = w.position.z;
+    while (L.i < R.length - 1 && Math.hypot(R[L.i + 1].x - px, R[L.i + 1].z - pz) < Math.hypot(R[L.i].x - px, R[L.i].z - pz) + 0.5) L.i++;
+    const Ld = 4.5 + L.v * 0.55; let j = L.i; while (j < R.length - 1 && Math.hypot(R[j].x - px, R[j].z - pz) < Ld) j++;
+    const T = R[j];
+    let alpha = Math.atan2(T.x - px, T.z - pz) - w.rotation.y; alpha = Math.atan2(Math.sin(alpha), Math.cos(alpha));
+    const kappa = Math.max(-0.19, Math.min(0.19, (2 * Math.sin(alpha)) / Ld));   // pure pursuit, never tighter than its lock allows
+    // how sharply the road bends, and how steep it is, over the next stretch
+    let bend = 0; for (let k = L.i + 1; k < Math.min(R.length - 1, L.i + 7); k++) { const a1 = Math.atan2(R[k].x - R[k - 1].x, R[k].z - R[k - 1].z), a2 = Math.atan2(R[k + 1].x - R[k].x, R[k + 1].z - R[k].z); bend = Math.max(bend, Math.abs(Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1))) / 2.5); }
+    const A6 = R[Math.min(R.length - 1, L.i + 3)], grade = (W.groundAt(A6.x, A6.z) - W.groundAt(px, pz)) / Math.max(3, Math.hypot(A6.x - px, A6.z - pz));
+    const vmax = 7.5, vBend = Math.sqrt(2.4 / Math.max(1e-3, Math.max(bend, Math.abs(kappa)))), vHill = vmax * (grade > 0 ? 1 - Math.min(0.6, grade * 4) : 1 - Math.min(0.3, -grade * 2));
+    const vt = Math.min(vmax, vBend, vHill);
+    L.v += L.v < vt ? Math.min(vt - L.v, dt * (0.4 + 1.5 * (1 - L.v / vmax))) : -Math.min(L.v - vt, dt * 3);
+    w.rotation.y += L.v * kappa * dt;
     w.position.x += Math.sin(w.rotation.y) * L.v * dt; w.position.z += Math.cos(w.rotation.y) * L.v * dt;
-    const gy = W.groundAt(w.position.x, w.position.z); w.position.y = gy;
-    const n = W.inBounds(w.position.x, w.position.z) ? W.normalAt(w.position.x, w.position.z) : new THREE.Vector3(0, 1, 0);
-    w.rotation.x = Math.atan2(n.z * Math.cos(w.rotation.y) + n.x * Math.sin(w.rotation.y), n.y) * 0.6 + Math.sin(L.t * 9) * 0.012; w.rotation.z = Math.sin(L.t * 7.3) * 0.015;
+    // up and down over the ground under its wheels, jolting a little at speed
+    const G = wheelGround(W, w), jolt = Math.min(1, L.v / 6);
+    L.y = L.y === undefined ? G.y : L.y + (G.y - L.y) * Math.min(1, dt * 14);
+    w.position.y = L.y + Math.abs(Math.sin(L.t * 11)) * 0.015 * jolt;
+    w.rotation.x += (G.pitch + Math.sin(L.t * 9) * 0.01 * jolt - w.rotation.x) * Math.min(1, dt * 8);
+    w.rotation.z += (G.roll + Math.sin(L.t * 7.3) * 0.012 * jolt - w.rotation.z) * Math.min(1, dt * 8);
+    for (const wh of w.userData.wheels || []) if (wh.userData.front) wh.rotation.y = Math.PI / 2 + Math.atan(kappa * 2.3) * 0.8;
+    (w.userData.rack || []).forEach((r, k) => { r.rotation.z = (k % 2 ? 1 : -1) * 0.02 + Math.sin(L.t * 8 + k * 1.7) * 0.05 * jolt; });
     for (const pp of this.people || []) for (const c of pp.cloths || []) c.ground = w.position.y + 1.0;
-    L.hoof -= dt; if (L.hoof <= 0) { L.hoof = 0.19; g.audio.footstep?.(w.position.clone(), true, 1.3); }
-    if (Math.random() < dt * 14) g.fx.wisp?.(w.position.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, 0.2, 0)), 0.8, [0.35, 0.3, 0.25]);
-    if (L.t > 40) this.dispose();
+    L.hoof -= dt; if (L.hoof <= 0) { L.hoof = Math.max(0.16, 0.5 - L.v * 0.045); g.audio.footstep?.(w.position.clone(), true, 1.3); }
+    if (L.v > 2 && Math.random() < dt * L.v * 2) g.fx.wisp?.(w.position.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, 0.2, 0)), 0.8, [0.35, 0.3, 0.25]);
+    // gone: round the bend and out of sight, or far down the valley, or at the end of the way
+    const cam = g.engine.camera, dc = cam.position.distanceTo(w.position);
+    _pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse); _frustum.setFromProjectionMatrix(_pm);
+    const seen = _frustum.intersectsSphere(new THREE.Sphere(w.position.clone().setY(w.position.y + 1.5), 4.5));
+    L.unseen = seen ? 0 : (L.unseen || 0) + dt;
+    if (L.i >= R.length - 2 || dc > 110 || (dc > 40 && L.unseen > 1.5) || L.t > 90) this.dispose();
   }
   depart() {
     const g = this.g, w = this.wagon, W = this.world;
     for (const c of this.cols || []) c.r = -100;   // the colliders go with them
     this.sanctuary = null; if (this.open) this.close();
-    // back down the road the way they came, then on out of sight
-    const route = []; const nr = W.path.nearest(w.position.x, w.position.z);
-    for (let t = Math.max(0, nr.t - 0.01); t > 0; t -= 0.02) route.push(W.path.at(t));
-    const a = W.path.at(0), b = W.path.at(0.02); const ox = a.x - b.x, oz = a.z - b.z, ol = Math.hypot(ox, oz) || 1;
-    for (let k = 1; k <= 8; k++) route.push({ x: a.x + ox / ol * k * 25, z: a.z + oz / ol * k * 25 });
+    // on along the road ahead, down the valley it runs through, and out of sight round its bends
+    const route = roadRoute(W, w.position);
     this.leave = { stage: 'board', t: 0, v: 0, i: 0, route, hoof: 0 };
     g.ui.toast('The sutler whips up his horses. Father Bertram climbs up beside him. You are on your own now.', 5);
-    const pr = this.priest, go = () => {
-      // up onto the box, beside the sutler
-      pr.root.removeFromParent(); w.add(pr.root); pr.root.position.set(0.52, 1.47 - pr.hipsY + 0.06, 2.08); pr.root.rotation.set(0, 0, 0); pr.sit?.();
-      this.leave.stage = 'drive'; g.audio.whinny?.(w.position);
-    };
-    if (pr?.walkTo) {
-      w.updateMatrixWorld(true); const side = new THREE.Vector3(1.4, 0, 2.2).applyMatrix4(w.matrixWorld);
-      pr.walkTo(side, go, (x, z) => W.heightAt(x, z));
-    } else go();
-    if (pr) setTimeout(() => { if (this.leave?.stage === 'board') go(); }, 6000);
+    const pr = this.priest, drive = () => { if (this.leave) { this.leave.stage = 'drive'; g.audio.whinny?.(w.position); } };
+    if (pr?.board) pr.board(w, BOARD, drive, (x, z) => W.heightAt(x, z));
+    else drive();
   }
   inSanctuary(p, pad = 0) { const S = this.sanctuary; return !!S && Math.hypot(p.x - S.x, p.z - S.z) < S.r + pad; }
   nearPriest() { if (!this.priest || this.leave) return false; const m = this.g.me.pos, p = this.priest.root.position; return Math.hypot(m.x - p.x, m.z - p.z) < 3; }
