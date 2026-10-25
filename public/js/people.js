@@ -181,6 +181,21 @@ function personMat(look) {
         float fz = uFrozen;
         // dead: grey, waxen, the veins showing dark through it
         skin = mix(skin, uSkin * (0.7 + 0.4 * blot) * (1.0 - 0.3 * smoothstep(0.62, 0.7, pn(vObj * vec3(30.0, 90.0, 30.0)))), uDead);
+        // the dead one's face is a skull under skin: sockets sunk deep and dark, the cheeks hollowed under the bones,
+        // the temples fallen in, the eyelids bruised, and black under the jaw
+        if (uDead > 0.0) {
+          vec3 ec = (uEyeL + uEyeR) * 0.5, q = vObj - ec; float ax = abs(q.x);
+          float sock = 0.0, lid = 0.0;
+          for (int i = 0; i < 2; i++) { vec3 e = i == 0 ? uEyeL : uEyeR; vec3 d = (vObj - e) * vec3(1.0, 1.3, 1.0);
+            float r = length(d.xy); sock = max(sock, 1.0 - smoothstep(0.012, 0.042, r)); lid = max(lid, (1.0 - smoothstep(0.008, 0.022, r)) * smoothstep(0.012, 0.0, abs(d.y + 0.012))); }
+          float front = smoothstep(-0.04, 0.0, q.z);
+          float cheek = smoothstep(0.022, 0.04, ax) * (1.0 - smoothstep(0.058, 0.074, ax)) * smoothstep(-0.018, -0.034, q.y) * (1.0 - smoothstep(-0.068, -0.085, q.y)) * front;
+          float temple = smoothstep(0.046, 0.06, ax) * (1.0 - smoothstep(0.08, 0.095, ax)) * smoothstep(-0.015, 0.002, q.y) * (1.0 - smoothstep(0.035, 0.06, q.y));
+          float nose = smoothstep(0.012, 0.0, abs(ax - 0.016)) * smoothstep(-0.03, -0.045, q.y) * (1.0 - smoothstep(-0.06, -0.07, q.y)) * front;
+          float jaw = smoothstep(-0.095, -0.115, q.y) * (1.0 - smoothstep(-0.17, -0.19, q.y));
+          float shade = clamp(sock * 0.9 + lid * 0.3 + cheek * 0.75 + temple * 0.6 + nose * 0.4 + jaw * 0.6, 0.0, 0.92);
+          skin = mix(skin, skin * vec3(0.3, 0.24, 0.27), shade * uDead);
+        }
         skin = mix(skin, vec3(0.5, 0.56, 0.62) * (0.75 + 0.35 * blot) + vec3(0.06, 0.0, 0.03) * pn(vObj * 20.0), fz * 0.9);
         hair = mix(hair, vec3(0.75, 0.78, 0.82) * (0.7 + 0.5 * strand), fz * 0.6);
         shoe = mix(shoe, skin * 0.8, uDead); cloth = mix(cloth, skin * 0.95, uDead);
@@ -201,9 +216,10 @@ function personMat(look) {
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS, 0.28, uFrozen * 0.7);')
       // light through the skin: a warm wrap where it turns from the light
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-        reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02) * (1.0 - uFrozen);`);
+        reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02) * (1.0 - uFrozen) * (1.0 - uDead);
+        reflectedLight.indirectDiffuse *= 1.0 - 0.45 * uDead;   // the dead one: no fill in the hollows, only hard light and dark`);
   };
-  mat.customProgramCacheKey = () => 'personSkin-v4';
+  mat.customProgramCacheKey = () => 'personSkin-v5';
   return mat;
 }
 function personMesh(rig, P, look) {
