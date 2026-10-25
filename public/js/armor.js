@@ -495,37 +495,39 @@ export function buildHarness(style, opts = {}) {
 function buildHelm(S, style, add, opts) {
   const plume = opts.plume ?? true;
   if (S.helm === 'sallet') {
-    // German (Gothic) sallet: a low skull with a keel running from brow to nape, close over the head, coming down in
-    // front to below the eyes with the sight cut clean through it; its lower edge flares out all round like a brim and
-    // sweeps back into a long pointed tail; the edge rolled and bound in brass. The bevor rises to meet it in front.
-    const YC = 0.112, RY = 0.123, RH = 0.121, PE = 2.08, PF = 1.84;   // centre, vertical and horizontal radius; the edge; where the flare begins
-    const SL0 = 0.079, SL1 = 0.095, SW = 1.0;                         // the sight: from y SL0 to SL1, ±SW round the front
-    const salletAt = (th, ph, inset = 0) => {
-      const ft = Math.max(0, (ph - PF) / (PE - PF)), back = Math.max(0, -Math.cos(th)), side = Math.abs(Math.sin(th));
-      let y = YC + Math.cos(ph) * RY, r = Math.sin(ph) * RH;
-      // the brim: out a little in front, more at the sides, far out behind into the tail (which comes to a point)
-      const tail = Math.pow(back, 3) * 0.1 * (0.6 + 0.4 * Math.pow(back, 6));
-      r += ft * ft * (0.006 + side * 0.03 + tail);
-      y += ft * ft * (back * 0.012 - 0.004);
-      let x = Math.sin(th) * r * 0.9, z = Math.cos(th) * r * 1.07 + 0.012;
-      // the keel: a sharp ridge down the middle from the brow over the crown to the nape
-      const keel = 0.011 * Math.exp(-((x / 0.011) ** 2)) * (1 - smooth(clamp((ph - 1.45) / 0.35, 0, 1)) * (Math.cos(th) > 0 ? 1 : 0.4));
-      const nx = Math.sin(ph) * Math.sin(th), ny = Math.cos(ph), nz = Math.sin(ph) * Math.cos(th);
-      x += nx * (keel - inset); y += ny * (keel - inset); z += nz * (keel - inset);
-      return [x, y, z];
+    // German (Gothic) sallet, after the real ones: a low, round skull; the front comes down almost straight to the nose
+    // with the sight cut high in it, just under the brow; below that the whole lower edge flares out like a bell, a
+    // little in front, more at the sides, and behind into a long tail that reaches back over the neck; the edge rolled
+    // and bound in brass. The bevor rises inside the brim to meet it.
+    // Built from its sections: y from the crown (v = 0) to the edge (v = 1); at each height an egg-shaped section
+    // (half-width a, forward reach zf, backward reach zb).
+    const Y_BROW = 0.1, SL0 = 0.082, SL1 = 0.097, SW = 0.95, VD = 0.55;
+    const yEdge = (th) => { const c = Math.cos(th); return c > 0 ? lerp(0.03, 0.036, c) : lerp(0.03, 0.05, -c); };
+    const section = (th, v) => {
+      if (v < VD) {   // the skull: low and round, a little flattened on top
+        const ph = (v / VD) * PI / 2, s = Math.sin(ph);
+        return { y: Y_BROW + Math.cos(ph) * 0.118, a: 0.111 * s, zf: 0.128 * s, zb: 0.132 * s };
+      }
+      const t = (v - VD) / (1 - VD);   // brow to edge: the front nearly straight, then the flare
+      return { y: lerp(Y_BROW, yEdge(th), t), a: 0.111 + 0.03 * Math.pow(t, 1.7), zf: 0.128 + 0.03 * Math.pow(t, 2.2), zb: 0.132 + 0.14 * Math.pow(t, 1.6) };
     };
-    const slit = (th, ph) => { const y = YC + Math.cos(ph) * RY; return Math.abs(th) < SW && y > SL0 && y < SL1; };
-    const NU = 72, NV = 28, sk = (u, v) => salletAt(lerp(-PI, PI, u), lerp(0, PE, v)), skip = (u, v) => slit(lerp(-PI, PI, u), lerp(0, PE, v));
+    const salletAt = (th, v, inset = 0) => {
+      const S2 = section(th, v), c = Math.cos(th);
+      const r = 1 - inset / 0.12;
+      return [Math.sin(th) * S2.a * r, S2.y - inset * 0.5 + 0.006 * Math.exp(-((Math.sin(th) * S2.a / 0.012) ** 2)) * (v < VD ? 1 - v / VD : 0), (c > 0 ? S2.zf : S2.zb) * c * r + 0.012];
+    };
+    const slit = (th, v) => { const y = section(th, v).y; return Math.cos(th) > Math.cos(SW) && y > SL0 && y < SL1; };
+    const NU = 72, NV = 34, sk = (u, v) => salletAt(lerp(-PI, PI, u), v), skip = (u, v) => slit(lerp(-PI, PI, u), v);
     add('head', 'plate', surf(sk, NU, NV, skip));
-    // the inside (the brim and the tail are seen from below, the sight from in front): the same shell turned inward
-    add('head', 'leather', surf((u, v) => salletAt(lerp(PI, -PI, u), lerp(0, PE, v), 0.004), NU, NV, (u, v) => slit(lerp(PI, -PI, u), lerp(0, PE, v))));
-    // the brass-bound edge all round, and the sight's lips
-    add('head', 'brass', edge((u) => salletAt(lerp(-PI, PI, u), PE - 0.004), 'v0', 0.0032, 72));
-    const phOfY = (y) => Math.acos(clamp((y - YC) / RY, -1, 1));
-    add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), phOfY(SL1) - 0.004), 'v0', 0.0028, 24));
-    add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), phOfY(SL0) + 0.004), 'v0', 0.0028, 24));
+    // the inside, lined: seen under the brim and the tail, and round the sight
+    add('head', 'leather', surf((u, v) => salletAt(lerp(PI, -PI, u), v, 0.004), NU, NV, (u, v) => slit(lerp(PI, -PI, u), v)));
+    // the brass-bound edge, and the sight's lips
+    add('head', 'brass', edge((u) => salletAt(lerp(-PI, PI, u), 0.995), 'v0', 0.0034, 72));
+    const vOfY = (y) => VD + (1 - VD) * (Y_BROW - y) / (Y_BROW - 0.033);
+    add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), vOfY(SL1) - 0.004), 'v0', 0.0026, 24));
+    add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), vOfY(SL0) + 0.004), 'v0', 0.0026, 24));
     // rivets for the lining band, round the skull above the brim
-    add('head', 'brass', mergeGeometries([-2.3, -1.4, 1.4, 2.3, PI].map((th) => { const p = salletAt(th, 1.62), n = [Math.sin(th), 0, Math.cos(th)]; return rivetOut(p, n, 0.0045); })));
+    add('head', 'brass', mergeGeometries([-2.2, -1.3, 1.3, 2.2, PI].map((th) => rivetOut(salletAt(th, VD + 0.06), [Math.sin(th), 0, Math.cos(th)], 0.0042))));
     // bevor: chin/throat defence strapped to the breastplate (chest joint)
     // shaped to the chin: broad over the collar, swelling round the jaw with a ridge down the front, narrowing at the top
     // to tuck under the sallet's lip
