@@ -16,6 +16,7 @@ import { FINISHES, armorTextures } from './textures.js';
 import { loadArmoury, saveArmoury } from './shop.js';
 import { prewarmDemons } from './demons.js';
 import { Watcher } from './devil.js';
+import { MenuStage } from './menu_scene.js';
 import { CHAPTERS } from './chapters.js';
 import { clamp, lerp, damp } from './util.js';
 
@@ -86,7 +87,7 @@ async function boot() {
   }
   requestAnimationFrame(loop);
   // audio may only start after the first gesture
-  const wake = () => { app.audio.init(); app.audio.setVolumes(app.audio.vol); if (app.audio.music) { app.audio.music.start(); app.audio.music.setMood('dread'); app.audio.music.setIntensity(0); } removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); };
+  const wake = () => { app.audio.init(); app.audio.setVolumes(app.audio.vol); if (app.audio.music) { app.audio.music.start(); app.audio.music.setMood(app.game ? 'dread' : 'menu'); app.audio.music.setIntensity(0); } removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); };
   addEventListener('pointerdown', wake); addEventListener('keydown', wake);
 }
 function randomName() { const n = ['Aldric', 'Bertrand', 'Conrad', 'Dietrich', 'Eberhard', 'Gottfried', 'Hartmann', 'Konrad', 'Leopold', 'Ulrich', 'Wolfram', 'Anselm', 'Matthias', 'Benedikt', 'Ottokar']; return n[Math.floor(Math.random() * n.length)]; }
@@ -96,59 +97,50 @@ const menu = { world: null, knight: null, watcher: null, t: 0, focus: 'title' };
 app.menu = menu;
 function buildMenuScene() {
   const e = app.engine;
-  menu.world = new World(e, e.q, 0);
-  const a = menu.world.altars[0];
-  menu.altar = a;
+  // the title has a stage of its own (see menu_scene.js): the five round the cross, the horde, the light
+  menu.stage = new MenuStage(e, e.q); menu.world = menu.stage;
+  menu.altar = menu.stage.altar;
   makeMenuKnight();
+  // and Him, far off in the fog beyond the ruins, watching
   menu.watcher = new Watcher(e.scene, null);
-  // for the title he stands nearer than he ever will in play, on a rise beyond the altar
-  const k0 = menu.knight; const fx = Math.sin(k0.yaw), fz = Math.cos(k0.yaw);
-  const wx = a.x + fx * 38 - fz * 9, wz = a.z + fz * 38 + fx * 9;
-  menu.watcher.pos.set(wx, menu.world.groundAt(wx, wz), wz); menu.watcher.state = 'watch'; menu.watcher.yaw = Math.atan2(a.x - wx, a.z - wz);
-  menu.world.vista.onThunder = (str, delay) => app.audio.thunder(str, delay);
-  e.renderer.toneMappingExposure = (menu.world.ch.atmos.exposure || 1) * 1.4;
+  menu.watcher.pos.set(3.5, 0, -24); menu.watcher.state = 'watch'; menu.watcher.yaw = Math.atan2(-3.5, 24);
+  app.audio.music?.setMood('menu');
 }
 function makeMenuKnight() {
-  const e = app.engine, a = menu.altar;
+  const e = app.engine;
   if (menu.knight) menu.knight.dispose();
+  // the player's own knight, shown in the lobby, standing on the paving in front of the altar
   const k = menu.knight = new Knight(e.scene, e.q, app.loadout, { id: 0, name: '' });
-  k.pos.set(a.x + 0.9, 0, a.z - 2.9); k.pos.y = menu.world.heightAt(k.pos.x, k.pos.z);   // south of the altar, facing north toward the storm
-  k.yaw = Math.atan2(a.x - k.pos.x, a.z - k.pos.z);
-  k.praying = true; k.kneel = 1; k.prayT = 3;
+  k.pos.set(0, 0, 3.4); k.yaw = 0;
 }
 function menuUpdate(dt) {
-  const e = app.engine, k = menu.knight; menu.t += dt;
-  const W = { heightAt: (x, z) => menu.world.heightAt(x, z), collide() {}, wind: menu.world.wind, canPrayAt: () => true };
-  // the knight prays on the title screen and stands to show his harness in the lobby
+  const e = app.engine, k = menu.knight, S = menu.stage; menu.t += dt;
+  // the title is the stage's own scene; the lobby shows the player's knight standing before the altar
   const lobby = app.ui.current === 'lobby';
-  const inp = { mx: 0, mz: 0, aimYaw: k.yaw, sprint: false, block: false, pray: !lobby, attack: false, heavy: false, dodge: false, relic: false };
-  k.simulate(dt, inp, W);
-  if (lobby && !k.action && Math.random() < dt * 0.25) k.tryAttack(Math.random() < 0.3);
-  k.events.length = 0;
-  k.animate(dt, W);
-  menu.world.update(dt, e.camera.position);
-  menu.watcher.animate(dt, menu.t, e.camera.position, [k]);
-  const c = e.camera; const p = k.pos;
+  S.setVisible(!lobby); k.group.visible = lobby; if (k.weapon) k.weapon.visible = lobby; if (k.cape) k.cape.mesh.visible = lobby;
+  const c = e.camera;
   if (lobby) {
-    const ang = k.yaw + 0.9 + Math.sin(menu.t * 0.15) * 0.4;
+    const inp = { mx: 0, mz: 0, aimYaw: k.yaw, sprint: false, block: false, pray: false, attack: false, heavy: false, dodge: false, relic: false };
+    k.simulate(dt, inp, S.W);
+    if (!k.action && Math.random() < dt * 0.25) k.tryAttack(Math.random() < 0.3);
+    k.events.length = 0; k.animate(dt, S.W);
+    const p = k.pos, ang = k.yaw + 0.9 + Math.sin(menu.t * 0.15) * 0.4;
     const want = new THREE.Vector3(p.x + Math.sin(ang) * 3.2, p.y + 1.55, p.z + Math.cos(ang) * 3.2);
     c.position.lerp(want, 1 - Math.exp(-3 * dt)); c.lookAt(p.x, p.y + 1.1, p.z);
+    if (Math.abs(c.fov - 45) > 0.1) { c.fov = 45; c.updateProjectionMatrix(); }
+    e.focusShadows(p);
   } else {
-    // behind the kneeling knight's shoulder, looking past him and the altar to the rise where He stands
-    const fx = Math.sin(k.yaw), fz = Math.cos(k.yaw), sway = Math.sin(menu.t * 0.05) * 0.5;
-    const want = new THREE.Vector3(p.x - fx * 4.2 + fz * (1.6 + sway), p.y + 1.25, p.z - fz * 4.2 - fx * (1.6 + sway));
-    c.position.lerp(want, menu.snapped ? 1 - Math.exp(-1.5 * dt) : 1); menu.snapped = true;
-    const w = menu.watcher.pos; c.lookAt(lerp(p.x, w.x, 0.35), p.y + 2.6, lerp(p.z, w.z, 0.35));
+    S.update(dt, c.position); S.camera(c, dt);
+    e.focusShadows(new THREE.Vector3(0, 0, 0));
   }
-  const gy = menu.world.heightAt(c.position.x, c.position.z) + 0.6; if (c.position.y < gy) c.position.y = gy;
-  if (Math.abs(c.fov - 45) > 0.1) { c.fov = 45; c.updateProjectionMatrix(); }
-  e.focusShadows(p);
+  menu.watcher.animate(dt, menu.t, c.position, [k]);
   app.audio.update(dt);
   e.render(dt);
 }
 function disposeMenuScene() {
   if (!menu.world) return;
-  menu.world.dispose(); menu.knight.dispose(); app.engine.scene.remove(menu.watcher.mesh);
+  menu.stage.dispose(); menu.stage = null;
+  menu.knight.dispose(); app.engine.scene.remove(menu.watcher.mesh);
   menu.world = null;
 }
 

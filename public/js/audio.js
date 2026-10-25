@@ -197,6 +197,23 @@ const RENDER = {
     const n = src(ctx, noiseBuf(ctx, dur, 'pink')); const nb = bp(ctx, 3000, 0.8); const ng = short ? gainEnv(ctx, [[0, 0], [0.01, 0.12], [0.1, 0.0001, 'e']]) : gainEnv(ctx, [[0, 0], [0.5, 0.02], [dur, 0.01]]); n.connect(nb).connect(ng).connect(out); n.start();
     return normalize(await ctx.startRendering(), 0.7);
   },
+  // a pipe organ note: ranks drawn together (16', 8', 4', 2 2/3', 2' and a mixture), each pipe a little out of tune
+  // with the next so they beat slowly; the chiff of air at the mouth as it speaks; steady wind, no vibrato
+  async organ(note) {
+    const dur = 4.6; const ctx = off(dur);
+    const out = gainEnv(ctx, [[0, 0], [0.09, 1], [dur - 0.35, 1], [dur, 0]]); const tone = filt(ctx, 'lowpass', note < 40 ? 2600 : 5200, 0.5);
+    tone.connect(out).connect(ctx.destination);
+    const f0 = midi(note);
+    for (const [mul, amp, det] of [[0.5, 0.55, 0.0008], [1, 1, 0], [2, 0.55, 0.0012], [3, 0.28, -0.0009], [4, 0.3, 0.0015], [6, 0.12, -0.002], [8, 0.1, 0.0022], [12, 0.04, 0.003]]) {
+      if (f0 * mul > 9000) continue;
+      for (const d of [-det, det]) { const o = ctx.createOscillator(); o.type = mul === 1 ? 'triangle' : 'sine'; o.frequency.value = f0 * mul * (1 + d); const g = ctx.createGain(); g.gain.value = amp * 0.5; o.connect(g).connect(tone); o.start(); }
+    }
+    // the chiff: a breath of noise at the pipe's pitch as it speaks
+    const n = src(ctx, noiseBuf(ctx, 0.3, 'white')); const nb = bp(ctx, f0 * 4, 4); const ng = gainEnv(ctx, [[0, 0], [0.015, 0.5], [0.12, 0.0001, 'e']]); n.connect(nb).connect(ng).connect(out); n.start();
+    // the wind in the pipes
+    const w = src(ctx, noiseBuf(ctx, dur, 'pink')); const wb = bp(ctx, f0 * 2, 1.5); const wg = ctx.createGain(); wg.gain.value = 0.015; w.connect(wb).connect(wg).connect(out); w.start();
+    return normalize(await ctx.startRendering(), 0.75);
+  },
   // low brass: horns and trombones with an opening bell
   async brass(note) {
     const dur = 2.6; const ctx = off(dur);
@@ -403,6 +420,7 @@ export class AudioEngine {
     L.cantor = {}; for (let n = 44; n <= 65; n += 3) tasks.push(async () => { L.cantor['oh' + n] = await RENDER.choir(n, 'oh', 2); });
     for (let n = 26; n <= 50; n += 3) { tasks.push(async () => { L.strings[n] = await RENDER.strings(n, false); }); tasks.push(async () => { L.spic[n] = await RENDER.strings(n, true); }); }
     for (let n = 29; n <= 47; n += 3) tasks.push(async () => { L.brass[n] = await RENDER.brass(n); });
+    L.organ = {}; for (let n = 26; n <= 74; n += 3) tasks.push(async () => { L.organ[n] = await RENDER.organ(n); });
     // render a few at a time so the page stays responsive
     let i = 0; const run = async () => { while (i < tasks.length) { const t = tasks[i++]; try { await t(); } catch (e) { console.warn('audio render', e); } } };
     await Promise.all([run(), run(), run()]);
@@ -629,7 +647,19 @@ const PROG = {
   triumph: [[43, 50, 55, 59], [36, 43, 48, 52], [38, 45, 50, 54], [43, 50, 55, 59]],
   // the last battle: D Phrygian, the flat second (E flat) grinding against the tonic
   final:   [[38, 45, 50, 53], [39, 46, 51, 55], [38, 45, 50, 53], [36, 43, 48, 51]],
+  // the title: D minor, broad and slow, a chord a bar: Dm Bb F C | Gm Bb A A
+  menu:    [[38, 45, 50, 53], [34, 41, 46, 50], [41, 48, 53, 57], [36, 43, 48, 52], [43, 50, 55, 58], [34, 41, 46, 50], [33, 40, 45, 49], [33, 40, 45, 49]],
 };
+// the title anthem's melody, sung by the whole choir over each bar: [beat, note, beats]
+const MENU_THEME = [
+  [[0, 62, 2], [2, 65, 1], [3, 64, 1]], [[0, 62, 3], [3, 58, 1]], [[0, 60, 2], [2, 57, 1], [3, 60, 1]], [[0, 64, 4]],
+  [[0, 62, 2], [2, 67, 2]], [[0, 65, 2], [2, 62, 2]], [[0, 64, 2], [2, 61, 2]], [[0, 64, 3], [3, 57, 1]],
+];
+// and its answer, an octave up, the second time round
+const MENU_THEME_B = [
+  [[0, 69, 3], [3, 67, 1]], [[0, 65, 2], [2, 62, 2]], [[0, 65, 2], [2, 69, 2]], [[0, 67, 4]],
+  [[0, 70, 2], [2, 69, 1], [3, 67, 1]], [[0, 65, 3], [3, 62, 1]], [[0, 64, 2], [2, 67, 2]], [[0, 69, 4]],
+];
 // every fourth phrase climbs: B flat, G minor, A major, and back to D
 const FINAL_BRIDGE = [[34, 41, 46, 50], [31, 43, 50, 55], [33, 40, 45, 49], [33, 40, 45, 49]];
 // the horn theme over each chord of the phrase: [beat, note, beats]
@@ -757,6 +787,7 @@ class Score {
     }
     const L = this.a.lib; if (!L || !L.ready) return;
     if (this.mood === 'final') { this.choirOut.gain.setTargetAtTime(0, now, 0.35); this.updateFinal(now, L); return; }
+    if (this.mood === 'menu') { this.choirOut.gain.setTargetAtTime(1, now, 0.8); this.updateMenu(now, L); return; }
     this.fStep = null;
     const I = this.intensity; const mood = this.mood === 'dread' && I > 0.35 ? 'combat' : this.mood;
     const bpm = mood === 'boss' ? 96 : mood === 'combat' ? 88 : 72; const spb = 60 / bpm;
@@ -812,6 +843,41 @@ class Score {
       const spic = mood === 'boss' ? 1 : mood === 'combat' ? I : 0;
       if (spic > 0.3) { const [root, fifth] = this.chord; const n = [root, root, fifth, root, root + 12, root, fifth, root][b % 8] - 12; this.sample(L.spic, n, '', t, 0.35 * spic, 0.45, 0.01); }
       this.nextBeat += spb / 2;
+    }
+  }
+
+  // The title: a great organ and the whole choir in a stone nave. The organ holds each chord, the pedal an octave
+  // below; the choir sings the chord and over it the theme; a great drum on the first beat and the third; at the head
+  // of each phrase a cymbal swell, a crash and the low bell. The first phrase is organ and choir alone, the drums come
+  // in with the second, the theme climbs an octave in the third.
+  updateMenu(now, L) {
+    const spb = 60 / 62, bar = spb * 4;
+    if (this.mStep == null || this.nextBar < now - 0.5) { this.mStep = 0; this.nextBar = now + 0.15; }
+    while (this.nextBar < now + 0.3) {
+      const i = this.mStep++, n = i % 8, phrase = Math.floor(i / 8), t = this.nextBar;
+      const [root, fifth, oct, third] = this.chord = PROG.menu[n];
+      const organ = (note, g, d = bar + 0.25) => this.sample(L.organ || L.strings, note, '', t, g, d, 0.12);
+      // the organ: pedal, and the chord full in the manuals
+      organ(root - 12, 0.55); organ(root, 0.34); for (const m of [fifth, oct, third, oct + 12]) organ(m, 0.2);
+      if (phrase > 0) organ(fifth + 12, 0.12);
+      // the strings under it all
+      this.sample(L.strings, root - 12, '', t, 0.3, bar + 0.3, 0.6);
+      // the choir: the chord, 'ah', and the theme
+      for (const m of [oct, third + 12, fifth + 12]) this.sample(L.choir, m, phrase === 0 ? 'oo' : 'ah', t + R() * 0.03, 0.26, bar + 0.2, 0.5, this.choirOut);
+      const theme = phrase % 4 === 2 ? MENU_THEME_B : MENU_THEME;
+      if (phrase > 0 || n >= 4) for (const [b, note, d] of theme[n]) this.voice(L.choir, note, 'ah', t + b * spb, phrase === 0 ? 0.32 : 0.5, d * spb + 0.15, 0.1, 0.5);
+      if (phrase >= 2) for (const [b, note, d] of theme[n]) this.voice(L.choir, note - 12, 'ah', t + b * spb, 0.28, d * spb + 0.15, 0.1, 0.5);
+      // the drums, from the second phrase; brass on the strong chords
+      if (phrase > 0) {
+        this.one(L.drums.taiko || L.drums.low, t, 0.75); this.one(L.drums.low, t + spb * 2, 0.45);
+        if (n === 3 || n === 7) { this.one(L.drums.taiko || L.drums.low, t + spb * 3, 0.35); this.one(L.drums.taiko || L.drums.low, t + spb * 3.5, 0.45); }
+        if (L.brass && (n === 0 || n === 4 || n === 6)) { this.sample(L.brass, root, '', t, 0.42, bar, 0.08); this.sample(L.brass, fifth, '', t, 0.3, bar, 0.08); }
+      }
+      // the head of each phrase: the swell before it, the crash and the bell on it
+      if (n === 7 && L.drums.swell) this.one(L.drums.swell, t + bar - 1.6, 0.35);
+      if (n === 0 && phrase > 0 && L.drums.crash) this.one(L.drums.crash, t, 0.4);
+      if (n === 0) this.one(L.bells.low, t, 0.3, Math.pow(2, (root + 12 - 45) / 12));
+      this.nextBar += bar;
     }
   }
 
