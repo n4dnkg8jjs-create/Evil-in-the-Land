@@ -57,6 +57,15 @@ function xf(g, { p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1] } = {}) {
   g.applyMatrix4(m); return g;
 }
 function rivet(p, r = 0.0055) { return xf(new THREE.SphereGeometry(r, 6, 4, 0, PI * 2, 0, PI / 2), { p, r: [0, 0, 0] }); }
+// a rivet set into a surface given as fn(u, v): at that point, along the surface's own normal (turned to face
+// roughly 'hint'), so it can never stand off the plate it is meant to hold
+function rivetOn(fn, u, v, hint, r = 0.0055) {
+  const e = 0.004, P = new THREE.Vector3(...fn(u, v));
+  const du = new THREE.Vector3(...fn(Math.min(1, u + e), v)).sub(new THREE.Vector3(...fn(Math.max(0, u - e), v)));
+  const dv = new THREE.Vector3(...fn(u, Math.min(1, v + e))).sub(new THREE.Vector3(...fn(u, Math.max(0, v - e))));
+  const n = new THREE.Vector3().crossVectors(du, dv).normalize(); if (n.dot(new THREE.Vector3(...hint)) < 0) n.negate();
+  return rivetOut(P.addScaledVector(n, -r * 0.25).toArray(), n.toArray(), r);
+}
 // rivet placed on a surface point, oriented along local normal (approx using provided outward dir)
 function rivetOut(p, dir, r = 0.0055) {
   const g = new THREE.SphereGeometry(r, 6, 4, 0, PI * 2, 0, PI / 2);
@@ -309,8 +318,9 @@ export function buildHarness(style, opts = {}) {
   for (const s of [-1, 1]) {
     const f0 = torso.at(s * 0.55, 0.13, 0.03), f1 = torso.at(s * PI * 0.5, 0.2, 0.03), f2 = torso.at(s * 2.6, 0.13, 0.03);
     add('chest', 'leather', tubeAlong([[f0[0], 0.13, f0[1]], [f1[0] * 0.75, 0.2, (f0[1] + f2[1]) / 2], [f2[0], 0.13, f2[1]]], 0.006, 12, 4));
-    add('chest', 'brass', rivetOut([f0[0], 0.125, f0[1]], [Math.sin(s * 0.55), 0.3, Math.cos(s * 0.55)], 0.009));
   }
+  // where each strap meets the breastplate, a rivet in the plate itself
+  for (const s of [-1, 1]) { const v = 0.93, m = lerp(1.85, 1.2, smooth(clamp((v - 0.55) / 0.45, 0, 1))); add('chest', 'brass', rivetOn(bp.fn, (s * 0.55 + m) / (2 * m), v, [Math.sin(s * 0.55), 0.3, Math.cos(s * 0.55)], 0.009)); }
   // rivets along the breastplate's waist
   for (let i = -5; i <= 5; i++) { const th = i * 0.3; const p = torso.at(th, -0.235, 0.032); add('chest', 'brass', rivetOut([p[0], -0.235, p[1]], [Math.sin(th), 0, Math.cos(th)], 0.0055)); }
   // lance rest (arrêt) on the right breast
@@ -406,7 +416,7 @@ export function buildHarness(style, opts = {}) {
       const hfn = (u, v) => { const t = lerp(-0.95, 0.95, u); return [hx + sx * 0.012 * v, 0.07 * ps + v * 0.075, Math.sin(t) * 0.1 * ps]; };
       add('clav' + s, 'plate', surf(hfn, 12, 3), capFol); add('clav' + s, 'trim', edge(hfn, 'v1', 0.005, 12), capFol);
     }
-    add('clav' + s, 'brass', rivetOut([SX + sx * 0.07 * ps, 0.085, 0.0], [sx, 0.6, 0], 0.008), capFol);
+    add('clav' + s, 'brass', rivetOn(capFn, 0.5, 0.42, [sx, 0.6, 0], 0.008), capFol);   // in the cap, on its outer face
     // rerebrace (upper arm), closed, shaped to the arm
     const rr = fshell(ua, { a0: 0, a1: PI * 2, y0: -0.25, y1: -0.07, off: (th, v) => 0.013 + (S.flutes ? Math.sin(th * 9) * 0.0018 : 0), nu: 24, nv: 8, win: 0.03 });
     add('uArm' + s, 'plate', rr.geo); add('uArm' + s, 'trim', edge(rr.fn, 'v1', 0.004, 22)); add('uArm' + s, 'trim', edge(rr.fn, 'v0', 0.0035, 22));
