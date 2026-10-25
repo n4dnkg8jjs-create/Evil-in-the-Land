@@ -133,10 +133,106 @@ function fshell(f, { a0, a1, y0, y1, off, aOfV, yOfU, nu = 32, nv = 12, dy = 0, 
 // Each part: { joint, follow?: {joint, k, pivot}, mat, geo }
 // Joint offsets used to move between frames (keep in sync with rig.js SKEL)
 const SPINE_TO_CHEST = 0.22, HIPS_TO_SPINE = [0.10, -0.01], CLAV_TO_SHOULDER = 0.165, HIP_X = 0.10, HIP_Y = -0.06;
+// ---------------------------------------------------------------- gauntlets
+// Proportioned on the MakeHuman hand (measured in the hand bone's frame: palm ~0.09 long and ~0.1 across at the
+// knuckles, four fingers ~0.022 apart, index toward +z, the back of the hand on the side sx, the thumb on the palm
+// side). The weapon's grip runs along the hand's z axis through (0, -LEN.grip, 0) (see rig.gripArm), so in the 'grip'
+// set each finger curls round that line in a circle; the 'open' set has the fingers straight and together (the
+// sign of the cross). Each finger: a leather glove finger, and three overlapping plates (proximal, middle, a capped
+// fingertip) with a raised medial ridge; the thumb the same in two plates; over the back of the hand three lames
+// and a knuckle plate with bosses over each knuckle; a flared cuff with a rolled edge; rivets.
+const GRIP_Y = -0.08, GRIP_R = 0.0272;
+const FINGERS = [   // z of each finger, radius of the glove finger, how far it curls (index, middle, ring, little)
+  { z: 0.027, r: 0.0088, k: 0.95 }, { z: 0.005, r: 0.0092, k: 1.0 }, { z: -0.017, r: 0.0088, k: 0.96 }, { z: -0.038, r: 0.0078, k: 0.84 },
+];
+// a plate round part of a finger: fn(s) gives the finger's centreline point and its 'back' direction at s (0 at the
+// knuckle, 1 at the tip); the plate covers s0..s1, wrapping phi = ±wrap round the back; cap closes the tip
+function fingerPlate(fn, s0, s1, rp, { wrap = 1.75, cap = false, flare = 0.08 } = {}) {
+  const V3 = THREE.Vector3;
+  const frame = (sv) => {
+    const [c, n] = fn(sv), [c2] = fn(Math.min(1, sv + 0.01)), [c1] = fn(Math.max(0, sv - 0.01));
+    const t = new V3(...c2).sub(new V3(...c1)).normalize(), nn = new V3(...n); nn.addScaledVector(t, -nn.dot(t)).normalize();
+    return { c: new V3(...c), t, n: nn, b: new V3().crossVectors(t, nn) };
+  };
+  return surf((u, v) => {
+    const sv = lerp(s0, s1, v), F = frame(sv), ph = lerp(-wrap, wrap, u);
+    let r = rp * (1 + flare * (1 - v)) + 0.0011 * Math.exp(-((ph / 0.35) ** 2));   // the proximal edge stands proud over the plate behind; a ridge down the middle
+    const p = F.c.clone();
+    if (cap && v > 0.7) { const k = (v - 0.7) / 0.3; r *= Math.sqrt(Math.max(0.02, 1 - k * k)); p.addScaledVector(F.t, rp * 0.9 * Math.sin(k * PI / 2)); }
+    p.addScaledVector(F.n, Math.cos(ph) * r).addScaledVector(F.b, Math.sin(ph) * r);
+    return [p.x, p.y, p.z];
+  }, 12, cap ? 8 : 5);
+}
+function fingerTube(fn, r, n = 12) {
+  const pts = []; for (let i = 0; i <= n; i++) { const [c] = fn(i / n); pts.push(new THREE.Vector3(...c)); }
+  const tube = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n * 2, r, 8, false);
+  const tip = xf(new THREE.SphereGeometry(r, 8, 6), { p: pts[n].toArray() });
+  return mergeGeometries([tube, tip].map((g) => { for (const a in g.attributes) if (!['position', 'normal', 'uv'].includes(a)) g.deleteAttribute(a); return g.index ? g : g; }));
+}
+function gauntlet(add, s, sx, S) {
+  const H = 'hand' + s;
+  // the hand's centrelines, grip and open
+  const dirA = (a) => [sx * Math.cos(a), -Math.sin(a)];   // a = 0: toward the back of the hand; increasing: round under the grip
+  const gripFinger = (f) => (sv) => { const a = 0.18 + sv * 4.0 * f.k, d = dirA(a); return [[d[0] * GRIP_R, GRIP_Y + d[1] * GRIP_R, f.z], [d[0], d[1], 0]]; };
+  const openFinger = (f, i) => (sv) => { const L = 0.088 * f.k * (i === 1 ? 1.04 : 1); return [[sx * (0.0255 - 0.014 * sv * sv), GRIP_Y - 0.004 - sv * L, f.z * (1 - 0.06 * sv)], [sx, 0.12 * sv, 0]]; };
+  const segs = [[0, 0.43], [0.38, 0.72], [0.67, 1]];
+  for (const [tag, mk] of [['grip', gripFinger], ['open', openFinger]]) {
+    const plates = [], glove = [];
+    FINGERS.forEach((f, i) => {
+      const fn = mk(f, i), rp = f.r + 0.0024;
+      glove.push(fingerTube(fn, f.r));
+      segs.forEach(([s0, s1], j) => plates.push(fingerPlate(fn, s0, s1, rp + j * 0.0004 * 0, { cap: j === 2, wrap: j === 2 ? 1.95 : 1.75 })));
+    });
+    // the thumb: from its root in the palm, round over the top of the grip and down beside the index finger
+    const thumbPts = tag === 'grip'
+      ? [[sx * 0.016, -0.02, 0.036], [-sx * 0.006, -0.042, 0.047], [-sx * 0.036, -0.058, 0.044], [-sx * 0.05, -0.078, 0.026]]
+      : [[sx * 0.016, -0.02, 0.036], [sx * 0.006, -0.05, 0.05], [sx * 0.0, -0.08, 0.052], [-sx * 0.004, -0.105, 0.046]];
+    const tc = new THREE.CatmullRomCurve3(thumbPts.map((q) => new THREE.Vector3(...q)));
+    const thumbFn = (sv) => { const p = tc.getPoint(sv), t = tc.getTangent(sv); const out = new THREE.Vector3(tag === 'grip' ? 0 : sx, tag === 'grip' ? 1 : 0, tag === 'grip' ? 0.35 : 0.6).normalize(); out.addScaledVector(t, -out.dot(t)).normalize(); return [p.toArray(), out.toArray()]; };
+    glove.push(fingerTube(thumbFn, 0.0098));
+    plates.push(fingerPlate((sv) => thumbFn(0.3 + sv * 0.38), 0, 1, 0.0122, { wrap: 1.8 }), fingerPlate((sv) => thumbFn(0.64 + sv * 0.36), 0, 1, 0.0122, { cap: true, wrap: 1.95 }));
+    add(H, 'plate', mergeGeometries(plates), null, tag); add(H, 'leather', mergeGeometries(glove), null, tag);
+  }
+  // the back of the hand: three overlapping lames from the cuff to the knuckles, curved over the hand and round its edges
+  const zc = -0.006;
+  for (let i = 0; i < 3; i++) {
+    const y0 = lerp(0.002, -0.066, i / 3) + 0.004, y1 = lerp(0.002, -0.066, (i + 1) / 3) - 0.003;
+    add(H, 'plate', surf((u, v) => {
+      const y = lerp(y0, y1, v), t = clamp(-y / 0.07, 0, 1), half = lerp(0.04, 0.054, t);
+      const zz = lerp(-1, 1, u), w = Math.sin(zz * 1.25);
+      const x = 0.026 + 0.009 * t + 0.009 * Math.cos(zz * 1.25) - 0.004 + 0.0012 * (1 - v);   // lower edge of each lame tucks under the next
+      return [sx * (x - (1 - Math.cos(zz * 1.25)) * 0.014), y, zc + w / Math.sin(1.25) * half];
+    }, 14, 3));
+    add(H, 'brass', mergeGeometries([-1, 1].map((e) => rivetOut([sx * 0.024, (y0 + y1) / 2, zc + e * lerp(0.036, 0.05, i / 3)], [sx, 0, e * 0.8], 0.0028))));
+  }
+  // knuckle plate: following the curl over the knuckles, a boss over each one, a rolled top edge
+  const kfn = (u, v) => {
+    const z = lerp(0.04, -0.051, u), a = lerp(-0.38, 0.3, v), d = dirA(a);
+    let boss = 0; for (const f of FINGERS) boss = Math.max(boss, Math.cos(clamp((z - f.z) / 0.012, -1, 1) * PI / 2));
+    const R = GRIP_R + 0.0128 + 0.0032 * boss * Math.sin(v * PI);
+    return [d[0] * R, GRIP_Y + d[1] * R, z];
+  };
+  add(H, 'plate', surf(kfn, 24, 6)); add(H, 'trim', edge(kfn, 'v0', 0.0022, 20));
+  // the glove's palm and the leather between plates: the hand itself, from the wrist to the knuckles
+  const palm = surf((u, v) => {
+    const a = u * PI * 2, y = lerp(0.006, -0.074, v), t = clamp(-y / 0.074, 0, 1);
+    const cx = sx * lerp(0.012, 0.02, t), rx = lerp(0.017, 0.014, t), rz = lerp(0.036, 0.05, t);
+    return [cx + Math.cos(a) * rx, y, zc + Math.sin(a) * rz];
+  }, 18, 4);
+  add(H, 'leather', palm);
+  // the cuff: flared over the vambrace, a second lame below it, rolled edge, rivets
+  const cuff = new THREE.LatheGeometry([new THREE.Vector2(0.04, -0.012), new THREE.Vector2(0.043, 0.012), new THREE.Vector2(0.048, 0.038), new THREE.Vector2(0.058, 0.074)], 22);
+  add(H, 'plate', xf(cuff, { p: [0, -0.012, 0], s: [1, 1, 1.12] }));
+  add(H, 'trim', xf(new THREE.TorusGeometry(0.058, 0.0035, 5, 24), { p: [0, 0.062, 0], r: [PI / 2, 0, 0], s: [1, 1.12, 1] }));
+  add(H, 'plate', xf(new THREE.LatheGeometry([new THREE.Vector2(0.041, -0.02), new THREE.Vector2(0.044, 0.0)], 20), { p: [0, -0.01, 0], s: [1, 1, 1.12] }));
+  if (S.flutes) for (let k = -2; k <= 2; k++) add(H, 'trim', tubeAlong([[sx * 0.044 * Math.cos(k * 0.22), 0.0, Math.sin(k * 0.22) * 0.049], [sx * 0.055 * Math.cos(k * 0.22), 0.055, Math.sin(k * 0.22) * 0.062]], 0.0016, 4, 4));
+  add(H, 'brass', mergeGeometries([[1, 0], [0, 1], [0, -1]].map(([cx, cz]) => rivetOut([sx * 0.046 * cx, 0.024, 0.052 * cz], [sx * cx, 0, cz], 0.003))));
+}
+
 export function buildHarness(style, opts = {}) {
   const S = STYLES[style];
   const parts = [];
-  const add = (joint, mat, geo, follow) => parts.push({ joint, mat, geo, follow });
+  const add = (joint, mat, geo, follow, tag) => parts.push({ joint, mat, geo, follow, tag });
   const fl = flute(S);
   const torso = F('torso');
   const HD = -(SPINE_TO_CHEST + HIPS_TO_SPINE[0]), HZ = HIPS_TO_SPINE[1]; // hips frame -> torso field
@@ -305,18 +401,8 @@ export function buildHarness(style, opts = {}) {
     // vambrace (forearm), closed, tapering to the wrist
     const vb = fshell(fa, { a0: 0, a1: PI * 2, y0: -0.235, y1: -0.05, off: 0.012, nu: 22, nv: 8, win: 0.02 });
     add('fArm' + s, 'plate', vb.geo); add('fArm' + s, 'trim', edge(vb.fn, 'v0', 0.0038, 20)); add('fArm' + s, 'trim', edge(vb.fn, 'v1', 0.0035, 20));
-    // gauntlet: flared cuff, metacarpal plate, finger lames over a gloved fist
-    const cuff = new THREE.LatheGeometry([new THREE.Vector2(0.041, 0.0), new THREE.Vector2(0.047, 0.03), new THREE.Vector2(0.055, 0.07)], 18);
-    add('hand' + s, 'plate', xf(cuff, { p: [0, -0.022, 0] }));
-    add('hand' + s, 'trim', xf(new THREE.TorusGeometry(0.055, 0.004, 4, 18), { p: [0, 0.048, 0], r: [PI / 2, 0, 0] }));
-    add('hand' + s, 'leather', xf(new THREE.BoxGeometry(0.055, 0.1, 0.08, 2, 3, 2), { p: [0, -0.072, 0.008] }));
-    const meta = surf((u, v) => { const a = lerp(-1.2, 1.2, u); return [sx * (0.027 + 0.006 * Math.cos(a)), -0.02 - v * 0.058, Math.sin(a) * 0.044 + 0.008]; }, 10, 4);
-    add('hand' + s, 'plate', meta);
-    for (let i = 0; i < 4; i++) {
-      const fl2 = surf((u, v) => { const a = lerp(-1.3, 1.3, u); const ang = 0.4 + i * 0.42 + v * 0.38; const R = 0.033; return [sx * Math.cos(ang) * R * 1.05, -0.082 - Math.sin(ang) * R * 0.7 - i * 0.004, Math.sin(a) * 0.045 + 0.008]; }, 8, 2);
-      add('hand' + s, 'plate', fl2);
-    }
-    add('hand' + s, 'plate', xf(new THREE.CapsuleGeometry(0.013, 0.032, 3, 6), { p: [-sx * 0.012, -0.062, 0.048], r: [0.9, 0, -sx * 0.5] })); // thumb
+    // gauntlet: articulated plate over a leather glove, after the MakeHuman hand (see gauntlet())
+    gauntlet(add, s, sx, S);
   }
 
   // ---------------- legs
@@ -487,13 +573,14 @@ export function dressRig(rig, style, finish, quality, colors) {
   const parts = buildHarness(style, { plume: colors?.plume !== null });
   const groups = new Map();
   for (const p of parts) {
-    const key = p.follow ? `${p.joint}|${p.follow.joint}|${p.follow.k}|${p.follow.pivot.join(',')}|${p.mat}` : `${p.joint}||${p.mat}`;
-    if (!groups.has(key)) groups.set(key, { joint: p.joint, follow: p.follow, mat: p.mat, geos: [] });
+    const key = (p.follow ? `${p.joint}|${p.follow.joint}|${p.follow.k}|${p.follow.pivot.join(',')}|${p.mat}` : `${p.joint}||${p.mat}`) + (p.tag ? '|' + p.tag : '');
+    if (!groups.has(key)) groups.set(key, { joint: p.joint, follow: p.follow, mat: p.mat, tag: p.tag, geos: [] });
     groups.get(key).geos.push(p.geo);
   }
   const followers = [];
   const meshes = [];
   const followerNodes = new Map();
+  const handSets = { R: { grip: [], open: [] }, L: { grip: [], open: [] } };
   for (const g of groups.values()) {
     for (const geo of g.geos) { if (geo.index === null) console.warn('non-indexed armour part'); for (const n in geo.attributes) if (!['position', 'normal', 'uv'].includes(n)) geo.deleteAttribute(n); }
     const geo = mergeGeometries(g.geos, false);
@@ -515,11 +602,18 @@ export function dressRig(rig, style, finish, quality, colors) {
     } else {
       rig.j[g.joint].add(mesh);
     }
+    if (g.tag) { handSets[g.joint.slice(-1)][g.tag].push(mesh); mesh.visible = g.tag === 'grip'; }
     meshes.push(mesh);
   }
   const _id = new THREE.Quaternion();
   function updateFollowers() {
     for (const f of followers) f.node.quaternion.slerpQuaternions(_id, f.src.quaternion, f.k);
   }
-  return { mats, meshes, updateFollowers };
+  // open or close a gauntlet (the fingers are posed geometry: a fist round the grip, or straight)
+  const handOpen = { R: false, L: false };
+  function setHandOpen(side, open) {
+    if (handOpen[side] === open) return; handOpen[side] = open;
+    for (const m of handSets[side].grip) m.visible = !open; for (const m of handSets[side].open) m.visible = open;
+  }
+  return { mats, meshes, updateFollowers, setHandOpen };
 }

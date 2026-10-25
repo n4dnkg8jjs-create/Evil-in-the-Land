@@ -841,6 +841,7 @@ export class Knight {
     if (!ikOff && !this.downed) {
       // right hand to the grip (unless the sign of the cross has it)
       const crossR = this.kneel > 0.6 ? this.crossTarget() : null;
+      this.dress.setHandOpen?.('R', !!(crossR && crossR.q));   // the gauntlet opens, fingers together, to make the sign of the cross
       const roll = this.wdef.roll || [0, 0];
       const TF = field('torso');
       // if an arm still cannot get round the body (the pole alone can't free a forearm folded across the chest),
