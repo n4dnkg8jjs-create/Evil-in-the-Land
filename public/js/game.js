@@ -80,7 +80,7 @@ export class Game {
     this.shop.build(this.world); this.terror.reset();
     this.cave?.dispose(); this.cave = this.world.cave ? new Cave(this) : null;
     this.weather?.dispose(); this.weather = new Weather(this);   // after everything in the land is built, so it all goes wet
-    if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
+    if (this.world.vista) { const peak = this.world.ch.id === 'peak'; this.world.vista.onThunder = (str, delay) => this.audio.thunder(peak ? Math.max(1.3, str * 1.6) : str, peak ? Math.min(delay, 0.7) : delay); }   // on the Peak the storm is right on top of you
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);

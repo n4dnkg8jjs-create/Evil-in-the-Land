@@ -552,7 +552,7 @@ export class AudioEngine {
   }
   chatter(pos, gain = 0.4) { const now = performance.now(); if (now - (this.lastChatter || 0) < 600) return; this.lastChatter = now; this.play('chatter', pos, gain, 0.35, 0.9 + R() * 0.25); }
   thunder(strength = 1, delay = 2) {
-    setTimeout(() => { const near = strength > 0.8; if (!this.play(near ? 'thunderNear' : 'thunder', null, (near ? 0.95 : 0.7) * Math.min(1.2, strength), 0.55, 0.92 + R() * 0.16)) this.liveBoom(null, 0.5 * strength); }, delay * 1000);
+    setTimeout(() => { const near = strength > 0.8; if (!this.play(near ? 'thunderNear' : 'thunder', null, (near ? 0.95 : 0.7) * Math.min(1.7, strength), 0.55, 0.92 + R() * 0.16)) this.liveBoom(null, 0.5 * strength); }, delay * 1000);
   }
   // unpositioned stingers that live under the music
   stinger(kind, gain = 0.35) {
