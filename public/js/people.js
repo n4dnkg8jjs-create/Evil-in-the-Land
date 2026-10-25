@@ -234,6 +234,38 @@ function personMesh(rig, P, look) {
   return mesh;
 }
 
+// a MakeHuman head (and neck) skinned onto someone else's rig: the face of the man inside a knight's helmet. Only
+// the triangles that ride on the head and neck are kept (the armour hides the rest); the rig keeps its own pose,
+// place and scale.
+const HEAD_SUB = {};
+export function headOnRig(rig, look = {}, variant = 'sutler') {
+  const P = PEOPLE?.[variant]; if (!P) return null;
+  let sub = HEAD_SUB[variant];
+  if (!sub) {
+    const g = P.geo, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, idx = g.index.array;
+    // the eyeballs ride bones this rig does not have, so take them by place: anything close round either eye
+    const keep = new Set(['head', 'neck'].map((n) => JOINTS.indexOf(n))), PA = g.attributes.position, RG = g.attributes.region;
+    const eyes = (P.eyes || []).map((e) => new THREE.Vector3(...e)), w = new THREE.Vector3();
+    const nearEye = (v) => { w.fromBufferAttribute(PA, v); return eyes.some((e) => e.distanceTo(w) < 0.02); };
+    const ok = (v) => (keep.has(SI.getX(v)) && SW.getX(v) > 0.45) || nearEye(v);
+    const tris = []; for (let i = 0; i < idx.length; i += 3) if (ok(idx[i]) && ok(idx[i + 1]) && ok(idx[i + 2])) tris.push(idx[i], idx[i + 1], idx[i + 2]);
+    sub = HEAD_SUB[variant] = new THREE.BufferGeometry(); for (const k in g.attributes) sub.setAttribute(k, g.attributes[k]);
+    sub.setIndex(tris); sub.computeBoundingSphere();
+  }
+  const root = rig.root, sp = root.position.clone(), sq = root.quaternion.clone(), ss = root.scale.clone();
+  const saved = JOINTS.map((n) => rig.j[n].quaternion.clone()), savedHip = rig.j.hips.position.clone();
+  for (const n of JOINTS) { const q = P.bind[n]; rig.j[n].quaternion.set(q[0], q[1], q[2], q[3]); }
+  rig.j.hips.position.copy(rig.basePos); root.position.set(0, 0, 0); root.quaternion.identity(); root.scale.setScalar(1); root.updateMatrixWorld(true);
+  const mesh = new THREE.SkinnedMesh(sub, personMat({ ...look, eyes: P.eyes }));
+  mesh.castShadow = false; mesh.receiveShadow = true; mesh.frustumCulled = false; root.add(mesh);
+  // seated a little back and down in the helmet, so the nose and lips stay behind the bevor (the offset is bound in)
+  if (look.seat) { mesh.position.fromArray(look.seat); if (look.seatScale) mesh.scale.setScalar(look.seatScale); }
+  mesh.updateMatrixWorld(true);
+  mesh.bind(new THREE.Skeleton(JOINTS.map((n) => rig.j[n])), mesh.matrixWorld);
+  JOINTS.forEach((n, i) => rig.j[n].quaternion.copy(saved[i])); rig.j.hips.position.copy(savedHip);
+  root.position.copy(sp); root.quaternion.copy(sq); root.scale.copy(ss); root.updateMatrixWorld(true);
+  return mesh;
+}
 // a bare MakeHuman body on its own rig (for the Devil, who wears his own garb over it)
 export function humanBody(look, variant = 'priest') {
   const P = PEOPLE?.[variant]; if (!P) return null;

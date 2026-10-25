@@ -2,6 +2,7 @@
 // combat state machine, two-bone IK for hands, the kneeling prayer with the
 // sign of the cross, and a verlet-simulated cape.
 import * as THREE from 'three';
+import { headOnRig } from './people.js';
 import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER, clearTorso, armInTorso } from './rig.js';
 import { dressRig, STYLES } from './armor.js';
 import { dressBody, field } from './body.js';
@@ -297,7 +298,12 @@ export class Knight {
     this.dress = dressRig(this.rig, loadout.style, loadout.finish, quality, { cloth: her.cloth, plume: loadout.plume === false ? null : her.plume });
     this.group = this.rig.root;
     this.body = dressBody(this.rig, her.cloth, quality);
-    this.rig.j.head.add(knightHead());   // a man inside the helmet: seen through the sights and the gap above the bevor
+    // a man inside the helmet, seen through the sights and the gap above the bevor: a real (MakeHuman) face, weathered,
+    // each knight his own skin, hair and age; the old built-up head if the people model is missing
+    { const n = ((opts.id ?? 0) * 7 + (loadout.style || '').length * 3) % 5;
+      const look = { skin: [0xc89a7c, 0xb98a6c, 0xd2a88c, 0x9a6c50, 0xc49478][n], hair: [0x3a2a1c, 0x1c1410, 0x5a3e24, 0x141010, 0x6a5a4a][n], cloth: 0x3a3028, age: [0.35, 0.2, 0.5, 0.3, 0.65][n], seat: [0, -0.004, -0.022] };
+      this.face = headOnRig(this.rig, look, n % 2 ? 'priest' : 'sutler');
+      if (!this.face) this.rig.j.head.add(knightHead()); }
     scene.add(this.group);
     this.weapon = buildWeapon(loadout.weapon, quality);
     scene.add(this.weapon);
