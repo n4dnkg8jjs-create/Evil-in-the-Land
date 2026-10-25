@@ -501,7 +501,7 @@ function buildHelm(S, style, add, opts) {
     // and bound in brass. The bevor rises inside the brim to meet it.
     // Built from its sections: y from the crown (v = 0) to the edge (v = 1); at each height an egg-shaped section
     // (half-width a, forward reach zf, backward reach zb).
-    const Y_BROW = 0.1, SL0 = 0.082, SL1 = 0.097, SW = 0.95, VD = 0.55;
+    const Y_BROW = 0.1, SL0 = 0.0855, SL1 = 0.0935, SW = 0.8, VD = 0.55;
     const yEdge = (th) => { const c = Math.cos(th); return c > 0 ? lerp(-0.006, -0.024, c) : lerp(-0.006, 0.03, -c); };   // down to the mouth all round; the tail a little higher
     const section = (th, v) => {
       if (v < VD) {   // the skull: low and round, a little flattened on top
@@ -517,10 +517,10 @@ function buildHelm(S, style, add, opts) {
       return [Math.sin(th) * S2.a * r, S2.y - inset * 0.5 + 0.006 * Math.exp(-((Math.sin(th) * S2.a / 0.012) ** 2)) * (v < VD ? 1 - v / VD : 0), (c > 0 ? S2.zf : S2.zb) * c * r + 0.012];
     };
     const slit = (th, v) => { const y = section(th, v).y; return Math.cos(th) > Math.cos(SW) && y > SL0 && y < SL1; };
-    const NU = 72, NV = 40, sk = (u, v) => salletAt(lerp(-PI, PI, u), v), skip = (u, v) => slit(lerp(-PI, PI, u), v);
+    const NU = 96, NV = 60, sk = (u, v) => salletAt(lerp(-PI, PI, u), v), skip = (u, v) => slit(lerp(-PI, PI, u), v);
     add('head', 'plate', surf(sk, NU, NV, skip));
     // the inside, lined: seen under the brim and the tail, and round the sight
-    add('head', 'leather', surf((u, v) => salletAt(lerp(PI, -PI, u), v, 0.004), NU, NV, (u, v) => slit(lerp(PI, -PI, u), v)));
+    add('head', 'dark', surf((u, v) => salletAt(lerp(PI, -PI, u), v, 0.004), NU, NV, (u, v) => slit(lerp(PI, -PI, u), v)));
     // the brass-bound edge, and the sight's lips
     add('head', 'brass', edge((u) => salletAt(lerp(-PI, PI, u), 0.995), 'v0', 0.0034, 72));
     const vOfY = (y) => VD + (1 - VD) * (Y_BROW - y) / (Y_BROW - yEdge(0));

@@ -121,7 +121,7 @@ let EYE_TEX = null;
 function personMat(look) {
   if (!EYE_TEX) { EYE_TEX = new THREE.TextureLoader().load('models/eye.png'); EYE_TEX.colorSpace = THREE.SRGBColorSpace; }
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 });
-  const U = { uFrozen: { value: look.frozen || 0 }, uDead: { value: look.dead || 0 }, uBrow: { value: look.brow ?? 1 }, uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
+  const U = { uFrozen: { value: look.frozen || 0 }, uDead: { value: look.dead || 0 }, uBrow: { value: look.brow ?? 1 }, uShade: { value: look.shade ?? 1 }, uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float region;\nattribute float hairAmt;\nflat varying float vReg;\nvarying float vHair;\nvarying vec2 vUv0;\nvarying vec3 vObj;\nvarying vec3 vWN;')
@@ -130,7 +130,7 @@ function personMat(look) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         flat varying float vReg; varying float vHair; varying vec2 vUv0; varying vec3 vObj; varying vec3 vWN;
-        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge, uFrozen, uDead, uBrow;
+        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge, uFrozen, uDead, uBrow, uShade;
         float ph(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
         float pn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(ph(i), ph(i+vec3(1,0,0)), f.x), mix(ph(i+vec3(0,1,0)), ph(i+vec3(1,1,0)), f.x), f.y),
@@ -222,9 +222,10 @@ function personMat(look) {
       // light through the skin: a warm wrap where it turns from the light
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02) * (1.0 - uFrozen) * (1.0 - uDead);
-        reflectedLight.indirectDiffuse *= 1.0 - 0.45 * uDead;   // the dead one: no fill in the hollows, only hard light and dark`);
+        reflectedLight.indirectDiffuse *= 1.0 - 0.45 * uDead;   // the dead one: no fill in the hollows, only hard light and dark
+        reflectedLight.directDiffuse *= uShade; reflectedLight.indirectDiffuse *= uShade; reflectedLight.directSpecular *= mix(uShade, 1.0, 0.35); reflectedLight.indirectSpecular *= uShade;   // in the dark of a helmet`);
   };
-  mat.customProgramCacheKey = () => 'personSkin-v6';
+  mat.customProgramCacheKey = () => 'personSkin-v7';
   return mat;
 }
 function personMesh(rig, P, look) {
