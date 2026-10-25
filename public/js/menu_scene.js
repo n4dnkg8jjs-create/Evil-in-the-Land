@@ -41,8 +41,31 @@ export class MenuStage {
     const key = new THREE.SpotLight(0xffa860, 26, 30, 0.5, 0.8, 1.2); key.position.copy(this.at(-4, -9)).add(new THREE.Vector3(0, 4.5, 0)); key.target.position.copy(this.at(0, 0.3)).add(new THREE.Vector3(0, 1.3, 0)); this.lights.add(key, key.target);
     const rim = new THREE.SpotLight(0xa8c0ff, 80, 30, 0.6, 0.7, 1.2); rim.position.copy(this.at(2, 7)).add(new THREE.Vector3(0, 6, 0)); rim.target.position.copy(this.at(0, 0)).add(new THREE.Vector3(0, 1.4, 0)); this.lights.add(rim, rim.target);
     const low = new THREE.PointLight(0xff5a20, 14, 9, 1.5); low.position.copy(this.at(0, -5.5)).add(new THREE.Vector3(0, 0.6, 0)); this.lights.add(low); this.low = low;
+    this.buildAltar();
     this.buildKnights();
     this.buildHorde();
+  }
+  // the altar behind them, as the game builds it, cleansed: candles lit, the blight gone; and a holy light falling
+  // out of the storm on it and on them, a shaft of it in the air
+  buildAltar() {
+    const G = this.lights, ap = this.at(0, 5.2);
+    const fake = { ch: { seed: 1101 }, altarT: [{ x: 0, y: 0, z: 0, t: 0 }], group: new THREE.Group(), addCollider() {} };
+    try {
+      World.prototype.buildAltars.call(fake); const A = fake.altars[0];
+      if (A.corr) A.corr.visible = false; if (A.evilLight) { A.evilLight.visible = false; A.evilLight.intensity = 0; } if (A.candles) A.candles.visible = true;
+      if (A.crossMesh) A.crossMesh.rotation.y = this.face;
+      // only the steps, cross and candles: not the ring of stones (they would stand among the knights)
+      for (const o of [...A.group.children]) { const r = Math.hypot(o.position.x, o.position.z); if (r > 5) o.visible = false; }
+      A.group.position.copy(ap); A.group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); G.add(A.group); this.A = A;
+    } catch (e) { console.warn('menu altar', e); }
+    const top = ap.clone().add(new THREE.Vector3(0, 20, 0)).addScaledVector(this.toM, -3), aim = this.at(0, 1.6).add(new THREE.Vector3(0, 1, 0));
+    const holy = new THREE.SpotLight(0xfff0d0, 220, 40, 0.34, 0.75, 1.2); holy.position.copy(top); holy.target.position.copy(aim);
+    holy.castShadow = true; holy.shadow.mapSize.set(1024, 1024); holy.shadow.bias = -0.0003; G.add(holy, holy.target);
+    const beamMat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false, uniforms: { uTime: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; varying vec3 vN; varying vec3 vV; void main(){ vUv = uv; vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position, 1.0); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }',
+      fragmentShader: 'uniform float uTime; varying vec2 vUv; varying vec3 vN; varying vec3 vV; void main(){ float edge = pow(abs(dot(vN, vV)), 2.5); float along = smoothstep(0.0, 0.35, vUv.y) * (1.0 - smoothstep(0.8, 1.0, vUv.y)); float dust = 0.8 + 0.2 * sin(uTime * 0.5 + vUv.y * 8.0 + vUv.x * 25.0); gl_FragColor = vec4(vec3(1.0, 0.92, 0.75) * edge * along * 0.2 * dust, 1.0); }' });
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 4.6, 20, 40, 1, true), beamMat);
+    beam.position.copy(top).add(aim).multiplyScalar(0.5); beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), top.clone().sub(aim).normalize()); beam.renderOrder = 4; G.add(beam); this.beam = beam;
   }
   at(off, back) { const v = this.c.clone().addScaledVector(this.side, off).addScaledVector(this.toM, back); v.y = this.world.heightAt(v.x, v.z); return v; }
   buildKnights() {
@@ -67,11 +90,11 @@ export class MenuStage {
   // the horde, coming up from under the camera: only their heads and hands get into the bottom of the picture
   buildHorde() {
     this.demons = []; let id = 9700;
-    const types = ['shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade'];
+    const types = ['shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'shade'];
     types.forEach((ty, i) => {
       const d = new Demon(ty, id++, this.scene);
-      let lane = (i / (types.length - 1) - 0.5) * 6.0 + (Math.random() - 0.5) * 0.4; if (Math.abs(lane) < 0.9) lane = Math.sign(lane || 1) * (0.9 + Math.random() * 0.4);   // the middle kept clear
-      d.lane = lane; d.dist = 4.4 + Math.random() * 1.8;        // distance in front of the line, toward the camera
+      const row = i % 2, k2 = i >> 1; let lane = (k2 / 9 - 0.5) * (row ? 7.4 : 5.6) + (Math.random() - 0.5) * 0.4; if (Math.abs(lane) < (row ? 0.6 : 0.8)) lane = Math.sign(lane || 1) * (0.8 + Math.random() * 0.3);   // the very middle kept clear
+      d.lane = lane; d.dist = (row ? 5.0 : 3.9) + Math.random() * 1.5;        // distance in front of the line, toward the camera
       d.yaw = this.face + Math.PI; d.setState(ST_CHASE); d.stateT = 1; d.phase = Math.random();
       d.vel.copy(this.toM).multiplyScalar(d.def.speed); d.fade = 0;
       this.place(d); this.demons.push(d);
@@ -80,6 +103,8 @@ export class MenuStage {
   place(d) { const p = this.at(d.lane, -d.dist); d.pos.copy(p); }
   update(dt, cam) {
     this.t += dt;
+    if (this.beam) this.beam.material.uniforms.uTime.value = this.t;
+    if (this.A?.candles) this.A.candles.traverse((o) => { if (o.isPointLight) o.intensity = (o.userData.base ??= o.intensity) * (0.85 + 0.15 * Math.sin(this.t * 9 + o.id)); });
     this.low.intensity = 14 * (0.8 + 0.2 * Math.sin(this.t * 7.7) * Math.sin(this.t * 3.3));
     this.poseKnights(dt);
     this.world.update(dt, cam);
