@@ -39,13 +39,25 @@ export class Cloth {
       if (j + 2 < rows) add(a, a + 2 * cols, 0.3);
     }
   }
-  pinWorld(i, out) { const p = this.pins(i); p.bone.updateWorldMatrix(true, false); return out.copy(p.local).applyMatrix4(p.bone.matrixWorld); }
+  // the pins are fixed in their bones' frames: work them out once
+  pinData() { if (!this._pins) { this._pins = []; for (let i = 0; i < this.cols; i++) this._pins.push(this.pins(i)); this._pinBones = [...new Set(this._pins.map((p) => p.bone))]; } return this._pins; }
+  pinWorld(i, out, fresh = true) { const p = this.pinData()[i]; if (fresh) p.bone.updateWorldMatrix(true, false); return out.copy(p.local).applyMatrix4(p.bone.matrixWorld); }
+  // springs packed into flat typed arrays (endpoints, rest length, stiffness, and which ends are free to move)
+  packSprings() {
+    const S = this.springs, n = S.length, cols = this.cols;
+    this.sA = new Int32Array(n); this.sB = new Int32Array(n); this.sL = new Float32Array(n); this.sK = new Float32Array(n); this.sWa = new Float32Array(n); this.sWb = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const [a, b, L, k] = S[i]; const pa = a < cols ? 0 : 1, pb = b < cols ? 0 : 1, w = pa + pb;
+      this.sA[i] = a * 3; this.sB[i] = b * 3; this.sL[i] = L; this.sK[i] = k; this.sWa[i] = w ? pa / w : 0; this.sWb[i] = w ? pb / w : 0;
+    }
+    this.capBuf = new Float32Array(this.capsules.length * 7);
+  }
   // lay the cloth out hanging straight down from its pins, and measure its springs there
   init() {
     const P = this.pos;
     for (let i = 0; i < this.cols; i++) {
       this.pinWorld(i, _a);
-      const flare = this.pins(i).flare || V0;
+      const flare = this.pinData()[i].flare || V0;
       for (let j = 0; j < this.rows; j++) {
         const k = (j * this.cols + i) * 3, t = j * this.lenAlong;
         P[k] = _a.x + flare.x * t; P[k + 1] = _a.y - t; P[k + 2] = _a.z + flare.z * t;
@@ -55,7 +67,7 @@ export class Cloth {
     // a skirt keeps its body: no particle may fall closer to the wearer's axis than most of the radius it hung at
     if (this.axis) { this.axis.updateWorldMatrix(true, false); _b.setFromMatrixPosition(this.axis.matrixWorld); this.minR = new Float32Array(this.n); for (let i = 0; i < this.n; i++) this.minR[i] = Math.hypot(P[i * 3] - _b.x, P[i * 3 + 2] - _b.z) * this.hold; }
     for (const s of this.springs) { const a = s[0] * 3, b = s[1] * 3; s[2] = Math.hypot(P[a] - P[b], P[a + 1] - P[b + 1], P[a + 2] - P[b + 2]); }
-    this.inited = true;
+    this.inited = true; this.packSprings();
     for (let k = 0; k < 90; k++) this.step(1 / 60);   // let it settle onto the body
   }
   // capsule: { a: bone, b: bone | null, ao, bo: local offsets, r }
@@ -72,41 +84,54 @@ export class Cloth {
       P[k] += (x - Q[k]) * damp + wx * (1 + flutter); P[k + 1] += (y - Q[k + 1]) * damp + g; P[k + 2] += (z - Q[k + 2]) * damp + wz * (1 + flutter);
       Q[k] = x; Q[k + 1] = y; Q[k + 2] = z;
     }
-    // the pinned edge follows the body
-    for (let i = 0; i < cols; i++) { this.pinWorld(i, _a); const k = i * 3; P[k] = Q[k] = _a.x; P[k + 1] = Q[k + 1] = _a.y; P[k + 2] = Q[k + 2] = _a.z; }
-    // capsules in world space this step
-    const caps = this.capsules.map((c) => { c.a.updateWorldMatrix(true, false); const A = (c.ao || V0).clone().applyMatrix4(c.a.matrixWorld); let B = A; if (c.b) { c.b.updateWorldMatrix(true, false); B = (c.bo || V0).clone().applyMatrix4(c.b.matrixWorld); } return [A, B, c.r + this.thick]; });
+    // the pinned edge follows the body (each bone brought up to date once, not once per pin)
+    this.pinData(); for (const bn of this._pinBones) bn.updateWorldMatrix(true, false);
+    for (let i = 0; i < cols; i++) { this.pinWorld(i, _a, false); const k = i * 3; P[k] = Q[k] = _a.x; P[k + 1] = Q[k + 1] = _a.y; P[k + 2] = Q[k + 2] = _a.z; }
+    // capsules in world space this step: [ax, ay, az, bx, by, bz, r]
+    const CB = this.capBuf, nc = this.capsules.length;
+    for (let c = 0; c < nc; c++) {
+      const C = this.capsules[c]; C.a.updateWorldMatrix(true, false); _a.copy(C.ao || V0).applyMatrix4(C.a.matrixWorld);
+      if (C.b) { C.b.updateWorldMatrix(true, false); _b.copy(C.bo || V0).applyMatrix4(C.b.matrixWorld); } else _b.copy(_a);
+      const o = c * 7; CB[o] = _a.x; CB[o + 1] = _a.y; CB[o + 2] = _a.z; CB[o + 3] = _b.x; CB[o + 4] = _b.y; CB[o + 5] = _b.z; CB[o + 6] = C.r + this.thick;
+    }
     if (this.axis) { this.axis.updateWorldMatrix(true, false); _b.setFromMatrixPosition(this.axis.matrixWorld); this.ax = _b.x; this.az = _b.z; }
-    if (this.hull) { this.hull.bone.updateWorldMatrix(true, false); (this.hullInv || (this.hullInv = new THREE.Matrix4())).copy(this.hull.bone.matrixWorld).invert(); }
+    const H = this.hull; let HI = null, HW = null;
+    if (H) { H.bone.updateWorldMatrix(true, false); (this.hullInv || (this.hullInv = new THREE.Matrix4())).copy(H.bone.matrixWorld).invert(); HI = this.hullInv.elements; HW = H.bone.matrixWorld.elements; }
+    const sA = this.sA, sB = this.sB, sL = this.sL, sK = this.sK, sWa = this.sWa, sWb = this.sWb, ns = sA.length, minR = this.minR, ground = this.ground + 0.01, thick = this.thick;
     for (let it = 0; it < 6; it++) {
-      for (const s of this.springs) {
-        const a = s[0] * 3, b = s[1] * 3;
+      for (let q = 0; q < ns; q++) {
+        const a = sA[q], b = sB[q];
         const dx = P[b] - P[a], dy = P[b + 1] - P[a + 1], dz = P[b + 2] - P[a + 2];
-        const d = Math.hypot(dx, dy, dz) || 1e-6; const diff = (d - s[2]) / d * 0.5 * s[3];
-        const pa = s[0] < cols ? 0 : 1, pb = s[1] < cols ? 0 : 1; const w = pa + pb; if (!w) continue;
-        const f = diff * 2 / w;
-        if (pa) { P[a] += dx * f; P[a + 1] += dy * f; P[a + 2] += dz * f; }
-        if (pb) { P[b] -= dx * f; P[b + 1] -= dy * f; P[b + 2] -= dz * f; }
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6; const f = (d - sL[q]) / d * sK[q];
+        const fa = f * sWa[q], fb = f * sWb[q];
+        P[a] += dx * fa; P[a + 1] += dy * fa; P[a + 2] += dz * fa;
+        P[b] -= dx * fb; P[b + 1] -= dy * fb; P[b + 2] -= dz * fb;
       }
       for (let i = cols; i < n; i++) {
-        const k = i * 3; _p.set(P[k], P[k + 1], P[k + 2]);
-        for (const [A, B, r] of caps) {
-          _d.subVectors(B, A); const L2 = _d.lengthSq(); let t = L2 > 1e-8 ? _b.subVectors(_p, A).dot(_d) / L2 : 0; t = Math.max(0, Math.min(1, t));
-          _a.copy(A).addScaledVector(_d, t); _b.subVectors(_p, _a); const l = _b.length();
-          if (l < r) { if (l < 1e-5) _b.set(0, 0, 1); else _b.multiplyScalar(1 / l); _p.copy(_a).addScaledVector(_b, r); }
+        const k = i * 3; let px = P[k], py = P[k + 1], pz = P[k + 2];
+        for (let c = 0; c < nc; c++) {
+          const o = c * 7, ax = CB[o], ay = CB[o + 1], az = CB[o + 2], r = CB[o + 6];
+          const ux = CB[o + 3] - ax, uy = CB[o + 4] - ay, uz = CB[o + 5] - az, L2 = ux * ux + uy * uy + uz * uz;
+          let t = L2 > 1e-8 ? ((px - ax) * ux + (py - ay) * uy + (pz - az) * uz) / L2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+          const cx = ax + ux * t, cy = ay + uy * t, cz = az + uz * t; let ex = px - cx, ey = py - cy, ez = pz - cz;
+          const l2 = ex * ex + ey * ey + ez * ez;
+          if (l2 < r * r) { const l = Math.sqrt(l2); if (l < 1e-5) { ex = 0; ey = 0; ez = 1; } else { ex /= l; ey /= l; ez /= l; } px = cx + ex * r; py = cy + ey * r; pz = cz + ez * r; }
         }
-        if (this.hull) {   // stay outside the body itself: its measured outline at this height and bearing
-          const H = this.hull; _a.copy(_p).applyMatrix4(this.hullInv);
-          const yi = Math.round((_a.y - H.y0) / H.dy);
+        if (H) {   // stay outside the body itself: its measured outline at this height and bearing
+          const lx = HI[0] * px + HI[4] * py + HI[8] * pz + HI[12], ly = HI[1] * px + HI[5] * py + HI[9] * pz + HI[13], lz = HI[2] * px + HI[6] * py + HI[10] * pz + HI[14];
+          const yi = Math.round((ly - H.y0) / H.dy);
           if (yi >= 0 && yi < H.nY) {
-            const r = Math.hypot(_a.x, _a.z); let an = Math.atan2(_a.x, _a.z); if (an < 0) an += Math.PI * 2;
-            const ai = Math.round(an / (Math.PI * 2) * H.nA) % H.nA; const m = H.R[yi * H.nA + ai] + this.thick;
-            if (r < m && m > 0) { const k = r > 1e-5 ? m / r : 1; _a.x *= k; _a.z *= k; if (r <= 1e-5) _a.z = m; _p.copy(_a).applyMatrix4(H.bone.matrixWorld); }
+            const r = Math.sqrt(lx * lx + lz * lz); let an = Math.atan2(lx, lz); if (an < 0) an += Math.PI * 2;
+            const ai = Math.round(an / (Math.PI * 2) * H.nA) % H.nA; const m = H.R[yi * H.nA + ai] + thick;
+            if (r < m && m > 0) {
+              let nx = lx, nz = lz; const kk = r > 1e-5 ? m / r : 1; nx *= kk; nz *= kk; if (r <= 1e-5) nz = m;
+              px = HW[0] * nx + HW[4] * ly + HW[8] * nz + HW[12]; py = HW[1] * nx + HW[5] * ly + HW[9] * nz + HW[13]; pz = HW[2] * nx + HW[6] * ly + HW[10] * nz + HW[14];
+            }
           }
         }
-        if (this.minR) { const dx = _p.x - this.ax, dz = _p.z - this.az, d = Math.hypot(dx, dz), m = this.minR[i]; if (d < m && d > 1e-5) { _p.x = this.ax + dx / d * m; _p.z = this.az + dz / d * m; } }
-        if (_p.y < this.ground + 0.01) { _p.y = this.ground + 0.01; Q[k] = _p.x * 0.2 + Q[k] * 0.8; Q[k + 2] = _p.z * 0.2 + Q[k + 2] * 0.8; }   // rests, with friction, on the ground
-        P[k] = _p.x; P[k + 1] = _p.y; P[k + 2] = _p.z;
+        if (minR) { const dx = px - this.ax, dz = pz - this.az, d = Math.sqrt(dx * dx + dz * dz), m = minR[i]; if (d < m && d > 1e-5) { px = this.ax + dx / d * m; pz = this.az + dz / d * m; } }
+        if (py < ground) { py = ground; Q[k] = px * 0.2 + Q[k] * 0.8; Q[k + 2] = pz * 0.2 + Q[k + 2] * 0.8; }   // rests, with friction, on the ground
+        P[k] = px; P[k + 1] = py; P[k + 2] = pz;
       }
     }
   }

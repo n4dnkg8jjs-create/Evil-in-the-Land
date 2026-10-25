@@ -149,6 +149,24 @@ const S = (x, y, z) => [x, y, z];
 function sym(fn) { return [fn(-1, 'R'), fn(1, 'L')].flat(); }
 export function prewarmDemons() {}
 
+// ---------------------------------------------------------------- wound assets (shared)
+const _wv = new THREE.Vector3(), _wm = new THREE.Matrix4();
+const WOUND = (() => {
+  const gash = new THREE.SphereGeometry(1, 14, 8); { const p = gash.attributes.position; for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i); p.setXYZ(i, x, y * (1 - 0.6 * x * x), Math.min(z, 0.15) - 0.25 + (Math.random() - 0.5) * 0.15); } gash.computeVertexNormals(); }
+  const bruise = new THREE.SphereGeometry(1, 12, 8); bruise.scale(1, 0.8, 0.25);
+  const head = new THREE.IcosahedronGeometry(0.12, 2); { const p = head.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.12; p.setXYZ(i, p.getX(i) * k * 0.9, p.getY(i) * k * 1.15, p.getZ(i) * k); } head.computeVertexNormals(); }
+  const arm = new THREE.CapsuleGeometry(0.045, 0.5, 4, 10); arm.translate(0, -0.3, 0); { const p = arm.attributes.position; for (let i = 0; i < p.count; i++) { const y = p.getY(i), k = 1 + Math.sin(y * 9) * 0.12; p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); } arm.computeVertexNormals(); }
+  const hand = new THREE.SphereGeometry(0.06, 8, 6); hand.scale(0.7, 1.6, 0.4); hand.translate(0, -0.66, 0);
+  const armG = mergeGeometries([arm, hand].map((g) => { g.deleteAttribute('uv'); return g; }));
+  return {
+    gash, bruise, head, arm: armG, stump: new THREE.CircleGeometry(1, 12).rotateX(Math.PI / 2), eye: new THREE.SphereGeometry(0.018, 8, 6),
+    gashMat: new THREE.MeshStandardMaterial({ color: 0x3a0306, emissive: 0x140000, roughness: 0.08, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, side: THREE.DoubleSide }),
+    bruiseMat: new THREE.MeshStandardMaterial({ color: 0x12080c, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }),
+    fleshMat: new THREE.MeshStandardMaterial({ color: 0x1c1513, roughness: 0.45, metalness: 0.05 }),
+    eyeMat: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 0.05, 0.02) }),
+  };
+})();
+
 // ---------------------------------------------------------------- demon instance
 const ST = { spawn: 0, chase: 1, windup: 2, strike: 3, recover: 4, stagger: 5, dead: 6, special: 7, flee: 8, leap: 9 };
 export const STATE_NAMES = Object.fromEntries(Object.entries(ST).map(([k, v]) => [v, k]));
@@ -286,6 +304,7 @@ export class Demon {
     if (this.hp <= 0) { this.die(C); return true; }
     // cut out of the air mid-leap: it is smashed down and lies stunned a moment
     if (this.state === ST.leap) { this.setState(ST.stagger); this.staggerDur = 1.0; this.knocked = 1; if (dir) { this.vel.x = dir.x * 4 / this.def.mass; this.vel.z = dir.z * 4 / this.def.mass; } }
+    else if (stagger * this.def.stagger > 1.05 && !this.def.big) { this.setState(ST.stagger); this.staggerDur = 1.25; this.knocked = 1; }   // a heavy blow puts it down
     else if (stagger * this.def.stagger > 0.55) { this.setState(ST.stagger); }
     return false;
   }
@@ -296,6 +315,67 @@ export class Demon {
     if (this.onDeath) this.onDeath(this);
   }
 
+  // ------------------------------------------------ wounds
+  // the nearest bone to a point on the body (and that point in the bone's own frame)
+  nearestBone(p) {
+    let best = null, bd = 1e9; const v = _wv;
+    for (const n in this.B) { const b = this.B[n]; if (/^(foot|toe)/.test(n)) continue; b.getWorldPosition(v); const d = v.distanceToSquared(p); if (d < bd) { bd = d; best = n; } }
+    return best;
+  }
+  // where the edge went in, a gash stays: open, wet, black-red, welling; a club leaves a crushed, darkened dent
+  addWound(p, cut, kind, heft = 1) {
+    if (!this.alive && this.dissolve > 0.3) return;
+    const name = this.nearestBone(p); if (!name) return; const bone = this.B[name];
+    this.mesh.updateMatrixWorld(true);
+    const inv = _wm.copy(bone.matrixWorld).invert(); const local = p.clone().applyMatrix4(inv);
+    // sit it on the skin: push the point out from the bone's axis a little
+    const outW = p.clone().sub(bone.getWorldPosition(_wv)).normalize();
+    const g = kind === 'blunt' ? WOUND.bruise : WOUND.gash;
+    const m = new THREE.Mesh(g, kind === 'blunt' ? WOUND.bruiseMat : WOUND.gashMat);
+    const len = (kind === 'blunt' ? 0.09 : kind === 'pierce' ? 0.05 : 0.11 + 0.07 * Math.min(2, heft)) / this.scale;
+    m.scale.set(len, (kind === 'pierce' ? 0.045 : 0.026) / this.scale, 0.03 / this.scale);
+    // orient: long axis along the cut, flat against the surface
+    const nW = outW, tW = (cut ? cut.clone() : new THREE.Vector3(1, 0, 0)); tW.addScaledVector(nW, -tW.dot(nW)); if (tW.lengthSq() < 1e-4) tW.set(0, 1, 0); tW.normalize();
+    const bW = new THREE.Vector3().crossVectors(nW, tW);
+    const qW = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(tW, bW, nW));
+    const qB = bone.getWorldQuaternion(new THREE.Quaternion()).invert();
+    m.quaternion.copy(qB.multiply(qW)); m.position.copy(local);
+    bone.add(m); m.renderOrder = 1;
+    (this.wounds || (this.wounds = [])).push({ m, bone, next: 0.1, left: kind === 'blunt' ? 0 : 2.5 + heft * 1.5 });
+    if (this.wounds.length > 9) { const w = this.wounds.shift(); w.m.removeFromParent(); }
+  }
+  // the part that was struck jerks away from the blow
+  strikePart(p, dir, heft = 1) {
+    const name = this.nearestBone(p); if (!name) return;
+    const c = Math.cos(this.yaw), s = Math.sin(this.yaw), lx = dir ? dir.x * c - dir.z * s : 0, lz = dir ? dir.x * s + dir.z * c : 1;
+    this.partHit = { bone: this.B[name], t: 0, ax: lz * 0.9 * heft, az: -lx * 0.9 * heft };
+    if (/hand|fArm/.test(name)) { const up = this.B[name.replace('hand', 'fArm').replace('fArm', 'uArm')]; if (up) this.partHit2 = { bone: up, t: 0, ax: lz * 0.5 * heft, az: -lx * 0.5 * heft }; }
+  }
+  // a killing cut takes off a head or an arm: the bone folds away to nothing and the part falls free, bleeding
+  sever(p, cut, fx, ground) {
+    if (this.severed || !fx) return; const B = this.B;
+    const name = this.nearestBone(p) || 'chest';
+    let part = /head|neck/.test(name) ? 'head' : /R$/.test(name) && /arm|Arm|hand|clav/.test(name) ? 'R' : /L$/.test(name) && /arm|Arm|hand|clav/.test(name) ? 'L' : null;
+    if (!part) part = p.y > this.pos.y + this.def.height * this.scale * 0.78 ? 'head' : (Math.random() < 0.5 ? 'R' : 'L');
+    const bone = part === 'head' ? B.head : B['uArm' + part]; if (!bone) return;
+    this.severed = part; bone.updateWorldMatrix(true, false);
+    const at = bone.getWorldPosition(new THREE.Vector3()), s = this.scale * (this.def.height / 1.8);
+    // the piece itself
+    const flesh = WOUND.fleshMat, gore = WOUND.gashMat, grp = new THREE.Group();
+    if (part === 'head') {
+      const h = new THREE.Mesh(WOUND.head, flesh); h.scale.setScalar(s); grp.add(h);
+      for (const e of [-1, 1]) { const ey = new THREE.Mesh(WOUND.eye, WOUND.eyeMat); ey.position.set(e * 0.04 * s, 0.03 * s, 0.1 * s); grp.add(ey); }
+      const st = new THREE.Mesh(WOUND.stump, gore); st.scale.setScalar(0.07 * s); st.position.y = -0.1 * s; grp.add(st);
+    } else {
+      const a = new THREE.Mesh(WOUND.arm, flesh); a.scale.setScalar(s); grp.add(a);
+      const st = new THREE.Mesh(WOUND.stump, gore); st.scale.setScalar(0.05 * s); st.position.y = 0.02 * s; grp.add(st);
+    }
+    grp.position.copy(at); grp.quaternion.copy(bone.getWorldQuaternion(new THREE.Quaternion())); grp.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    const v = (cut ? cut.clone() : new THREE.Vector3()).multiplyScalar(3.5).add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 2.5 + Math.random() * 2, (Math.random() - 0.5) * 1.5));
+    fx.gib(grp, v, new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 14), ground, 2.2);
+    // and on the body, the part is gone: the bone (and all below it) folds to a point, and the stump spurts
+    bone.scale.setScalar(0.001); this.stump = { bone: part === 'head' ? (B.neck || bone) : (B['clav' + part] || bone), t: 0 };
+  }
   // ------------------------------------------------ client puppet
   applySnap(s, dt) {
     // [id, typeIdx, x, z, yaw, state, stateT, hp%, alt, atk]
@@ -318,6 +398,7 @@ export class Demon {
       this.mat.userData.u.uDissolve.value = 0.02 + this.dissolve * 0.98;
       if (fx && R() < 0.5) fx.wisp(this.chest, 0.5);
       if (this.dissolve >= 1) this.removed = true;
+      if (this.dissolve > 0.45 && this.wounds) { for (const w of this.wounds) w.m.removeFromParent(); this.wounds = null; }
     }
     this.mat.userData.u.uHit.value = this.hitFlash * 0.8;
     // it flickers into being, its outline tearing and slipping, and now and then glitches again
@@ -346,17 +427,32 @@ export class Demon {
       this.mesh.rotation.x = lz * k; this.mesh.rotation.z = -lx * k;
       this.mesh.position.x += this.hitDir.x * fl * 0.18; this.mesh.position.z += this.hitDir.z * fl * 0.18;
     } else { this.mesh.rotation.x = 0; this.mesh.rotation.z = 0; }
+    // thrown off its feet by a heavy blow: it goes over backwards, lies a moment, and drags itself up
+    if (this.knockVis > 0 && this.state !== ST.dead) {
+      this.knockVis = Math.max(0, this.knockVis - dt * 0.75); const k = this.knockVis, fall = k > 0.6 ? smooth((1 - k) / 0.4) : smooth(k / 0.6);
+      const c = Math.cos(this.yaw), s = Math.sin(this.yaw), lz = this.hitDir ? this.hitDir.x * s + this.hitDir.z * c : 1;
+      this.mesh.rotation.x = -Math.sign(lz || 1) * 1.25 * fall; this.mesh.position.y -= fall * 0.15 * this.def.height * this.scale;
+    }
     // hitstop: frozen for a beat where the blade bit
-    if (this.hitStopT > 0) { this.hitStopT -= dt; return; }
+    if (this.hitStopT > 0) { this.hitStopT -= dt; this.bleed(dt, fx); return; }
     if (this.lodSkip) return;
     // emerging from the earth
     if (this.state === ST.spawn) this.mesh.position.y -= (1 - smooth(clamp(this.stateT / 1.1, 0, 1))) * this.def.height * this.scale;
     ANIM[this.type].call(this, dt, time);
+    // the struck part jerks away from the blow, then the body carries on
+    for (const key of ['partHit', 'partHit2']) { const P = this[key]; if (!P) continue; P.t += dt; const e = Math.sin(Math.min(1, P.t / 0.35) * Math.PI) * Math.exp(-P.t * 3); P.bone.rotation.x += P.ax * e; P.bone.rotation.z += P.az * e; if (P.t > 0.6) this[key] = null; }
+    this.bleed(dt, fx);
     // smoke wisps trail off the shadow-flesh
     this.wispT += dt;
     if (fx && this.wispT > (d2 > 40 * 40 ? 0.5 : 0.18) && this.state !== ST.dead) { this.wispT = 0; fx.wisp(this.chest, 0.35 * this.scale * (this.def.big ? 1.6 : 1)); }
   }
 
+  // blood wells from the wounds and runs down; a severed stump spurts
+  bleed(dt, fx) {
+    if (!fx) return;
+    if (this.wounds) for (const w of this.wounds) { if (w.left <= 0) continue; w.left -= dt; w.next -= dt; if (w.next > 0) continue; w.next = 0.12 + Math.random() * 0.25; const p = w.m.getWorldPosition(_wv); fx.smoke.emit({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 0.3, vy: -0.2, vz: (Math.random() - 0.5) * 0.3, color: [0.18, 0.008, 0.01], a: 0.9, size: 0.03 + Math.random() * 0.025, life: 0.7, drag: 0.4, grav: -9.8, cell: 2, fadeIn: 0.01 }); }
+    if (this.stump && this.stump.t < 2.2) { this.stump.t += dt; const p = this.stump.bone.getWorldPosition(_wv); const k = 1 - this.stump.t / 2.2; const pulse = Math.max(0, Math.sin(this.stump.t * 9)); for (let i = 0; i < 3 * k * pulse + 0.5; i++) fx.smoke.emit({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 1.2, vy: 1.5 + Math.random() * 2.5 * k, vz: (Math.random() - 0.5) * 1.2, color: [0.2, 0.01, 0.012], a: 0.95, size: 0.04 + Math.random() * 0.04, life: 0.7, drag: 0.4, grav: -9.8, cell: 2, fadeIn: 0.01 }); }
+  }
   dispose() { this.scene.remove(this.mesh); this.mat.dispose(); if (this.wings) for (const k in this.wings) this.wings[k].mesh.geometry.dispose(); }
 }
 

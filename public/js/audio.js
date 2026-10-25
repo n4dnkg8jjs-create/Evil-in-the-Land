@@ -86,6 +86,31 @@ const RENDER = {
     const n2 = src(ctx, noiseBuf(ctx, dur, 'pink')); const hs = bp(ctx, 3500, 0.7); const hg = gainEnv(ctx, [[0, 0], [0.03, 0.35], [0.6, 0.0001, 'e']]); n2.connect(hs).connect(hg).connect(ctx.destination);
     n.start(); n2.start(); return normalize(await ctx.startRendering(), 0.85);
   },
+  // the wet part of a cut: the edge parting meat, a suck of air, a slop of blood (no steel in it)
+  async squelch(deep) {
+    const dur = 0.55; const ctx = off(dur);
+    const n = src(ctx, noiseBuf(ctx, dur, 'brown')); const lp = filt(ctx, 'lowpass', 2200, 2.5);
+    lp.frequency.setValueAtTime(2600 + R() * 600, 0); lp.frequency.exponentialRampToValueAtTime(260, 0.22);
+    const g = gainEnv(ctx, [[0, 0], [0.006, 1], [0.05, 0.55], [0.32, 0.0001, 'e']]); n.connect(lp).connect(g).connect(ctx.destination); n.start();
+    // the slap of flesh closing over the blade, pitched down
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(deep ? 190 : 260, 0); o.frequency.exponentialRampToValueAtTime(55, 0.12);
+    const og = gainEnv(ctx, [[0, 0], [0.003, 0.9], [0.16, 0.0001, 'e']]); o.connect(og).connect(ctx.destination); o.start();
+    // a few wet clicks and the patter of blood after
+    const n2 = src(ctx, noiseBuf(ctx, dur, 'pink')); const b = bp(ctx, 900 + R() * 500, 3); const cg = ctx.createGain(); cg.gain.setValueAtTime(0, 0);
+    let tt = 0.02; while (tt < 0.45) { const a = (0.25 + R() * 0.5) * (1 - tt / 0.5); cg.gain.setValueAtTime(a, tt); cg.gain.setValueAtTime(0, tt + 0.008 + R() * 0.01); tt += 0.02 + R() * 0.06; }
+    n2.connect(b).connect(cg).connect(ctx.destination); n2.start();
+    return normalize(await ctx.startRendering(), 0.85);
+  },
+  // bone giving way: a dull thump and a dry splintering crackle
+  async bone() {
+    const dur = 0.5; const ctx = off(dur);
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(110, 0); o.frequency.exponentialRampToValueAtTime(38, 0.18);
+    const og = gainEnv(ctx, [[0, 0], [0.003, 1], [0.22, 0.0001, 'e']]); o.connect(og).connect(ctx.destination); o.start();
+    const n = src(ctx, noiseBuf(ctx, dur, 'white')); const hp = filt(ctx, 'highpass', 1500); const b = bp(ctx, 2600, 1.4); const cg = ctx.createGain(); cg.gain.setValueAtTime(0, 0);
+    let tt = 0.004; while (tt < 0.16) { const a = (0.5 + R() * 0.5) * (1 - tt / 0.18); cg.gain.setValueAtTime(a, tt); cg.gain.setValueAtTime(a * 0.05, tt + 0.002 + R() * 0.003); tt += 0.006 + R() * 0.018; }
+    n.connect(hp).connect(b).connect(cg).connect(ctx.destination); n.start();
+    return normalize(await ctx.startRendering(), 0.8);
+  },
   // a sabaton on gravel: heel and toe, crunch, and the lames clinking
   async step() {
     const dur = 0.45; const ctx = off(dur);
@@ -357,11 +382,12 @@ export class AudioEngine {
 
   // render the sound library in the background; until each bank is ready the live synths fill in
   async renderLibrary() {
-    const L = this.lib = { swing: [], heavySwing: [], clang: [], cut: [], blunt: [], pierce: [], step: [], screech: [], growl: [], boom: [], scream: [], screamLow: [], chatter: [], thunder: [], thunderNear: [], cluster: [], drone: [], breath: [], scrape: [], bells: {}, choir: {}, strings: {}, spic: {}, brass: {}, drums: {} };
+    const L = this.lib = { swing: [], heavySwing: [], clang: [], cut: [], blunt: [], pierce: [], squelch: [], squelchDeep: [], bone: [], step: [], screech: [], growl: [], boom: [], scream: [], screamLow: [], chatter: [], thunder: [], thunderNear: [], cluster: [], drone: [], breath: [], scrape: [], bells: {}, choir: {}, strings: {}, spic: {}, brass: {}, drums: {} };
     const tasks = [];
     const to = (arr, fn, n) => { for (let i = 0; i < n; i++) tasks.push(async () => arr.push(await fn())); };
     to(L.step, () => RENDER.step(), 10); to(L.swing, () => RENDER.swing(false), 6); to(L.heavySwing, () => RENDER.swing(true), 4);
     to(L.clang, () => RENDER.clang(), 6); to(L.cut, () => RENDER.flesh('cut'), 4); to(L.blunt, () => RENDER.flesh('blunt'), 4); to(L.pierce, () => RENDER.flesh('pierce'), 3);
+    to(L.squelch, () => RENDER.squelch(false), 4); to(L.squelchDeep, () => RENDER.squelch(true), 3); to(L.bone, () => RENDER.bone(), 3);
     to(L.screech, () => RENDER.screech(false), 8); to(L.growl, () => RENDER.screech(true), 4); to(L.boom, () => RENDER.boom(), 2);
     to(L.scream, () => RENDER.scream(false), 8); to(L.screamLow, () => RENDER.scream(true), 3); to(L.chatter, () => RENDER.chatter(), 4);
     to(L.thunder, () => RENDER.thunder(false), 2); to(L.thunderNear, () => RENDER.thunder(true), 2);
@@ -451,6 +477,11 @@ export class AudioEngine {
   // ---------------------------------------------------------------- effects (rendered bank first, live synth as fallback)
   swing(heavy = false, pos = null, pitch = 1) { if (this.play(heavy ? 'heavySwing' : 'swing', pos, heavy ? 0.65 : 0.45, 0.12, pitch)) return; this.liveWhoosh(pos, heavy ? 0.45 : 0.3, heavy ? 0.42 : 0.26, pitch); }
   hit(kind, pos, strength = 1) { if (this.play(kind === 'blunt' ? 'blunt' : kind === 'pierce' ? 'pierce' : 'cut', pos, 0.7 * strength, 0.2)) return; this.liveHit(kind, pos, strength); }
+  // the blade going into a body: the wet of the cut, and bone breaking under a heavy blow or a club
+  gore(kind, pos, heavy = false) {
+    if (kind !== 'blunt') this.play(heavy ? 'squelchDeep' : 'squelch', pos, heavy ? 0.75 : 0.55, 0.15, 0.9 + R() * 0.2);
+    if (heavy || kind === 'blunt') this.play('bone', pos, kind === 'blunt' ? 0.7 : 0.5, 0.2, 0.85 + R() * 0.25);
+  }
   clang(pos, strength = 1, pitch = 1) { if (this.play('clang', pos, 0.45 * strength, 0.4, pitch)) return; this.liveClang(pos, strength, pitch); }
   footstep(pos, armored = true, heavy = 1) { if (this.play('step', pos, 0.22 * heavy, 0.06, 0.95 + R() * 0.1)) return; }
   shriek(pos, pitch = 1, len = 0.7, gain = 0.4) { if (this.play(pitch < 0.75 ? 'growl' : 'screech', pos, gain, 0.45, clamp(pitch, 0.5, 1.8))) return; this.liveShriek(pos, pitch, len, gain); }

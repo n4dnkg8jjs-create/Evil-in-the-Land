@@ -45,6 +45,13 @@ export function normalFromHeight(h, w, hh, strength = 2) {
   return c;
 }
 
+// a roughness map (G channel) from a heightfield: base +/- k * (height - 0.5), plus fine noise
+function roughFromHeight(H, s, base, k, fine = 0.04) {
+  const c = canvas(s); const x = c.getContext('2d'); const img = x.createImageData(s, s);
+  for (let i = 0; i < H.length; i++) { const p = i * 4; const v = clamp(base + (H[i] - 0.5) * k + (Math.random() - 0.5) * fine, 0.03, 1); img.data[p] = 255; img.data[p + 1] = v * 255; img.data[p + 2] = 0; img.data[p + 3] = 255; }
+  x.putImageData(img, 0, 0); return tex(c, { srgb: false });
+}
+
 function fillNoise(ctx, w, h, period, oct, fn) {
   const img = ctx.getImageData(0, 0, w, h); const d = img.data;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -148,6 +155,8 @@ export function armorTextures(finishKey, size = 1024) {
   const emData = ex.getImageData(0, 0, s, s).data;
   const scData = sx.getImageData(0, 0, s, s).data;
   for (let i = 0; i < H.length; i++) H[i] = H[i] - emData[i * 4] / 255 * 0.05 - scData[i * 4] / 255 * 0.015;
+  if (finishKey === 'rusted') for (let i = 0; i < 2600; i++) dimple(hx, s, s, r() * s, r() * s, s * (0.002 + r() * 0.006), 0.25, false);
+  if (finishKey === 'rusted') { const P2 = readHeight(hc); for (let i = 0; i < H.length; i++) H[i] = Math.min(H[i], P2[i] - emData[i * 4] / 255 * 0.05); }
   const nC = normalFromHeight(H, s, s, 3.2);
 
   // albedo + roughness
@@ -181,10 +190,14 @@ export function armorTextures(finishKey, size = 1024) {
     if (finishKey === 'rusted') rough = Math.max(rough, 0.6 + clamp((grime - 0.38) * 2.4, 0, 1) * 0.35);
     rough = lerp(rough, F.etchRough, etch);
     const rv = clamp(rough, 0.04, 1) * 255;
-    R[p] = 255; R[p + 1] = rv; R[p + 2] = 255; R[p + 3] = 255; // three reads roughness from G, metalness from B
+    // metalness: bare steel is metal; rust scale, grime and the dark of the etching are not
+    let metal = 1 - dirt * 0.6 - etch * (F.gilt ? 0 : 0.35);
+    if (finishKey === 'rusted') metal = 1 - clamp((grime - 0.38) * 2.4, 0, 1) * 0.92;
+    R[p] = 255; R[p + 1] = rv; R[p + 2] = clamp(metal, 0, 1) * 255; R[p + 3] = 255; // three reads roughness from G, metalness from B
   }
   ax.putImageData(aImg, 0, 0); rx.putImageData(rImg, 0, 0);
-  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }), roughnessMap: tex(rC, { srgb: false }), finish: F };
+  const rm = tex(rC, { srgb: false });
+  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }), roughnessMap: rm, metalnessMap: rm, finish: F };
   cache.set(key, out);
   return out;
 }
@@ -242,7 +255,7 @@ export function clothTextures(color = [120, 24, 24], quilted = true, size = 512,
     img.data[p] = clamp(color[0] * h, 0, 255); img.data[p + 1] = clamp(color[1] * h, 0, 255); img.data[p + 2] = clamp(color[2] * h, 0, 255); img.data[p + 3] = 255;
   }
   ax.putImageData(img, 0, 0);
-  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }) };
+  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }), roughnessMap: roughFromHeight(H, s, 0.9, -0.2) };
   cache.set(k, out); return out;
 }
 
@@ -254,7 +267,7 @@ export function leatherTextures(size = 256) {
   const aC = canvas(s); const ax = aC.getContext('2d'); const img = ax.createImageData(s, s);
   for (let i = 0; i < H.length; i++) { const p = i * 4, h = 0.6 + H[i] * 0.5; img.data[p] = 78 * h; img.data[p + 1] = 46 * h; img.data[p + 2] = 26 * h; img.data[p + 3] = 255; }
   ax.putImageData(img, 0, 0);
-  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }) }; cache.set('leather', out); return out;
+  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }), roughnessMap: roughFromHeight(H, s, 0.62, -0.45) }; cache.set('leather', out); return out;
 }
 
 export function woodTextures(size = 256, tint = [96, 66, 40]) {
@@ -267,7 +280,7 @@ export function woodTextures(size = 256, tint = [96, 66, 40]) {
     const p = (y * s + x) * 4; img.data[p] = tint[0] * h; img.data[p + 1] = tint[1] * h; img.data[p + 2] = tint[2] * h; img.data[p + 3] = 255;
   }
   ax.putImageData(img, 0, 0);
-  const out = { map: tex(aC), normalMap: tex(normalFromHeight(H, s, s, 1.2), { srgb: false }) }; cache.set(k, out); return out;
+  const out = { map: tex(aC), normalMap: tex(normalFromHeight(H, s, s, 1.2), { srgb: false }), roughnessMap: roughFromHeight(H, s, 0.78, 0.3) }; cache.set(k, out); return out;
 }
 
 // Terrain material set. Each returned albedo carries a height in alpha for blending.
@@ -368,7 +381,7 @@ export function stoneTextures(size = 512, blocks = true) {
   const aC = canvas(s); const ax = aC.getContext('2d'); const img = ax.createImageData(s, s);
   for (let i = 0; i < s * s; i++) { img.data[i * 4] = clamp(A[i * 3], 0, 255); img.data[i * 4 + 1] = clamp(A[i * 3 + 1], 0, 255); img.data[i * 4 + 2] = clamp(A[i * 3 + 2], 0, 255); img.data[i * 4 + 3] = 255; }
   ax.putImageData(img, 0, 0);
-  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }) }; cache.set(k, out); return out;
+  const out = { map: tex(aC), normalMap: tex(nC, { srgb: false }), roughnessMap: roughFromHeight(H, s, 0.86, -0.3) }; cache.set(k, out); return out;
 }
 
 export function barkTextures(size = 256) {
@@ -381,7 +394,7 @@ export function barkTextures(size = 256) {
     img.data[p] = g * 1.05; img.data[p + 1] = g * 0.95; img.data[p + 2] = g * 0.88; img.data[p + 3] = 255;
   }
   ax.putImageData(img, 0, 0);
-  const out = { map: tex(aC), normalMap: tex(normalFromHeight(H, s, s, 3), { srgb: false }) }; cache.set('bark', out); return out;
+  const out = { map: tex(aC), normalMap: tex(normalFromHeight(H, s, s, 3), { srgb: false }), roughnessMap: roughFromHeight(H, s, 0.9, -0.2) }; cache.set('bark', out); return out;
 }
 
 // Demon "skin": near-black with faint ember veins (emissive)
@@ -534,4 +547,110 @@ export function leafTexture(pine = false, size = 256) {
     x.restore();
   }
   const t = tex(c, { repeat: false }); cache.set(key, t); return t;
+}
+
+
+// ---------------------------------------------------------------- building materials
+// Each returns { map, normalMap, roughnessMap, aoMap? } painted from one heightfield, tiling, cached.
+function pack(H, A, s, nStrength, roughFn, ao) {
+  const aC = canvas(s); const ax = aC.getContext('2d'); const img = ax.createImageData(s, s);
+  for (let i = 0; i < s * s; i++) { img.data[i * 4] = clamp(A[i * 3], 0, 255); img.data[i * 4 + 1] = clamp(A[i * 3 + 1], 0, 255); img.data[i * 4 + 2] = clamp(A[i * 3 + 2], 0, 255); img.data[i * 4 + 3] = 255; }
+  ax.putImageData(img, 0, 0);
+  const rC = canvas(s); const rx = rC.getContext('2d'); const ri = rx.createImageData(s, s);
+  for (let i = 0; i < s * s; i++) { const p = i * 4; ri.data[p] = ao ? clamp(255 * (0.55 + H[i] * 0.45), 0, 255) : 255; ri.data[p + 1] = clamp(roughFn(i) * 255, 8, 255); ri.data[p + 2] = 0; ri.data[p + 3] = 255; }
+  rx.putImageData(ri, 0, 0);
+  const rt = tex(rC, { srgb: false });
+  return { map: tex(aC), normalMap: tex(normalFromHeight(H, s, s, nStrength), { srgb: false }), roughnessMap: rt, aoMap: ao ? rt : null };
+}
+
+// wattle and daub: lime plaster over woven hazel, cracked, stained, damp at the foot; in places fallen away to the wattle
+export function plasterTextures(size = 512) {
+  const k = 'plaster' + size; if (cache.has(k)) return cache.get(k);
+  const s = size, r = rng(3131), H = new Float32Array(s * s), A = new Float32Array(s * s * 3);
+  // crack lines: random walks drawn into a mask
+  const cc = canvas(s); const cx = cc.getContext('2d'); cx.fillStyle = '#000'; cx.fillRect(0, 0, s, s); cx.strokeStyle = '#fff';
+  for (let i = 0; i < 26; i++) { let x = r() * s, y = r() * s, a = r() * TAU0; cx.lineWidth = 0.6 + r() * 1.6; cx.beginPath(); cx.moveTo(x, y); for (let j = 0; j < 30; j++) { a += (r() - 0.5) * 1.1; x += Math.cos(a) * 6; y += Math.sin(a) * 6; cx.lineTo(x, y); if (r() < 0.07) { cx.stroke(); cx.beginPath(); cx.moveTo(x, y); a += (r() < 0.5 ? 1 : -1) * 0.9; } } cx.stroke(); }
+  const crack = cc.getContext('2d').getImageData(0, 0, s, s).data;
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s, i = y * s + x;
+    const n = tn.fbm(u, v, 8, 5), fine = tn.fbm(u, v, 48, 3);
+    const spall = smooth(clamp((tn.fbm(u + 0.4, v + 0.2, 4, 4) - 0.66) * 6, 0, 1));          // daub fallen away
+    const weave = Math.abs(Math.sin(u * TAU0 * 10 + Math.sin(v * TAU0 * 6) * 1.4)) * (0.5 + 0.5 * Math.sin(v * TAU0 * 24));
+    const cr = crack[i * 4] / 255;
+    let h = 0.62 + n * 0.14 + fine * 0.08 - cr * 0.35;
+    h = lerp(h, 0.2 + weave * 0.35, spall);
+    H[i] = h;
+    const stain = smooth(clamp((tn.fbm(u * 0.7 + 3, v * 0.4, 3, 3) - 0.5) * 2.4, 0, 1)) * 0.35 + Math.pow(v, 3) * 0.35;   // rain streaks; damp rising at the foot
+    let c = [196, 184, 158].map((q, j) => q * (0.86 + n * 0.22 + fine * 0.06) * (1 - stain * (j === 2 ? 0.55 : 0.45)));
+    if (cr > 0.1) c = c.map((q) => q * (1 - cr * 0.6));
+    const wattle = [92, 70, 44].map((q) => q * (0.6 + weave * 0.6));
+    c = c.map((q, j) => lerp(q, wattle[j], spall));
+    A.set(c, i * 3);
+  }
+  const out = pack(H, A, s, 2.6, (i) => 0.88 + (1 - H[i]) * 0.1, true); cache.set(k, out); return out;
+}
+const TAU0 = Math.PI * 2;
+
+// thatch: bundles of straw laid in courses, combed down; grey and mossy with age
+export function thatchTextures(size = 512) {
+  const k = 'thatch' + size; if (cache.has(k)) return cache.get(k);
+  const s = size, r = rng(77), H = new Float32Array(s * s), A = new Float32Array(s * s * 3);
+  const strands = new Float32Array(s * s);
+  const sc = canvas(s); const sx = sc.getContext('2d'); sx.fillStyle = '#000'; sx.fillRect(0, 0, s, s);
+  for (let i = 0; i < 5200; i++) { const x = r() * s, y = r() * s, l = 18 + r() * 40, a = Math.PI / 2 + (r() - 0.5) * 0.25; sx.strokeStyle = `rgba(255,255,255,${0.25 + r() * 0.5})`; sx.lineWidth = 0.6 + r() * 1.4; sx.beginPath(); sx.moveTo(x, y); sx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); sx.stroke(); }
+  const sd = sx.getImageData(0, 0, s, s).data; for (let i = 0; i < s * s; i++) strands[i] = sd[i * 4] / 255;
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s, i = y * s + x;
+    const course = (v * 6) % 1, n = tn.fbm(u, v, 6, 4);
+    const h = 0.35 + strands[i] * 0.35 + course * 0.25 + n * 0.1; H[i] = h;
+    const moss = smooth(clamp((tn.fbm(u + 0.7, v, 4, 3) - 0.55) * 4, 0, 1)) * 0.6;
+    const g = 0.55 + strands[i] * 0.35 + course * 0.2;
+    const straw = [138 * g, 112 * g, 70 * g], grey = [92 * g, 86 * g, 74 * g], green = [64 * g, 74 * g, 40 * g];
+    const age = 0.55 + n * 0.3;
+    A.set(straw.map((q, j) => lerp(lerp(q, grey[j], age), green[j], moss) * (0.6 + course * 0.5)), i * 3);
+  }
+  const out = pack(H, A, s, 3.5, (i) => 0.92 + (Math.random() - 0.5) * 0.06, true); cache.set(k, out); return out;
+}
+
+// roofing: slates (grey-blue, uneven, some cracked or slipped) or oak shingles, in overlapping courses
+export function roofTextures(kind = 'slate', size = 512) {
+  const k = 'roof' + kind + size; if (cache.has(k)) return cache.get(k);
+  const s = size, r = rng(kind === 'slate' ? 404 : 505), H = new Float32Array(s * s), A = new Float32Array(s * s * 3);
+  const rows = 8, cols = kind === 'slate' ? 6 : 8; const tones = []; for (let i = 0; i < rows * cols * 2; i++) tones.push([r(), r(), r() < 0.06]);
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s, i = y * s + x;
+    const row = Math.floor(v * rows), fv = (v * rows) % 1; const off = row % 2 ? 0.5 / cols : 0;
+    const uu = ((u + off) % 1) * cols, col = Math.floor(uu), fu = uu % 1;
+    const T = tones[(row * cols * 2 + col) % tones.length];
+    const edge = Math.min(fu, 1 - fu) * 6, lip = fv;   // each course thickens toward its lower edge, which overhangs the next
+    const n = tn.fbm(u, v, 16, 4), grain = kind === 'slate' ? tn.fbm(u * 0.3, v * 3, 24, 3) : tn.fbm(u * 6, v * 0.3, 32, 4);
+    const ragged = (tn.noise(u * 64, row * 3.1, 64) - 0.5) * 0.12;   // uneven lower edges
+    let h = 0.3 + lip * 0.5 + grain * 0.15 + n * 0.05; if (edge < 0.25) h -= (0.25 - edge) * 1.2; if (fv > 0.96 + ragged) h = 0.15;
+    if (T[2] && fu > 0.3 && fu < 0.6) h -= 0.2;   // a cracked or missing one
+    H[i] = h;
+    let c;
+    if (kind === 'slate') { const g = 52 + T[0] * 28 + grain * 18; c = [g * 0.92, g * 0.96, g * 1.08]; }
+    else { const g = 70 + T[0] * 34 + grain * 30; c = [g * 1.05, g * 0.82, g * 0.6]; const silver = 0.4 + T[1] * 0.4; c = c.map((q) => lerp(q, 96 + grain * 30, silver)); }
+    const lich = smooth(clamp((tn.fbm(u + 0.2, v + 0.6, 5, 3) - 0.6) * 4, 0, 1)) * 0.5;
+    c = [lerp(c[0], 120, lich * 0.6), lerp(c[1], 128, lich * 0.7), lerp(c[2], 70, lich * 0.7)];
+    if (h < 0.2) c = c.map((q) => q * 0.4);
+    A.set(c, i * 3);
+  }
+  const out = pack(H, A, s, 3.0, (i) => (kind === 'slate' ? 0.55 : 0.85) + (1 - H[i]) * 0.3, true); cache.set(k, out); return out;
+}
+
+// leaded glazing: small diamond panes of greenish crown glass in lead cames, dusty, a few broken
+export function leadedGlassTextures(size = 256) {
+  const k = 'leaded' + size; if (cache.has(k)) return cache.get(k);
+  const s = size, r = rng(12), H = new Float32Array(s * s), A = new Float32Array(s * s * 3), M = new Float32Array(s * s);
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s, i = y * s + x;
+    const a = (u + v) * 5, b = (u - v) * 5; const da = Math.abs(a - Math.round(a)), db = Math.abs(b - Math.round(b));
+    const came = Math.min(da, db) < 0.05; const cell = Math.floor(a) * 31 + Math.floor(b) * 17; const broken = ((cell * 9301 + 49297) % 233280) / 233280 < 0.08;
+    const n = tn.fbm(u, v, 8, 3);
+    if (came) { H[i] = 0.9; A.set([38, 38, 40], i * 3); M[i] = 0.55; }
+    else if (broken) { H[i] = 0.1; A.set([6, 5, 5], i * 3); M[i] = 1; }
+    else { H[i] = 0.5 + n * 0.08; const g = 28 + n * 22; A.set([g * 0.8, g * 1.05, g * 0.9], i * 3); M[i] = 0.08 + n * 0.25; }
+  }
+  const out = pack(H, A, s, 2.0, (i) => M[i], false); cache.set(k, out); return out;
 }

@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { demonTextures, clothTextures } from './textures.js';
 import { clamp, lerp, smooth, TAU } from './util.js';
-import { realHand } from './people.js';
+import { realHand, humanBody, headBox } from './people.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const D2R = Math.PI / 180, PI = Math.PI;
@@ -394,6 +394,31 @@ export function buildHorror(kind, def) {
   return { mesh, B, mat, wings, height: K.height };
 }
 
+// ---------------------------------------------------------------- Him, on a man's body
+// The same MakeHuman body the knights and the priest are made from, but dead: grey and waxen, the eyes clouded,
+// drawn out far too tall and thin, the forearms and fingers too long. His robe, hood and horns over it.
+export function buildHumanDevil(def) {
+  const H = humanBody({ skin: def.skin ?? 0x8e9592, hair: 0x14100e, cloth: 0x6c726f, age: 1, dead: 1 }); if (!H) return null;
+  const { rig, mesh } = H, B = { ...rig.j }, mat = mesh.material;
+  const DU = { value: 0 }; mat.userData.u = { uDissolve: DU, uTime: { value: 0 } }; dissolvable(mat, DU);
+  B.jaw = new THREE.Object3D(); B.head.add(B.jaw);
+  for (const b of Object.values(rig.j)) b.rotation.order = 'YXZ';
+  // gaunt: the limbs drawn out (the skin stretches with them), hands and fingers long
+  for (const k of ['R', 'L']) { B['fArm' + k].position.multiplyScalar(1.12); B['hand' + k].scale.set(1.08, 1.35, 1.08); B['shin' + k].position.multiplyScalar(1.06); B['foot' + k].position.multiplyScalar(1.04); }
+  B.neck.position.multiplyScalar(1.25);
+  const root = new THREE.Group(); root.add(rig.root); root.updateMatrixWorld(true);
+  // stand him on his soles
+  { const v = new THREE.Vector3(); let low = 1e9; const n = mesh.geometry.attributes.position.count; for (let i = 0; i < n; i += 5) { mesh.getVertexPosition(i, v); v.applyMatrix4(mesh.matrixWorld); low = Math.min(low, v.y); } rig.root.position.y -= low; root.updateMatrixWorld(true); }
+  // fit the hood (made for the old skull: centre about (0, 0.065, 0.11), ±0.17 across) to this head
+  const hb = headBox(mesh), hc = hb.getCenter(new THREE.Vector3()), hz = hb.getSize(new THREE.Vector3());
+  const sc = (hz.x / 2 + 0.012) / 0.17;
+  const fit = { ...def, headFit: { s: sc, off: new THREE.Vector3(hc.x, hc.y - 0.065 * sc + 0.01, hc.z - 0.11 * sc) }, robeW: 0.56, sleeveW: 0.62 };
+  dressDevil.horn = null; dressDevil(B, null, fit, DU);
+  for (const b of Object.values(rig.j)) b.userData.rest = b.position.clone();
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+  return { mesh: root, B, mat, wings: null, height: 2.0 };
+}
+
 // ---------------------------------------------------------------- His garb
 // A deep hood over a pale, human face; a robe that pools on the ground; long sleeves the
 // white hands hang out of; ram horns rooted in the skull, breaking out through the cloth.
@@ -481,7 +506,8 @@ function dressDevil(B, K, def, DU) {
     v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.82 + 0.07;
     if (t > 0.96) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.1 - 0.02;   // the hem, uneven, dragging
   });
-  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe);
+  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
+  robe.userData.base = robe.scale.clone();
   // sleeves: wide and long, falling in folds, the hands hang out of them
   for (const k of ['R', 'L']) {
     const ul = Math.abs(B['fArm' + k].position.y), fl = Math.abs(B['hand' + k].position.y);
@@ -491,6 +517,8 @@ function dressDevil(B, K, def, DU) {
       v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
     }), robeMat(0.06, 0, DU));
     B['fArm' + k].add(lo); up.castShadow = lo.castShadow = true;
+    (B.sleeves ||= []).push(up, lo);
+    if (def.sleeveW) { up.scale.set(def.sleeveW, 1, def.sleeveW); lo.scale.set(def.sleeveW, 1, def.sleeveW); }
   }
   // the hood. It rests on the skull and comes down over the brow, so the face is a pale shape in its shadow:
   // a little of the eyes beneath the edge, the cheekbones, the mouth. Below the jaw the cowl falls onto the shoulders.
@@ -527,12 +555,15 @@ function dressDevil(B, K, def, DU) {
   const hood = new THREE.BufferGeometry(); hood.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   const uv = []; for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) uv.push(i / NU * 3, j / NV * 2); hood.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   hood.setIndex(idx); hood.computeVertexNormals();
-  const hm = new THREE.Mesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; B.head.add(hm);
+  const hg = new THREE.Group(); B.head.add(hg);
+  if (def.headFit) { hg.scale.setScalar(def.headFit.s); hg.position.copy(def.headFit.off); }
+  const hm = new THREE.Mesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; hg.add(hm);
   // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
   if (def.horns) for (const s of [-1, 1]) {
     const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true;
     h.position.set(s * 0.11, 0.19, 0.05); h.rotation.set(-0.15, s * 0.75, -s * 1.15);   // out to the sides, then back and down round the hood, a ram's curl
-    B.head.add(h);
+    if (def.headFit) h.scale.setScalar(1.45);
+    hg.add(h);
   }
 }
 

@@ -510,7 +510,7 @@ export class Knight {
       // the extra step into reach of the target, spread over the blow's own step
       if (m && this.lungeExtra > 0 && (this.actKind === 'light' || this.actKind === 'heavy')) rm += this.lungeExtra / Math.max(0.1, (m.t1 - m.t0) / this.actionSpeed());
       // the blade bites: everything stops for a moment
-      if (this.hitStop > 0) rm *= 0.1;
+      if (this.hitStop > 0) rm *= 0.1; else if (this.biteScale !== undefined && this.biteScale < 1) rm *= this.biteScale;
       if (this.actKind === 'roll') { ax = 0; az = 0; }
       else { ax *= 0.15; az *= 0.15; }
       if (a.legs === 'run') { /* charge */ }
@@ -540,7 +540,14 @@ export class Knight {
 
   advanceAction(dt, input, world) {
     const a = this.action;
-    const hs = this.hitStop > 0 ? 0.06 : 1; this.hitStop = Math.max(0, this.hitStop - dt);
+    // the blade bites: it stops dead in the body for a beat, then drags on through the cut, slow at first,
+    // gathering speed as it comes clear (a club rebounds sooner)
+    let hs = this.hitStop > 0 ? 0.05 : 1; this.hitStop = Math.max(0, this.hitStop - dt);
+    if (this.biteT !== undefined && this.biteT < (this.biteFreeze || 0) + (this.biteDrag || 0)) {
+      this.biteT += dt;
+      hs = this.biteT < this.biteFreeze ? 0.05 : lerp(0.22, 1, smooth(clamp((this.biteT - this.biteFreeze) / this.biteDrag, 0, 1)));
+    }
+    this.biteScale = hs;
     this.actT += hs * dt * (this.actKind === 'roll' || this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
     // sound cues
     if (a.sfx) while (this.sfxIdx < a.sfx.length && this.actT >= a.sfx[this.sfxIdx].t) { this.events.push({ type: 'sfx', k: a.sfx[this.sfxIdx].k }); this.sfxIdx++; }

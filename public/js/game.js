@@ -7,6 +7,7 @@ import { Horde, TYPES, ST } from './demons.js';
 import { Watcher, Crevices, Hound, Serpent, Cryptid, Dragon, phantomDevil } from './devil.js';
 import { robeWind } from './horror.js';
 import { Cave } from './cave.js';
+import { Weather } from './weather.js';
 import { FX } from './fx.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
@@ -38,7 +39,7 @@ export class Game {
       if (R() < 0.55) this.audio.scream(p, !!d.def.big, 0.5, { crawler: 1.06, wraith: 1.0, husk: 0.85, brute: 0.75 }[d.type] || 0.95);
     };
     this.knights = new Map(); this.companions = []; this.trails = new Map();
-    this.cam = { yaw: 0, pitch: 0.22, dist: 4.4, targetDist: 4.4, pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: app.settings.fov || 62 };
+    this.cam = { yaw: 0, pitch: 0.2, dist: 3.1, targetDist: 3.1, pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: app.settings.fov || 62 };
     this.time = 0; this.netT = 0; this.snapT = 0; this.paused = false; this.stats = { kills: 0, start: performance.now() };
     this.projectiles = []; this.consecrations = []; this.chapterIdx = -1; this.obj = null; this.boss = null;
     this.reviveSend = 0; this.hitstop = 0; this.lastHurt = 0; this.musicMood = 'dread';
@@ -78,6 +79,7 @@ export class Game {
     this.layOutFallen(ch);
     this.shop.build(this.world); this.terror.reset();
     this.cave?.dispose(); this.cave = this.world.cave ? new Cave(this) : null;
+    this.weather?.dispose(); this.weather = new Weather(this);   // after everything in the land is built, so it all goes wet
     if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
@@ -228,7 +230,7 @@ export class Game {
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
-    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); this.terror.update(dt, this.time); this.cave?.update(dt, this.time); }
+    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); this.terror.update(dt, this.time); this.cave?.update(dt, this.time); this.weather?.update(dt, this.time); }
     if (this.world) this.checkDevilReveal();
     // the sky answers the land beneath you: blue over living country, ember-red in the blight
     if (this.world) {
@@ -316,7 +318,7 @@ export class Game {
     c.pitch = clamp(c.pitch, -0.55, 1.1);
     if (I.wheel) { c.targetDist = clamp(c.targetDist + I.wheel * 0.004, 2.6, 8); }
     const k = this.me;
-    let dist = c.targetDist, height = 1.65, shoulder = 0.55;
+    let dist = c.targetDist, height = 1.6, shoulder = 0.5;
     this.lockW = damp(this.lockW || 0, this.shiftLock && !k.praying && !k.downed ? 1 : 0, 6, dt);
     shoulder = lerp(shoulder, 0.85, this.lockW); dist = lerp(dist, Math.min(dist, 4.2), this.lockW); height = lerp(height, 1.75, this.lockW);
     if (this.boss && this.boss.alive) dist += this.boss.kind === 'dragon' ? 3 : 1.5;
@@ -453,13 +455,14 @@ export class Game {
     const lead = this.leader(); const ch = CHAPTERS[this.chapterIdx];
     if (!lead || ch.boss) return;
     if (this.shop?.inSanctuary(lead.pos, 25)) return;   // the road is quiet near the sanctuary
+    if (this.world.inCaveZone?.(lead.pos.x, lead.pos.z, 14)) return;   // under the mountain there is only Him
     const nr = this.world.path.nearest(lead.pos.x, lead.pos.z); const p = this.world.path.at(Math.min(1, nr.t + 0.12));
     const n = Math.round((3 + this.chapterIdx * 0.6) * this.partyMul() * this.diff.spawn);
     const types = this.spawnTypes(ch.pool, n);
     types.forEach((t) => this.spawnDemon(t, p.x + (R() - 0.5) * 10, p.z + (R() - 0.5) * 10));
   }
   spawnDemon(type, x, z) {
-    if (!this.world.inBounds(x, z)) return null;
+    if (!this.world.inBounds(x, z) || this.world.inCaveZone?.(x, z, 4)) return null;
     const p = { pos: new THREE.Vector3(x, 0, z) }; this.world.collide(p, 0.6);
     const d = this.horde.spawn(type, p.pos.x, p.pos.z, this.world);
     const k = this.leader(); if (k) d.yaw = Math.atan2(k.pos.x - d.pos.x, k.pos.z - d.pos.z);
@@ -644,7 +647,7 @@ export class Game {
         let dmg = dmgBase; if (d.def.big && kind === 'blunt') dmg *= (k.wdef.armorBreak || 1.25);
         if (kind === 'pierce' && d.def.big) dmg *= 1.15;
         const dir = new THREE.Vector3(d.pos.x - k.pos.x, 0, d.pos.z - k.pos.z).normalize();
-        this.onWeaponHit(k, hitP, kind, d.def.big ? 1.2 : 1, dir, false, d);
+        this.onWeaponHit(k, hitP, kind, d.def.big ? 1.2 : 1, dir, false, d, d.hp - dmg <= 0);
         if (this.isHost) { if (d.takeHit(dmg, dir, h.stagger || 0.5, this.hostCtx(), k.id)) this.stats.kills++; }
         else this.net.send('hit', { d: d.id, dmg, dx: dir.x, dz: dir.z, st: h.stagger || 0.5 }, this.net.hostId);
       }
@@ -663,20 +666,32 @@ export class Game {
       }
     }
   }
-  onWeaponHit(k, p, kind, weight, dir, boss, target) {
+  onWeaponHit(k, p, kind, weight, dir, boss, target, lethal = false) {
     // how hard the blow lands: the weapon's heft, a heavy or a finishing blow, the size of what it struck
     const heavy = k.actKind === 'heavy', fin = !heavy && k.combo === 0;
     const heft = (k.wdef.dmg || 1) * (heavy ? 1.6 : fin ? 1.25 : 1) * weight;
-    // blood and sparks where the edge actually met flesh, thrown along the line of the cut
+    // blood where the edge actually met flesh, thrown along the line of the cut and out of the wound
     const cut = k.weaponDir ? new THREE.Vector3().subVectors(k.tip, k.prevTip).normalize().lerp(dir, 0.4).normalize() : dir;
-    this.fx.ichor(p, cut, weight * (k.fury > 0 ? 1.5 : 1) * (heavy ? 1.4 : 1));
-    if (boss || kind === 'blunt') this.fx.sparks(p, boss ? 8 : 4, [1, 0.5, 0.2]);
+    const out = target ? new THREE.Vector3(p.x - target.pos.x, 0.25, p.z - target.pos.z).normalize() : dir.clone().negate();
+    const ground = (x, z) => this.world ? this.world.heightAt(x, z) : 0;
+    this.fx.ichor(p, cut, 0.35 * weight);   // a breath of the black smoke they are made of
+    this.fx.blood(p, cut, out, (kind === 'blunt' ? 0.5 : kind === 'pierce' ? 0.8 : 1.1) * weight * (heavy ? 1.5 : 1) * (k.fury > 0 ? 1.3 : 1), ground);
+    if (boss || kind === 'blunt') this.fx.sparks(p, boss ? 8 : 3, [1, 0.5, 0.2]);
     if (k.fury > 0) this.fx.holyMotes(p, 0.5, 8);
     this.audio.hit(kind, p, weight * (heavy ? 1.3 : 1));
-    // hitstop: the blade bites and everything stops for a beat (the swing itself, and the thing it hit)
+    this.audio.gore?.(kind, p, heavy || heft > 1.4 || lethal);
+    // the blade bites: the swing stops dead in the body for a beat, then drags on through the cut, slow at
+    // first; a club stops shorter and rebounds; a thrust sticks, and is wrenched free
     const stop = Math.min(0.16, (0.05 + (heavy ? 0.05 : fin ? 0.025 : 0)) * heft);
-    k.hitStop = Math.max(k.hitStop || 0, stop);
-    if (target) { target.hitStopT = stop * 1.2; if (dir) target.hitDir = dir.clone(); }
+    const drag = kind === 'blunt' ? 0.05 : kind === 'pierce' ? 0.15 : Math.min(0.26, (0.08 + 0.05 * heft) * (heavy ? 1.35 : 1));
+    k.hitStop = Math.max(k.hitStop || 0, stop); k.biteT = 0; k.biteFreeze = stop; k.biteDrag = drag;
+    if (target) {
+      target.hitStopT = stop * 1.2; if (dir) target.hitDir = dir.clone();
+      target.addWound?.(p, cut, kind, heft);
+      target.strikePart?.(p, dir, Math.min(1.6, heft));
+      if ((heavy || kind === 'blunt' && fin) && !target.def?.big && !lethal) target.knockVis = 1;
+      if (lethal && kind !== 'blunt' && (heavy || fin || Math.random() < 0.45)) { target.sever?.(p, cut, this.fx, ground); this.audio.gore?.('cut', p, true); }
+    }
     if (k === this.me) {
       this.ui.hitMark(); this.hitstop = stop;
       // the camera is jolted the way the blow travelled
@@ -1099,7 +1114,7 @@ export class Game {
     this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
     if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
-    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; for (const k of this.fallenKnights || []) k.dispose();
+    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; this.weather?.dispose(); this.weather = null; for (const k of this.fallenKnights || []) k.dispose();
     for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'left']) this.net?.off(k);
   }
 }

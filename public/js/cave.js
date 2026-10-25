@@ -11,6 +11,8 @@
 import * as THREE from 'three';
 import { boneLibrary, boneMaterial } from './bones.js';
 import { phantomDevil, releasePhantom } from './devil.js';
+import { makeFlame } from './flame.js';
+import { makeFrozen } from './people.js';
 import { makeNoise, rng, clamp, lerp, smooth, damp, TAU } from './util.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -27,6 +29,7 @@ export class Cave {
     this.g = game; const W = this.W = game.world, C = this.C = W.cave;
     this.group = new THREE.Group(); game.scene.add(this.group);
     this.noise = makeNoise(4711); this.r = rng(4711);
+    W.caveHalf = (t, side = 0) => Math.max(1.5, this.sizeAt(t).w - 1.0) + (side ? W.passageAt(t, side) * 0.85 : 0);   // how far from the line of the way the walls let you go
     this.done = {}; this.torch = null; this.inside = 0; this.u = -1; this.base = null; this.gutter = 0; this.time = 0;
     this.buildTunnel(); this.buildRoof(); this.buildDressing(); this.buildMouth();   // (the tunnel runs out past the mouths as a rock arch, so no end faces are needed)
   }
@@ -43,49 +46,94 @@ export class Cave {
         .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.12, streak);');
     };
     rock.customProgramCacheKey = () => 'caveRock';
-    const NT = 120, NA = 30, pos = [], uv = [], idx = [];
+    const NT = 260, NA = 52, pos = [], uv = [], idx = [];
+    // side passages: openings that run off into the black and are never explored
     this.rings = [];
     for (let i = 0; i <= NT; i++) {
-      const t = lerp(C.t0 - C.e, C.t1 + C.e, i / NT), F = frame(W, t), floor = this.floorAt(t);
+      const t = lerp(C.t0 - C.e, C.t1 + C.e, i / NT), F = frame(W, t), floor = this.floorAt(t), S = this.sizeAt(t);
       const ring = [];
       for (let k = 0; k <= NA; k++) {
         const a = (k / NA) * TAU;   // 0 = the left wall at floor height, up over the roof, down the right wall and under
         const cx = Math.cos(a), cy = Math.sin(a);
-        const wob = n.fbm(t * 60 + cx * 0.8, cy * 0.8 + k * 0.05, 3) * 0.9 + n.ridge(t * 140, a * 2.3, 2) * 0.35;
-        const rw = C.R + wob * 0.6, rh = 2.55 + wob * 0.5 + (n.fbm(t * 25, 7, 2)) * 0.8;
-        const lx = cx * rw, ly = cy > 0 ? 0.35 + cy * rh : cy * 1.2;
+        // broken, uneven rock: big lumps and hollows, ribs and fractures, none of it regular
+        const lump = n.fbm(t * 70 + cx * 1.3, cy * 1.3 + 3.1, 4) * 1.3 + (n.ridge(t * 210 + cx * 0.6, a * 2.7, 3) - 0.5) * 0.9 + (n.fbm(t * 400 + a, a * 6.1, 2) - 0.2) * 0.3;
+        const wall = Math.max(0, 1 - Math.abs(cy - 0.25) * 1.6);
+        const niche = Math.max(0, n.fbm(t * 26 + 7, cx * 2 + 5, 2) - 0.55) * 7 * wall;
+        const sd = cx >= 0 ? 1 : -1, side = W.passageAt(t, sd) * Math.max(0, 1 - Math.abs(cy - 0.3) * 1.4);
+        let lx = cx * (S.w + lump * (0.5 + 0.3 * S.k) + niche + side) * (1 + 0.12 * Math.max(0, cy));
+        lx = clamp(lx, -(W.caveWidthAt(t, -1) - 0.5), W.caveWidthAt(t, 1) - 0.5);   // never out past the trench
+        const ly = cy > 0 ? 0.3 + Math.pow(cy, 0.8) * (S.h + lump * 0.7) : cy * 1.6;
         const x = F.x + F.nx * lx, z = F.z + F.nz * lx, y = floor + ly;
-        pos.push(x, y, z); uv.push(k / NA * 4, i / NT * 30); ring.push(V(x, y, z));
+        pos.push(x, y, z); uv.push(k / NA * 7, i / NT * 46); ring.push(V(x, y, z));
       }
-      this.rings.push({ t, F, floor, ring });
+      this.rings.push({ t, F, floor, ring, S });
     }
     for (let i = 0; i < NT; i++) for (let k = 0; k < NA; k++) { const a = i * (NA + 1) + k, b = a + NA + 1; idx.push(a, a + 1, b, a + 1, b + 1, b); }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
     const m = new THREE.Mesh(g, rock); m.receiveShadow = true; this.group.add(m);
-    // the floor: wet rock and mud over the trench (no snow under the mountain)
-    { const fp = [], fu = [], fi = [], NS = 8;
-      for (let i = 0; i <= NT; i++) { const R = this.rings[i]; for (let j = 0; j <= NS; j++) { const s = lerp(-C.R + 0.25, C.R - 0.25, j / NS); fp.push(R.F.x + R.F.nx * s, R.floor + 0.16 + n.fbm(R.t * 90, j * 0.7, 2) * 0.04, R.F.z + R.F.nz * s); fu.push(j / NS * 3, i / NT * 30); } }
+    // the floor: wet rock, grit and mud over the trench (no snow under the mountain), uneven
+    { const fp = [], fu = [], fi = [], NS = 14;
+      for (let i = 0; i <= NT; i++) { const R = this.rings[i]; for (let j = 0; j <= NS; j++) { const q = j / NS, s = lerp(-R.S.w - W.passageAt(R.t, -1) + 0.3, R.S.w + W.passageAt(R.t, 1) - 0.3, q); const edge = Math.abs(q - 0.5) * 2;
+        const fx = R.F.x + R.F.nx * s, fzz = R.F.z + R.F.nz * s; fp.push(fx, W.heightAt(fx, fzz) + 0.02 + Math.max(0, edge - 0.8) * 2.0, fzz); fu.push(q * 5, i / NT * 46); } }
       for (let i = 0; i < NT; i++) for (let j = 0; j < NS; j++) { const a = i * (NS + 1) + j, b = a + NS + 1; fi.push(a, a + 1, b, a + 1, b + 1, b); }
       const fg = new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(fp, 3)); fg.setAttribute('uv', new THREE.Float32BufferAttribute(fu, 2)); fg.setIndex(fi); fg.computeVertexNormals();
-      const floorM = rock.clone(); floorM.color = new THREE.Color(0x34302c); floorM.side = THREE.FrontSide; floorM.onBeforeCompile = rock.onBeforeCompile; floorM.customProgramCacheKey = () => 'caveFloor';
+      const floorM = rock.clone(); floorM.color = new THREE.Color(0x3a3530); floorM.side = THREE.FrontSide; floorM.onBeforeCompile = rock.onBeforeCompile; floorM.customProgramCacheKey = () => 'caveFloor';
       floorM.polygonOffset = true; floorM.polygonOffsetFactor = -4; floorM.polygonOffsetUnits = -4; const fm = new THREE.Mesh(fg, floorM); fm.receiveShadow = true; this.group.add(fm); }
-    // stalactites from the roof, and dripping
+    // stalactites: crooked, knobbled points of rock, in clusters where water has run; stalagmites rising to meet them;
+    // fallen blocks along the walls
     const r = this.r, sg = []; this.drips = [];
-    for (let k = 0; k < 70; k++) {
-      const t = lerp(C.t0 + 0.01, C.t1 - 0.01, r()), F = frame(W, t), floor = this.floorAt(t), lx = (r() - 0.5) * C.R * 1.3;
-      const roof = floor + 0.35 + 2.55 * Math.sqrt(Math.max(0, 1 - (lx / C.R) ** 2)) - 0.15;
-      const len = 0.15 + r() ** 2 * 0.9; const cg = new THREE.ConeGeometry(0.04 + len * 0.08, len, 6); cg.rotateX(Math.PI); cg.translate(F.x + F.nx * lx, roof - len / 2, F.z + F.nz * lx); sg.push(cg);
-      if (k % 4 === 0) this.drips.push({ x: F.x + F.nx * lx, y: roof - len, z: F.z + F.nz * lx, floor, next: r() * 4 });
+    const spike = (len, rad, seed, up) => {
+      const cg = new THREE.ConeGeometry(rad, len, 7, 6, false); const P = cg.attributes.position, nz = makeNoise(seed);
+      for (let v = 0; v < P.count; v++) {
+        let x = P.getX(v), y = P.getY(v), z = P.getZ(v); const k = 0.5 - y / len;   // 0 at the base, 1 at the tip
+        const knob = 1 + (nz.fbm(y * 9 + seed, Math.atan2(z, x) * 1.5, 3) - 0.3) * 0.7 + Math.sin(y * 23 + seed) * 0.08;
+        x *= knob; z *= knob;
+        x += (nz.fbm(seed, y * 2.1, 2) - 0.5) * len * 0.22 * k; z += (nz.fbm(y * 2.1, seed, 2) - 0.5) * len * 0.22 * k;   // crooked
+        P.setXYZ(v, x, y, z);
+      }
+      if (!up) cg.rotateX(Math.PI); cg.computeVertexNormals(); return cg;
+    };
+    for (let k = 0; k < 150; k++) {
+      const t = lerp(C.t0 + 0.006, C.t1 - 0.006, r()), F = frame(W, t), floor = this.floorAt(t), S = this.sizeAt(t);
+      const lx = (r() - 0.5) * S.w * 1.5, roof = this.roofAt(t, lx) - 0.25;
+      const n0 = 1 + Math.floor(r() * 3);
+      for (let c = 0; c < n0; c++) {
+        const len = (0.25 + r() ** 2 * 2.2) * (0.6 + 0.6 * S.k), rad = 0.06 + len * (0.09 + r() * 0.07);
+        const ox = (r() - 0.5) * 0.9, oz = (r() - 0.5) * 0.9;
+        const cg = spike(len, rad, k * 7 + c, false); cg.translate(F.x + F.nx * (lx + ox) + F.tx * oz, roof - len / 2 + 0.15, F.z + F.nz * (lx + ox) + F.tz * oz); sg.push(cg);
+        if (c === 0 && k % 3 === 0) this.drips.push({ x: F.x + F.nx * (lx + ox) + F.tx * oz, y: roof - len, z: F.z + F.nz * (lx + ox) + F.tz * oz, floor, next: r() * 4 });
+      }
     }
-    const merged = this.merge(sg); if (merged) this.group.add(new THREE.Mesh(merged, rock));
+    for (let k = 0; k < 60; k++) {
+      const t = lerp(C.t0 + 0.006, C.t1 - 0.006, r()), F = frame(W, t), S = this.sizeAt(t), side = r() < 0.5 ? -1 : 1;
+      const lx = side * (S.w - 0.4 - r() * 1.6), y = this.floorAt(t) + 0.1;
+      if (r() < 0.55) { const len = 0.3 + r() ** 2 * 1.4; const cg = spike(len, 0.12 + len * 0.18, 900 + k, true); cg.translate(F.x + F.nx * lx, y + len / 2 - 0.05, F.z + F.nz * lx); sg.push(cg); }
+      else { const sz = 0.3 + r() * 0.9; const bg = new THREE.IcosahedronGeometry(sz, 1); const P = bg.attributes.position; for (let v = 0; v < P.count; v++) { const f = 0.75 + r() * 0.45; P.setXYZ(v, P.getX(v) * f, P.getY(v) * f * 0.7, P.getZ(v) * f); } bg.computeVertexNormals(); bg.translate(F.x + F.nx * lx, y + sz * 0.25, F.z + F.nz * lx); sg.push(bg); }
+    }
+    for (let k = 0; k < 40; k++) {
+      const t = lerp(C.t0 + 0.01, C.t1 - 0.01, r()), S = this.sizeAt(t); if (S.k < 0.45) continue;
+      const F = frame(W, t), side = r() < 0.5 ? -1 : 1, lx = side * S.w * (0.45 + r() * 0.35), x = F.x + F.nx * lx, z = F.z + F.nz * lx;
+      const y0 = W.heightAt(x, z), y1 = this.roofAt(t, lx), rad = 0.25 + r() * 0.45, hh = y1 - y0 + 0.4;
+      const cg = new THREE.CylinderGeometry(rad * 0.7, rad, hh, 10, 12); const P = cg.attributes.position, nz = makeNoise(4000 + k);
+      for (let v = 0; v < P.count; v++) { const yy = P.getY(v) / hh + 0.5, waist = 1 - 0.45 * Math.exp(-(((yy - 0.55) / 0.18) ** 2)), flare = 1 + 1.2 * Math.pow(1 - yy, 6) + 0.9 * Math.pow(yy, 6); const knob = waist * flare * (1 + (nz.fbm(yy * 6, Math.atan2(P.getZ(v), P.getX(v)) * 1.3, 3) - 0.3) * 0.5); P.setX(v, P.getX(v) * knob); P.setZ(v, P.getZ(v) * knob); }
+      cg.computeVertexNormals(); cg.translate(x, y0 + hh / 2 - 0.2, z); sg.push(cg); W.addCollider(x, z, rad * 1.1);
+    }
+    const merged = this.merge(sg); if (merged) { const sm = new THREE.Mesh(merged, rock); sm.castShadow = true; this.group.add(sm); }
     // pools of black water on the floor
     const water = new THREE.MeshStandardMaterial({ color: 0x050607, roughness: 0.03, metalness: 0.2 });
-    for (let k = 0; k < 9; k++) {
-      const t = lerp(C.t0 + 0.02, C.t1 - 0.02, r()), F = frame(W, t), lx = (r() - 0.5) * 3;
-      const pg = new THREE.CircleGeometry(0.6 + r() * 1.1, 18); pg.scale(1, 0.6 + r() * 0.4, 1); pg.rotateX(-Math.PI / 2);
-      const pm = new THREE.Mesh(pg, water); pm.position.set(F.x + F.nx * lx, this.floorAt(t) + 0.03, F.z + F.nz * lx); pm.rotation.y = r() * TAU; this.group.add(pm);
+    for (let k = 0; k < 14; k++) {
+      const t = lerp(C.t0 + 0.02, C.t1 - 0.02, r()), F = frame(W, t), S = this.sizeAt(t), lx = (r() - 0.5) * S.w;
+      const pg = new THREE.CircleGeometry(0.6 + r() * 1.6, 20); pg.scale(1, 0.5 + r() * 0.5, 1); pg.rotateX(-Math.PI / 2);
+      const pm = new THREE.Mesh(pg, water); pm.position.set(F.x + F.nx * lx, this.floorAt(t) + 0.2, F.z + F.nz * lx); pm.rotation.y = r() * TAU; this.group.add(pm);
     }
   }
+  // the tunnel's half-width and height at t: narrow at the mouths, opening into high chambers and pinching between
+  sizeAt(t) {
+    const C = this.C, u = clamp((t - (C.t0 - C.e)) / (C.t1 - C.t0 + 2 * C.e), 0, 1), n = this.noise;
+    const k = clamp(0.5 + 0.5 * Math.sin(u * Math.PI * 3.4 - 1.3) + (n.fbm(u * 9, 4.2, 2) - 0.25) * 0.5, 0, 1) * smooth(clamp(u / 0.12, 0, 1)) * smooth(clamp((1 - u) / 0.12, 0, 1));
+    return { k, w: 3.6 + 3.6 * k, h: 3.4 + 3.4 * k };
+  }
+  roofAt(t, lx) { const S = this.sizeAt(t); const c = clamp(lx / (S.w * 1.05), -0.99, 0.99); return this.floorAt(t) + 0.3 + Math.pow(Math.sqrt(1 - c * c), 0.8) * S.h; }
   floorAt(t) { const p = this.W.path.at(t); return this.W.pathH[Math.round(clamp(t, 0, 1) * 400)]; }
   merge(list) { if (!list.length) return null; let n = 0; for (const g of list) n += g.attributes.position.count; const P = new Float32Array(n * 3), I = []; let o = 0;
     for (const g of list) { const gi = g.index ? g.index.array : null; const c = g.attributes.position.count; P.set(g.attributes.position.array, o * 3); if (gi) for (const v of gi) I.push(v + o); else for (let v = 0; v < c; v++) I.push(v + o); o += c; }
@@ -94,11 +142,11 @@ export class Cave {
   // ---------------------------------------------------------------- the roof: the hillside itself, over the trench
   buildRoof() {
     const W = this.W, C = this.C, NT = 90, NS = 18, pos = [], idx = [];
-    const t0 = C.t0 - C.e - 0.002, t1 = C.t1 + C.e + 0.002, S = C.W + 1.2;
+    const t0 = C.t0 - C.e - 0.002, t1 = C.t1 + C.e + 0.002;
     for (let i = 0; i <= NT; i++) {
       const t = lerp(t0, t1, i / NT), F = frame(W, t);
       for (let j = 0; j <= NS; j++) {
-        const s = lerp(-S, S, j / NS), x = F.x + F.nx * s, z = F.z + F.nz * s;
+        const s = lerp(-W.caveWidthAt(t, -1) - 1.2, W.caveWidthAt(t, 1) + 1.2, j / NS), x = F.x + F.nx * s, z = F.z + F.nz * s;
         const nr = W.path.nearest(x, z), ph = W.pathH[Math.round(nr.t * 400)];
         let y = W.lidHeight(x, z, nr, ph, W.baseHeight(x, z));
         // the edges tuck down into the ground they meet
@@ -145,17 +193,11 @@ export class Cave {
   buildDressing() {
     const W = this.W, C = this.C, r = this.r, L = boneLibrary('hi'), bm = boneMaterial();
     const corpse = (t, side, sitting) => {
-      const F = frame(W, t), floor = this.floorAt(t), lx = side * (C.R - 0.7), g = new THREE.Group();
-      g.position.set(F.x + F.nx * lx, floor, F.z + F.nz * lx); g.rotation.y = Math.atan2(-F.nx * side, -F.nz * side); this.group.add(g);
-      const add = (geo, p, rr) => { const m = new THREE.Mesh(geo, bm); m.position.set(...p); m.rotation.set(...rr); m.castShadow = true; g.add(m); return m; };
-      add(L.pelvis, [0, 0.12, -0.05], [-1.2, 0, 0]); add(L.cage0, [0, 0.55, -0.12], [0.25, 0, 0]);
-      add(L.femur, [-0.1, 0.1, 0.2], [Math.PI / 2 - 0.1, 0, 0.1]); add(L.femur, [0.1, 0.1, 0.22], [Math.PI / 2 - 0.15, 0, -0.1]);
-      add(L.humerus, [-0.2, 0.35, 0.05], [0.3, 0, 0.4]);
-      const head = new THREE.Group(); head.position.set(0, 0.86, -0.1); g.add(head);
-      const sk = new THREE.Mesh(L.skull0, bm); sk.castShadow = true; head.add(sk); const jaw = new THREE.Mesh(L.mandible, bm); jaw.rotation.x = 0.35; head.add(jaw);
-      const iron = new THREE.MeshStandardMaterial({ color: 0x4a4038, metalness: 0.75, roughness: 0.7 });
-      const mor = new THREE.Mesh(new THREE.LatheGeometry([[0, 0.17], [0.07, 0.165], [0.11, 0.1], [0.12, 0.03], [0.2, 0.0], [0.21, -0.01]].map(([a, b]) => new THREE.Vector2(a, b)), 16), iron); mor.scale.set(1, 1, 1.35); mor.position.set(0.25, 0.02, 0.35); mor.rotation.set(0.4, 0.3, 1.2); g.add(mor);
-      return { g, head, F, floor, lx };
+      const F = frame(W, t), lx = side * (this.sizeAt(t).w - 1.1), x = F.x + F.nx * lx, z = F.z + F.nz * lx, floor = W.heightAt(x, z);
+      const fz = makeFrozen('slump', 3 + Math.round(t * 1000)), g = fz ? fz.root : new THREE.Group();
+      g.position.set(x, floor, z); g.rotation.y = Math.atan2(-F.nx * side, -F.nz * side); this.group.add(g);
+      const head = fz ? fz.head : new THREE.Group(); const base = head.rotation.clone();
+      return { g, head, base, F, floor, lx };
     };
     this.dead = [corpse(lerp(C.t0, C.t1, 0.47), 1, true), corpse(lerp(C.t0, C.t1, 0.52), -1, true)];
     // NON EXIBIS, in blood, come up on the wall where you were not looking
@@ -165,7 +207,7 @@ export class Cave {
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     const t = lerp(C.t0, C.t1, 0.33), F = frame(W, t), floor = this.floorAt(t);
     const pm = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 0.8), new THREE.MeshStandardMaterial({ map: tex, transparent: true, opacity: 0, roughness: 0.25, depthWrite: false }));
-    pm.position.set(F.x + F.nx * (C.R - 0.15), floor + 1.7, F.z + F.nz * (C.R - 0.15)); pm.lookAt(F.x, floor + 1.7, F.z); this.group.add(pm); this.writing = { m: pm, t, show: 0 };
+    const ww = this.sizeAt(t).w - 0.35; pm.position.set(F.x + F.nx * ww, floor + 1.9, F.z + F.nz * ww); pm.lookAt(F.x, floor + 1.7, F.z); this.group.add(pm); this.writing = { m: pm, t, show: 0 };
   }
   // ---------------------------------------------------------------- the mouth: three of the Emperor's men, and the torch
   buildMouth() {
@@ -173,15 +215,12 @@ export class Cave {
     const t = C.t0 - C.e - 0.012, F = frame(W, t), y0 = W.heightAt(F.x, F.z);
     const iron = new THREE.MeshStandardMaterial({ color: 0x5a5048, metalness: 0.7, roughness: 0.6 }), wood = new THREE.MeshStandardMaterial({ color: 0x3a2a1c, roughness: 0.85 });
     const cloth = new THREE.MeshStandardMaterial({ color: 0x5a1a14, roughness: 0.95, side: THREE.DoubleSide });
+    const poses = ['lie', 'sit', 'kneel'];
     for (let k = 0; k < 3; k++) {
-      const s = k - 1, x = F.x + F.nx * (s * 1.9 + (s ? 0 : 0.4)) - F.tx * (k * 0.8), z = F.z + F.nz * (s * 1.9) - F.tz * (k * 0.8), y = W.heightAt(x, z);
-      const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = r() * TAU; this.group.add(g);
-      const add = (geo, m, p, rr) => { const o = new THREE.Mesh(geo, m); o.position.set(...p); o.rotation.set(...rr); o.castShadow = true; g.add(o); return o; };
-      add(L.skull1, bm, [0, 0.07, 0.75], [1.4, 0.3, 0]); add(L.cage1, bm, [0, 0.12, 0.35], [Math.PI / 2, 0, 0.1]); add(L.pelvis, bm, [0, 0.1, -0.05], [-1.5, 0, 0]);
-      add(L.femur, bm, [-0.1, 0.05, -0.1], [-Math.PI / 2 + 0.1, 0, 0.15]); add(L.femur, bm, [0.12, 0.05, -0.1], [-Math.PI / 2, 0, -0.2]);
-      add(new THREE.PlaneGeometry(0.7, 0.9, 6, 6), cloth, [0, 0.16, 0.25], [-Math.PI / 2 + 0.05, 0, 0.2]);   // the rags of a red doublet
-      add(new THREE.LatheGeometry([[0, 0.17], [0.07, 0.165], [0.11, 0.1], [0.12, 0.03], [0.2, 0.0], [0.21, -0.01]].map(([a, b]) => new THREE.Vector2(a, b)), 16), iron, [0.4, 0.08, 0.6], [1.2, 0.3, 0.4]);   // morion
-      add(new THREE.CylinderGeometry(0.018, 0.018, 1.9, 6), wood, [-0.35, 0.04, 0.2], [Math.PI / 2, 0, 0.3 + s]);   // a halberd's haft
+      const sd = k - 1, x = F.x + F.nx * (sd * 2.1 + (sd ? 0 : 0.5)) - F.tx * (k * 0.9), z = F.z + F.nz * (sd * 2.1) - F.tz * (k * 0.9), y = W.heightAt(x, z);
+      const fz = makeFrozen(poses[k], 11 + k * 5); if (!fz) continue;
+      fz.root.position.set(x, y, z); fz.root.rotation.y = Math.atan2(F.tx, F.tz) + Math.PI + (r() - 0.5) * 1.2; this.group.add(fz.root);
+      const hb = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1.9, 6), wood); hb.position.set(x + (r() - 0.5) * 1.2, y + 0.05, z + (r() - 0.5) * 1.2); hb.rotation.set(Math.PI / 2, r() * 3, 0.1); hb.castShadow = true; this.group.add(hb);
     }
     // the torch, dropped by the last of them, its head of pitch-soaked rag
     const tg = this.torchProp = new THREE.Group();
@@ -201,12 +240,11 @@ export class Cave {
       const grp = new THREE.Group();
       const haft = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.62, 8), new THREE.MeshStandardMaterial({ color: 0x3a2a1c, roughness: 0.85 })); haft.position.y = 0.12; grp.add(haft);
       const head = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.035, 0.14, 10), new THREE.MeshStandardMaterial({ color: 0x1a120a, roughness: 0.9 })); head.position.y = 0.47; grp.add(head);
-      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.3, 10, 1, true), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.55, 0.18).multiplyScalar(3), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
-      flame.position.y = 0.66; grp.add(flame);
-      const core = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.85, 0.5).multiplyScalar(4), toneMapped: false })); core.position.y = 0.56; grp.add(core);
+      const tip = new THREE.Object3D(); tip.position.y = 0.53; grp.add(tip);   // where the flame stands (it burns upright, in the world)
+      const fl = makeFlame({ height: 0.46, width: 0.2, tongues: 3, sparks: 26 }); this.group.add(fl.group);
       let L = null; if (light) { L = new THREE.PointLight(0xff8a3a, 10, 14, 1.8); L.position.y = 0.6; L.castShadow = false; grp.add(L); }
       grp.position.set(0.0, -0.06, 0.02); grp.rotation.set(0.9, 0, 0); k.rig.j.handL.add(grp);
-      return { grp, flame, core, L, k };
+      return { grp, tip, fl, L, k };
     };
     this.torch = [make(g.me, true)];
     const comp = g.knightList.filter((k) => k !== g.me && !k.downed).slice(0, 3);
@@ -224,8 +262,9 @@ export class Cave {
     const W = this.W, C = this.C, nr = W.path.nearest(want.x, want.z);
     if (nr.t < C.t0 - C.e || nr.t > C.t1 + C.e) return;
     const p = W.path.at(nr.t); const floor = this.floorAt(nr.t);
-    if (nr.d > C.R - 0.8) { const k = (C.R - 0.8) / nr.d; want.x = p.x + (want.x - p.x) * k; want.z = p.z + (want.z - p.z) * k; }
-    want.y = clamp(want.y, floor + 0.6, floor + 2.35);
+    const S = this.sizeAt(nr.t), lim = Math.max(1.5, S.w - 1.2);
+    if (nr.d > lim) { const k = lim / nr.d; want.x = p.x + (want.x - p.x) * k; want.z = p.z + (want.z - p.z) * k; }
+    want.y = clamp(want.y, floor + 0.6, floor + Math.max(2.2, S.h - 0.8));
   }
 
   // ---------------------------------------------------------------- every frame
@@ -251,9 +290,9 @@ export class Cave {
       const fl = 0.85 + Math.sin(time * 23) * 0.06 + Math.sin(time * 37.7) * 0.05 + (Math.random() - 0.5) * 0.08;
       const gut = this.gutter > 0 ? (this.gutter -= dt, 0.04 + Math.max(0, Math.sin(time * 41)) * 0.18 * (this.gutter < 0.6 ? 3 : 1)) : 1;
       for (const T of this.torch) {
-        T.flame.scale.set(1, (0.85 + Math.sin(time * 17 + T.k.id) * 0.15) * Math.max(0.2, gut), 1); T.core.scale.setScalar(Math.max(0.3, gut));
+        T.tip.getWorldPosition(T.fl.group.position); T.fl.group.scale.setScalar(Math.max(0.25, Math.min(1, gut * 1.2))); T.fl.update(time, g.engine.camera.position, fl * Math.max(0.15, gut));
         if (T.L) T.L.intensity = 10 * fl * gut;
-        if (Math.random() < dt * 6) g.fx.wisp?.(T.flame.getWorldPosition(V(0, 0, 0)).add(V(0, 0.2, 0)), 0.25, [0.12, 0.1, 0.09]);
+        if (Math.random() < dt * 5) g.fx.wisp?.(T.fl.group.position.clone().add(V(0, 0.45, 0)), 0.25, [0.08, 0.07, 0.065]);
       }
       if (this.inCam > 0.5) g.terror && (g.terror.next = Math.max(g.terror.next, 15));   // the road's scares wait: He has His own in here
     }
@@ -299,7 +338,8 @@ export class Cave {
     this.once('dead', 0.44, () => { this.watchDead = 1; g.audio.whisper(this.dead[0].g.position.clone().setY(this.dead[0].floor + 1), 1.4, 0.35); });
     // 6: eyes in the dark ahead, the light fails, and they come
     this.once('eyes', 0.56, () => { if (g.terror && !g.terror.active) g.terror.active = g.terror.eyes(); this.gutter = 3.2; dread(0.12);
-      setTimeout(() => { if (!g.world || g.world !== this.W) return; if (g.isHost) { const b = this.ahead(-9); g.summonAround(b, 'crawler', 3 + g.knightList.length); const a = this.ahead(10); g.summonAround(a, 'shade', 2); } g.audio.scream(me.pos.clone().add(V(0, 1.6, 0)), false, 0.7, 0.85); }, 2600); });
+      for (let i = 0; i < 7; i++) setTimeout(() => { if (!g.world || g.world !== this.W || !g.dread) return; g.dread.spawnPhantom(i % 3 ? 'rush' : 'lurk'); }, 2400 + i * 650);
+      setTimeout(() => { if (g.world === this.W) g.audio.scream(me.pos.clone().add(V(0, 1.6, 0)), false, 0.7, 0.85); }, 2600); });
     // 7: He walks upside down across the roof, over your head
     this.once('roof', 0.72, () => { this.act = { kind: 'roof', t: 0 }; g.audio.stinger('cluster', 0.5); dread(0.1); });
     // 8: at the far mouth, against the light, Him
@@ -307,7 +347,7 @@ export class Cave {
     // the writing comes up, slowly
     if (this.writing.show) { const M = this.writing.m.material; M.opacity = Math.min(1, M.opacity + dt * 0.35); }
     // the dead watch
-    if (this.watchDead) for (const d of this.dead) { d.head.updateWorldMatrix(true, false); const hp = d.head.getWorldPosition(V(0, 0, 0)); const want = Math.atan2(me.pos.x - hp.x, me.pos.z - hp.z) - d.g.rotation.y; let a = Math.atan2(Math.sin(want), Math.cos(want)); a = clamp(a, -1.6, 1.6); d.head.rotation.y = damp(d.head.rotation.y, a, 1.2, dt); d.head.rotation.z = Math.sin(time * 0.3) * 0.15; }
+    if (this.watchDead) for (const d of this.dead) { d.head.updateWorldMatrix(true, false); const hp = d.head.getWorldPosition(V(0, 0, 0)); const want = Math.atan2(me.pos.x - hp.x, me.pos.z - hp.z) - d.g.rotation.y; let a = Math.atan2(Math.sin(want), Math.cos(want)); a = clamp(a, -1.3, 1.3); d.turn = damp(d.turn || 0, a, 0.9, dt); d.head.rotation.set(d.base.x - 0.25 * Math.abs(d.turn), d.base.y + d.turn, d.base.z * (1 - Math.abs(d.turn)), 'YXZ'); }
     const A = this.act; if (!A) return; A.t += dt;
     const D = A.kind === 'steps' ? null : this.devil();
     if (A.kind === 'standAhead') {
@@ -318,14 +358,19 @@ export class Cave {
       if (A.n >= 8 && A.t > 5.2 && !A.breath) { A.breath = true; g.audio.whisper(g.engine.camera.position.clone().addScaledVector(f, -0.3), 1.8, 0.7); g.ui.subtitle([`…${me.name || 'knight'}…`, ''], 3); dread(0.1); }
       if (A.t > 7) this.act = null;
     } else if (A.kind === 'roof') {
-      const C = this.C, W = this.W; const k = clamp(A.t / 6, 0, 1);
-      const nr = W.path.nearest(me.pos.x, me.pos.z), F = frame(W, nr.t + 0.01), floor = this.floorAt(nr.t + 0.01);
-      const lx = lerp(-C.R * 0.8, C.R * 0.8, k);
-      D.pos.set(F.x + F.nx * lx, floor + 2.75, F.z + F.nz * lx); D.yaw = Math.atan2(F.nx, F.nz); D.state = 'watch'; D.mesh.visible = true;
-      D.animate(dt, time, g.engine.camera.position, [me]); D.mesh.scale.set(0.8, -0.8, 0.8);   // hanging from the roof, head down
-      if (A.t > 6.2) { D.mesh.scale.set(1, 1, 1); releasePhantom(D, 'cave'); this.act = null; g.audio.whisper(me.pos.clone().setY(me.pos.y + 2.5), 1.4, 0.5); }
+      // he comes over the roof toward you, stops right above you and looks down, then scuttles away behind you
+      const W = this.W; if (A.t0 === undefined) { A.t0 = W.path.nearest(me.pos.x, me.pos.z).t; A.side = Math.random() < 0.5 ? -1 : 1; }
+      const T = A.t, u = T < 2.6 ? lerp(0.014, 0.0015, smooth(T / 2.6)) : T < 4.4 ? 0.0015 : lerp(0.0015, -0.024, smooth(clamp((T - 4.4) / 1.6, 0, 1)));
+      const go = T < 2.6 ? 1 : T < 4.4 ? 0 : 2.6;
+      const t = A.t0 + u, F = frame(W, t), S = this.sizeAt(t), lx = A.side * S.w * (0.25 + 0.1 * Math.sin(T * 1.7));
+      const yaw = T < 4.4 ? Math.atan2(-F.tx, -F.tz) : Math.atan2(-F.tx, -F.tz);
+      D.state = 'watch'; D.mesh.visible = true; D.yaw = yaw; D.animate(dt, time, g.engine.camera.position, [me]);
+      D.crawl(dt, time, V(F.x + F.nx * lx, 0, F.z + F.nz * lx), yaw, this.roofAt(t, lx) - 0.35, go);
+      if (T > 2.6 && !A.still) { A.still = true; g.audio.whisper(D.pos.clone(), 1.6, 0.6); g.audio.heartbeat?.(0.7); dread(0.12); }
+      if (T > 4.4 && !A.run) { A.run = true; g.audio.scream(D.pos.clone(), false, 0.35, 1.4); g.engine.shake(0.15, 0.3); for (let i = 0; i < 4; i++) setTimeout(() => this.W === g.world && g.audio.footstep(D.pos.clone(), true, 0.7), i * 140); }
+      if (T > 6.1) { releasePhantom(D, 'cave'); this.act = null; g.audio.whisper(me.pos.clone().setY(me.pos.y + 2.5), 1.4, 0.5); }
     } else if (A.kind === 'exit') {
-      if (!A.shown) { A.shown = true; const F = frame(this.W, this.C.t1 - 0.004); D.pos.set(F.x, this.floorAt(this.C.t1), F.z); D.yaw = Math.atan2(-F.tx, -F.tz); D.state = 'watch'; D.t = 2; D.mesh.visible = true; D.mesh.scale.set(1, 1, 1); g.audio.stinger('drone', 0.7);
+      if (!A.shown) { A.shown = true; const F = frame(this.W, this.C.t1 - 0.004); D.pos.set(F.x, this.floorAt(this.C.t1), F.z); D.yaw = Math.atan2(-F.tx, -F.tz); D.state = 'watch'; D.t = 2; D.mesh.visible = true; g.audio.stinger('drone', 0.7);
         g.ui.subtitle(['Go on up, then. He has been waiting for you longer than I have.', ''], 5, true); }
       D.animate(dt, time, g.engine.camera.position, [me]);
       if (A.t > 4.5 && D.state === 'watch') { D.state = 'vanish'; D.t = 0; g.engine.shake(0.5, 0.8); g.audio.scream(D.pos.clone().setY(D.pos.y + 20), true, 0.6, 0.45); }
@@ -333,8 +378,8 @@ export class Cave {
     }
   }
   dispose() {
-    if (this.torch) for (const T of this.torch) T.grp.removeFromParent();
-    const D = this.g._phantomDevil; if (D && D.owner === 'cave') { D.mesh.scale.set(1, 1, 1); releasePhantom(D, 'cave'); }
+    if (this.torch) for (const T of this.torch) { T.grp.removeFromParent(); T.fl.group.removeFromParent(); }
+    const D = this.g._phantomDevil; if (D && D.owner === 'cave') releasePhantom(D, 'cave');
     if (this.base) { const e = this.g.engine, B = this.base; e.sun.intensity = B.sun; e.hemi.intensity = B.hemi; e.fill.intensity = B.fill; this.g.scene.fog.color.copy(B.fog); this.g.scene.fog.density = B.fd; }
     this.group.removeFromParent(); this.group.traverse((o) => o.geometry?.dispose?.());
   }

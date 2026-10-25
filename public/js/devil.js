@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildTemplate, instantiate, limb, blob, cone, horn, place, lumpyG, demonMaterial } from './demons.js';
 import { scaleTextures, demonTextures } from './textures.js';
-import { buildHorror, tickRobes } from './horror.js';
+import { buildHorror, buildHumanDevil, tickRobes } from './horror.js';
 import { buildDragonModel, dragonHideMaterial, dragonWingMaterial, dragonEyes } from './dragon_model.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, TAU } from './util.js';
 
@@ -50,6 +50,24 @@ function dragonMaterial() {
   return m;
 }
 
+// two-bone limb solver: turns u (upper) and l (lower) so that end reaches T, the middle joint bowing toward pole
+const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+function aimBone(bone, from, to) {
+  const dq = new THREE.Quaternion().setFromUnitVectors(from.normalize(), to.normalize());
+  bone.getWorldQuaternion(_q1); bone.parent.getWorldQuaternion(_q2);
+  bone.quaternion.copy(_q2.invert().multiply(dq).multiply(_q1)); bone.updateMatrixWorld(true);
+}
+function ik2(u, l, end, T, pole) {
+  const V3 = THREE.Vector3, a = u.getWorldPosition(new V3()), b = l.getWorldPosition(new V3()), c = end.getWorldPosition(new V3());
+  const l1 = a.distanceTo(b), l2 = b.distanceTo(c), dv = T.clone().sub(a); const d = clamp(dv.length(), Math.abs(l1 - l2) + 1e-3, l1 + l2 - 1e-3); dv.normalize();
+  const x = (l1 * l1 - l2 * l2 + d * d) / (2 * d), h = Math.sqrt(Math.max(0, l1 * l1 - x * x));
+  const pd = pole.clone().addScaledVector(dv, -pole.dot(dv)).normalize();
+  const knee = a.clone().addScaledVector(dv, x).addScaledVector(pd, h);
+  aimBone(u, b.clone().sub(a), knee.clone().sub(a));
+  const b2 = l.getWorldPosition(new V3()), c2 = end.getWorldPosition(new V3());
+  aimBone(l, c2.sub(b2), a.clone().addScaledVector(dv, d).sub(b2));
+}
+
 // ================================================================ WATCHER
 // Him, on the hills: a figure far too tall and thin, arms hanging past the
 // knee, ram horns, a ragged cloak, and two wide white eyes that never blink.
@@ -60,10 +78,10 @@ const WATCHER_DEF = { rim: 0x000000, skin: 0x8e9592, horns: [0.95, 0.07, 3.0], h
 export class Watcher {
   constructor(scene, fx) {
     this.scene = scene; this.fx = fx;
-    const body = buildHorror('devil', WATCHER_DEF);
+    const body = buildHumanDevil(WATCHER_DEF) || buildHorror('devil', WATCHER_DEF);
     this.mat = body.mat; this.mesh = body.mesh; this.B = body.B;
     // taller and gaunter than any man; the forearms far too long, so the pale wrists hang out of the sleeves
-    this.mesh.scale.set(0.92, 1.1, 0.92);
+    this.mesh.scale.set(0.92, 1.1, 0.92); this.baseScale = this.mesh.scale.clone();
     for (const k of ['R', 'L']) { const h = this.B['hand' + k]; h.position.multiplyScalar(1.32); h.userData.rest = h.position.clone(); }
     this.casters = []; this.mesh.traverse((o) => { if (o.isMesh && o.castShadow) this.casters.push(o); }); this.shadows = true;
     this.mesh.visible = false; scene.add(this.mesh);
@@ -188,6 +206,44 @@ export class Watcher {
       e(B.handR, -10 + Math.max(0, Math.sin(time * 2.3)) * 25, 0, 0); e(B.handL, -10 + Math.max(0, Math.sin(time * 1.9 + 1)) * 25, 0, 0); // the long fingers curl and uncurl
     }
   }
+  // Him on a ceiling, like a spider: his back to the rock and his face hanging down at you, his long arms and legs
+  // bent back over him to grip the stone, elbows and knees jutting out. go: how fast he is moving (0 still, 1
+  // creeping, 2+ scuttling); roofY: the height of the rock. Called after animate(), it overrides the pose. The
+  // hands and feet are put on the rock by solving each limb (so it works whatever the bones' own frames are).
+  crawl(dt, time, pos, yaw, roofY, go) {
+    const B = this.B, V3 = THREE.Vector3;
+    this.crawlPh = (this.crawlPh || 0) + dt * (2.4 + go * 3.4) * Math.min(1, go);
+    const ph = this.crawlPh, up = (x) => Math.max(0, x);
+    const jk = Math.floor(time * (go > 1.5 ? 7 : 2.4)), hsh = (k) => { const x = Math.sin(k * 127.1 + 3.7) * 43758.5; return x - Math.floor(x); };
+    const tw = (hsh(jk) - 0.5), tr = (hsh(jk + 31) - 0.5);
+    // the body: head first along the way he goes, face (and belly) to the floor
+    const fwd = new V3(Math.sin(yaw), 0, Math.cos(yaw)), down = new V3(0, -1, 0), side = new V3().crossVectors(fwd, down);
+    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, fwd, down)); this.mesh.scale.copy(this.baseScale);
+    if (B.robe) B.robe.visible = false; for (const m of B.sleeves || []) m.visible = false;   // out of his robe: grey, naked, all bone and sinew
+    const sw = Math.sin(ph);
+    e(B.hips, 0, 0, sw * 6); e(B.spine, 8, sw * 5, -sw * 6); e(B.chest, 6, -sw * 4, sw * 5);
+    // the head: lifted to look ahead and down, jerking from place to place, lolling over
+    B.neck.rotation.set(-0.35 + tr * 0.15, tw * 0.5, tr * 0.3, 'YXZ');
+    B.head.rotation.set(-0.45 + tr * 0.25, tw * 0.9, tr * 0.9 + 0.25, 'YXZ');
+    e(B.jaw, go > 1.5 ? 30 : 4 + up(Math.sin(time * 1.3)) * 14, 0, 0);
+    // set him hanging under the rock: hips and shoulders about two-thirds of a leg's length below it
+    this.mesh.position.set(pos.x, roofY - 0.8, pos.z); this.mesh.updateMatrixWorld(true);
+    const hp = B.hips.getWorldPosition(new V3()), legL = B.thighR.getWorldPosition(new V3()).distanceTo(B.shinR.getWorldPosition(new V3())) + B.shinR.getWorldPosition(new V3()).distanceTo(B.footR.getWorldPosition(new V3()));
+    this.mesh.position.x += pos.x - hp.x; this.mesh.position.z += pos.z - hp.z; this.mesh.position.y += (roofY - legL * 0.36) - hp.y; this.mesh.updateMatrixWorld(true);
+    const ctr = B.chest.getWorldPosition(new V3());
+    // the gait: diagonal pairs move together (right hand with left foot); the moving hand or foot lifts off the rock
+    const limb = (u, l, end, k, phase, reachF, reachS, isArm) => {
+      const root = u.getWorldPosition(new V3()); const sg = Math.sign(root.clone().sub(ctr).dot(side)) || 1;
+      const st = Math.sin(ph + phase), lift = up(Math.cos(ph + phase)) * 0.22 * Math.min(1, go);
+      const T = root.clone().addScaledVector(fwd, reachF + st * 0.32 * Math.min(1, go)).addScaledVector(side, sg * reachS); T.y = roofY - lift;
+      const pole = side.clone().multiplyScalar(sg).addScaledVector(down, 0.9).addScaledVector(fwd, isArm ? -0.3 : 0.4);
+      ik2(u, l, end, T, pole);
+    };
+    limb(B.uArmR, B.fArmR, B.handR, 0, 0, 0.45, 0.75, true); limb(B.uArmL, B.fArmL, B.handL, 0, Math.PI, 0.45, 0.75, true);
+    limb(B.thighR, B.shinR, B.footR, 0, Math.PI, -0.3, 0.7, false); limb(B.thighL, B.shinL, B.footL, 0, 0, -0.3, 0.7, false);
+    e(B.handR, 40, 0, 0); e(B.handL, 40, 0, 0); e(B.footR, -30, 0, 0); e(B.footL, -30, 0, 0);
+    this.pos.copy(this.mesh.position);
+  }
 }
 
 // One Devil for the scares (Dread's 'turn round and He is there', Terror's figure on the road), shared, built and
@@ -198,7 +254,7 @@ export function phantomDevil(g) {
   if (D.mesh.parent !== g.scene) g.scene.add(D.mesh);
   return D;
 }
-export function releasePhantom(D, owner) { if (!D || (owner && D.owner && D.owner !== owner)) return; D.state = 'hidden'; D.mesh.visible = false; D.owner = null; }
+export function releasePhantom(D, owner) { if (!D || (owner && D.owner && D.owner !== owner)) return; D.mesh.rotation.set(0, D.yaw || 0, 0); if (D.baseScale) D.mesh.scale.copy(D.baseScale); if (D.B?.robe) D.B.robe.visible = true; for (const m of D.B?.sleeves || []) m.visible = true; D.state = 'hidden'; D.mesh.visible = false; D.owner = null; }
 
 // ================================================================ CREVICE EYES
 export class Crevices {

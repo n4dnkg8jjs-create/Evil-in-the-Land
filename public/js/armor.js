@@ -460,7 +460,7 @@ export function harnessMaterials(finish, quality, colors = {}) {
   const at = armorTextures(finish, size);
   const F = FINISHES[finish];
   const plate = new THREE.MeshStandardMaterial({
-    map: at.map, normalMap: at.normalMap, roughnessMap: at.roughnessMap, metalness: finish === 'rusted' ? 0.45 : 1, roughness: 1,
+    map: at.map, normalMap: at.normalMap, roughnessMap: at.roughnessMap, metalnessMap: at.metalnessMap, metalness: 1, roughness: 1,   // metal where bare, not where rusted or grimy
     normalScale: new THREE.Vector2(0.6, 0.6), side: THREE.DoubleSide, envMapIntensity: 1.0,
   });
   const gilt = F.gilt;
@@ -472,9 +472,9 @@ export function harnessMaterials(finish, quality, colors = {}) {
   const mail = new THREE.MeshStandardMaterial({ map: mt.map, normalMap: mt.normalMap, roughnessMap: mt.roughnessMap, metalness: 1, roughness: 1, side: THREE.DoubleSide });
   mail.map.repeat.set(4, 3); mail.normalMap.repeat.set(4, 3); mail.roughnessMap.repeat.set(4, 3);
   const ct = clothTextures(colors.cloth || [92, 22, 24], true, 512, 'doublet');
-  const cloth = new THREE.MeshStandardMaterial({ map: ct.map, normalMap: ct.normalMap, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
+  const cloth = new THREE.MeshStandardMaterial({ map: ct.map, normalMap: ct.normalMap, roughnessMap: ct.roughnessMap, roughness: 1, metalness: 0, side: THREE.DoubleSide });
   const lt = leatherTextures();
-  const leather = new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughness: 0.75, metalness: 0 });
+  const leather = new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughnessMap: lt.roughnessMap, roughness: 1, metalness: 0 });
   const dark = new THREE.MeshBasicMaterial({ color: 0x020202 });
   const plume = new THREE.MeshStandardMaterial({ color: new THREE.Color(...(colors.plume || [0.85, 0.82, 0.78])), map: featherTexture(256), alphaTest: 0.32, roughness: 0.85, side: THREE.DoubleSide });
   return { plate, trim, brass, mail, cloth, leather, dark, plume };

@@ -175,6 +175,39 @@ export class FX {
     }
     for (let i = 0; i < n * 0.7; i++) this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, vx: (R() - 0.5) * 5 + (dir?.x || 0) * 3, vy: R() * 4, vz: (R() - 0.5) * 5 + (dir?.z || 0) * 3, color: [1.0, 0.35, 0.08], size: 0.05 + R() * 0.05, life: 0.4 + R() * 0.5, drag: 2, grav: -6, cell: 1 });
   }
+  // blood thrown off a cut: a spray along the line of the blade and out of the wound, droplets that fall and
+  // spatter, flecks of torn flesh; black-red, the colour of what runs in them
+  blood(pos, cut, out, amount = 1, ground = null) {
+    const n = Math.round(22 * amount), cx = cut?.x || 0, cy = cut?.y || 0, cz = cut?.z || 0, ox = out?.x || 0, oy = out?.y || 0, oz = out?.z || 0;
+    for (let i = 0; i < n; i++) {
+      const along = 2.5 + R() * 4.5, outS = 0.8 + R() * 2.2;
+      this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * along + ox * outS + (R() - 0.5) * 1.2, vy: cy * along + oy * outS + 0.8 + R() * 2.2, vz: cz * along + oz * outS + (R() - 0.5) * 1.2,
+        color: [0.2 + R() * 0.08, 0.008, 0.01], a: 0.95, size: 0.035 + R() * 0.06, life: 0.55 + R() * 0.5, drag: 0.6, grav: -9.8, cell: 2, spin: 0, fadeIn: 0.01 });
+    }
+    // a fine red mist where the blade went through
+    for (let i = 0; i < 4 * amount; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 1.2 + (R() - 0.5), vy: R() * 0.6, vz: cz * 1.2 + (R() - 0.5), color: [0.16, 0.01, 0.01], a: 0.35, size: 0.2 + R() * 0.2, grow: 0.9, life: 0.5 + R() * 0.4, drag: 3, cell: 0 });
+    // flecks of flesh
+    for (let i = 0; i < 5 * amount; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 3 + ox * 2 + (R() - 0.5) * 2, vy: 1.5 + R() * 2.5, vz: cz * 3 + oz * 2 + (R() - 0.5) * 2, color: [0.08, 0.03, 0.03], a: 1, size: 0.05 + R() * 0.04, life: 0.8 + R() * 0.3, drag: 0.4, grav: -11, cell: 2, spin: 6, fadeIn: 0.01 });
+    // where it lands: a spatter on the ground ahead along the cut
+    if (ground) for (let k = 0; k < Math.ceil(2 * amount); k++) {
+      const d = 0.6 + R() * 1.8, x = pos.x + cx * d + ox * 0.6 + (R() - 0.5) * 0.6, z = pos.z + cz * d + oz * 0.6 + (R() - 0.5) * 0.6;
+      this.bloodPool(x, ground(x, z), z, 0.12 + R() * 0.25 * amount, 0.35 + R() * 0.4);
+    }
+  }
+  // a dark wet stain on the ground (it soaks in and fades after a while)
+  bloodPool(x, y, z, r = 0.3, delay = 0) {
+    if (!this.poolGeo) { this.poolGeo = new THREE.CircleGeometry(1, 14); const p = this.poolGeo.attributes.position; for (let i = 1; i < p.count; i++) { const a = Math.atan2(p.getY(i), p.getX(i)), k = 0.75 + 0.35 * Math.sin(a * 5 + i) * Math.sin(a * 3); p.setXY(i, p.getX(i) * k, p.getY(i) * k); } this.poolGeo.rotateX(-Math.PI / 2); }
+    if (!this.poolMat) this.poolMat = new THREE.MeshStandardMaterial({ color: 0x1c0204, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.92, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const pools = this.pools || (this.pools = []);
+    if (pools.length > 70) { const old = pools.shift(); this.scene.remove(old.m); old.m.material.dispose(); }
+    const m = new THREE.Mesh(this.poolGeo, this.poolMat.clone()); m.position.set(x, y + 0.02, z); m.rotation.y = R() * 6.28; m.scale.setScalar(0.001); m.renderOrder = 1; this.scene.add(m);
+    pools.push({ m, r, t: -delay, life: 40 + R() * 20 });
+  }
+  // a severed part: thrown off, tumbling, bleeding from the stump, coming to rest on the ground
+  gib(mesh, vel, spin, ground, bleed = 1.6) {
+    this.scene.add(mesh); (this.gibs || (this.gibs = [])).push({ m: mesh, v: vel.clone(), w: spin.clone(), ground, t: 0, bleed, rest: false });
+    if (this.gibs.length > 24) { const g = this.gibs.shift(); this.scene.remove(g.m); }
+  }
   sparks(pos, n = 14, color = [1, 0.8, 0.45]) {
     for (let i = 0; i < n; i++) this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, vx: (R() - 0.5) * 9, vy: R() * 6, vz: (R() - 0.5) * 9, color, size: 0.06 + R() * 0.04, life: 0.25 + R() * 0.35, drag: 1.5, grav: -12, cell: 2, spin: 0 });
     this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, color: [1, 0.85, 0.6], size: 0.9, life: 0.12, cell: 1, fadeIn: 0.01 });
@@ -257,6 +290,24 @@ export class FX {
       const m = this.rings[i]; m.userData.t += dt; const t = m.userData.t / m.userData.dur;
       m.scale.setScalar(0.2 + t * m.userData.maxR); m.material.opacity = (1 - t) * 0.8;
       if (t >= 1) { this.scene.remove(m); m.material.dispose(); this.rings.splice(i, 1); }
+    }
+    if (this.pools) for (let i = this.pools.length - 1; i >= 0; i--) {
+      const P = this.pools[i]; P.t += dt; if (P.t < 0) continue;
+      P.m.scale.setScalar(Math.max(0.001, P.r * Math.min(1, P.t / 0.6)));   // spreading as it lands
+      P.m.material.opacity = 0.92 * (1 - smoothT(clamp((P.t - P.life) / 8, 0, 1)));
+      if (P.t > P.life + 8) { this.scene.remove(P.m); P.m.material.dispose(); this.pools.splice(i, 1); }
+    }
+    if (this.gibs) for (let i = this.gibs.length - 1; i >= 0; i--) {
+      const G = this.gibs[i], m = G.m; G.t += dt;
+      if (!G.rest) {
+        G.v.y -= 9.8 * dt; m.position.addScaledVector(G.v, dt);
+        m.rotation.x += G.w.x * dt; m.rotation.y += G.w.y * dt; m.rotation.z += G.w.z * dt;
+        const gy = G.ground ? G.ground(m.position.x, m.position.z) + 0.05 : 0.05;
+        if (m.position.y < gy) { m.position.y = gy; if (Math.abs(G.v.y) > 1.5) { G.v.y *= -0.25; G.v.x *= 0.5; G.v.z *= 0.5; G.w.multiplyScalar(0.5); this.bloodPool(m.position.x, gy, m.position.z, 0.2 + R() * 0.2); } else { G.rest = true; this.bloodPool(m.position.x, gy, m.position.z, 0.35 + R() * 0.25, 0.3); } }
+      }
+      // the stump bleeds for a while
+      if (G.t < G.bleed && R() < dt * 30) this.smoke.emit({ x: m.position.x, y: m.position.y, z: m.position.z, vx: (R() - 0.5) * 0.8, vy: 0.5 + R(), vz: (R() - 0.5) * 0.8, color: [0.2, 0.01, 0.01], a: 0.9, size: 0.04 + R() * 0.03, life: 0.5, drag: 0.5, grav: -9.8, cell: 2, fadeIn: 0.01 });
+      if (G.t > 18) { const k = clamp((G.t - 18) / 3, 0, 1); m.position.y -= dt * 0.08; if (k >= 1) { this.scene.remove(m); this.gibs.splice(i, 1); } }
     }
     for (let i = this.beams.length - 1; i >= 0; i--) {
       const m = this.beams[i]; m.userData.t += dt; const t = m.userData.t / m.userData.dur;

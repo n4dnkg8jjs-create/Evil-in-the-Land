@@ -73,7 +73,7 @@ function lathe(profile, segs, shape) {
 }
 function clothMat(rgb, key) {
   const t = clothTextures(rgb, false, 256, key);
-  return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughness: 0.95, side: THREE.DoubleSide });
+  return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1, side: THREE.DoubleSide });
 }
 // a robe from the shoulders: pleated, longer behind, open below for a seated figure if asked
 function robe(rig, mat, { length = 1.25, flare = 0.36, seated = false } = {}) {
@@ -121,15 +121,16 @@ let EYE_TEX = null;
 function personMat(look) {
   if (!EYE_TEX) { EYE_TEX = new THREE.TextureLoader().load('models/eye.png'); EYE_TEX.colorSpace = THREE.SRGBColorSpace; }
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 });
-  const U = { uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
+  const U = { uFrozen: { value: look.frozen || 0 }, uDead: { value: look.dead || 0 }, uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float region;\nattribute float hairAmt;\nflat varying float vReg;\nvarying float vHair;\nvarying vec2 vUv0;\nvarying vec3 vObj;')
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvReg = region; vHair = hairAmt; vUv0 = uv; vObj = position;');
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float region;\nattribute float hairAmt;\nflat varying float vReg;\nvarying float vHair;\nvarying vec2 vUv0;\nvarying vec3 vObj;\nvarying vec3 vWN;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvReg = region; vHair = hairAmt; vUv0 = uv; vObj = position;')
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvWN = normalize(mat3(modelMatrix) * objectNormal);');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        flat varying float vReg; varying float vHair; varying vec2 vUv0; varying vec3 vObj;
-        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge;
+        flat varying float vReg; varying float vHair; varying vec2 vUv0; varying vec3 vObj; varying vec3 vWN;
+        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge, uFrozen, uDead;
         float ph(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
         float pn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(ph(i), ph(i+vec3(1,0,0)), f.x), mix(ph(i+vec3(0,1,0)), ph(i+vec3(1,1,0)), f.x), f.y),
@@ -174,7 +175,21 @@ function personMat(look) {
         vec3 cloth = uCloth * (0.75 + 0.35 * pn(vObj * vec3(160.0, 40.0, 160.0)));
         vec3 shoe = uShoe * (0.8 + 0.4 * pn(vObj * 60.0));
         vec3 eye = texture2D(uEye, vUv0).rgb;
-        diffuseColor.rgb = skin * rS + hair * rH + shoe * rShoe + eye * rE + cloth * rC;`)
+        eye = mix(eye, vec3(0.78, 0.8, 0.74) * (0.85 + 0.25 * dot(eye, vec3(0.3, 0.6, 0.1))), uDead * 0.85);   // dead: clouded over, milky
+        // frozen dead: the flesh grey-blue and waxen, lips and nail-beds dark, rime and ice on every face that the snow
+        // fell on, glittering
+        float fz = uFrozen;
+        // dead: grey, waxen, the veins showing dark through it
+        skin = mix(skin, uSkin * (0.7 + 0.4 * blot) * (1.0 - 0.3 * smoothstep(0.62, 0.7, pn(vObj * vec3(30.0, 90.0, 30.0)))), uDead);
+        skin = mix(skin, vec3(0.5, 0.56, 0.62) * (0.75 + 0.35 * blot) + vec3(0.06, 0.0, 0.03) * pn(vObj * 20.0), fz * 0.9);
+        hair = mix(hair, vec3(0.75, 0.78, 0.82) * (0.7 + 0.5 * strand), fz * 0.6);
+        shoe = mix(shoe, skin * 0.8, uDead); cloth = mix(cloth, skin * 0.95, uDead);
+        vec3 col0 = skin * rS + hair * rH + shoe * rShoe + eye * rE + cloth * rC;
+        float rime = fz * smoothstep(0.25, 0.75, normalize(vWN).y + (pn(vObj * 45.0) - 0.5) * 0.5);
+        float glint = fz * step(0.975, ph(floor(vObj * 260.0))) * rime;
+        col0 = mix(col0, vec3(0.86, 0.9, 0.95), rime * 0.8) + glint * 0.6;
+        col0 = mix(col0, col0 * vec3(0.8, 0.9, 1.05), fz * 0.4);
+        diffuseColor.rgb = col0;`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         if (uAge > 0.0 && rS > 0.5) {
           float hw = wrinkle(vObj) * uAge;
@@ -183,12 +198,12 @@ function personMat(look) {
           vec3 grad = sign(det) * (dFdx(hw) * R1 + dFdy(hw) * R2) * 0.55;
           normal = normalize(abs(det) * normal + grad);
         }`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = 0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS;')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS, 0.28, uFrozen * 0.7);')
       // light through the skin: a warm wrap where it turns from the light
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-        reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02);`);
+        reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02) * (1.0 - uFrozen);`);
   };
-  mat.customProgramCacheKey = () => 'personSkin-v2';
+  mat.customProgramCacheKey = () => 'personSkin-v4';
   return mat;
 }
 function personMesh(rig, P, look) {
@@ -203,6 +218,19 @@ function personMesh(rig, P, look) {
   return mesh;
 }
 
+// a bare MakeHuman body on its own rig (for the Devil, who wears his own garb over it)
+export function humanBody(look, variant = 'priest') {
+  const P = PEOPLE?.[variant]; if (!P) return null;
+  const rig = new Rig(1), mesh = personMesh(rig, P, { ...look, eyes: P.eyes });
+  return { rig, mesh, P };
+}
+// the extent of the skinned head in the head bone's frame (for fitting a hood over it)
+export function headBox(mesh) {
+  const hi = JOINTS.indexOf('head'), inv = mesh.skeleton.boneInverses[hi], g = mesh.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight;
+  const box = new THREE.Box3(), v = new THREE.Vector3();
+  for (let i = 0; i < P.count; i++) if (SI.getX(i) === hi && SW.getX(i) > 0.8) box.expandByPoint(v.fromBufferAttribute(P, i).applyMatrix4(inv));
+  return box;
+}
 // standing: turn each foot so its sole lies flat (heel and toe level), and report how far the soles sit above or
 // below the root, so he can be stood exactly on the ground
 function levelFeet(mesh, rig) {
@@ -398,4 +426,64 @@ export function makePerson(kind, quality) {
   };
   rig.root.traverse((o) => { if (o.isMesh) o.receiveShadow = true; });
   return { rig, root: rig.root, hipsY: rig.j.hips.position.y, groundOffset, kind, cloths, update, bless, walkTo, sit, get busy() { return !!act; }, dispose: () => cloths.forEach((c) => c.dispose()) };
+}
+
+
+// ---------------------------------------------------------------- the frozen dead
+// One of the Emperor's men, frozen where he stopped: a whole body (MakeHuman, like the living), grey-blue and
+// rimed with ice, in a stiff frozen doublet and cloak and a morion helmet, posed as he died: sitting hunched with
+// his arms round his knees, curled on his side, kneeling with his head bowed, or slumped back against the rock.
+function frostMat(color, rough = 0.85, metal = 0) {
+  const m = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, side: THREE.DoubleSide });
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vFN; varying vec3 vFP;').replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvFN = normalize(mat3(modelMatrix) * objectNormal);').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vFN; varying vec3 vFP;\nfloat fh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }')
+      .replace('#include <map_fragment>', '#include <map_fragment>\nfloat rime = smoothstep(0.2, 0.75, normalize(vFN).y + (fh(floor(vFP * 18.0)) - 0.5) * 0.35);\ndiffuseColor.rgb = mix(diffuseColor.rgb * 0.8, vec3(0.86, 0.9, 0.95), rime * 0.85) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.5;')
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, rime);');
+  };
+  m.customProgramCacheKey = () => 'frost' + metal;
+  return m;
+}
+export function makeFrozen(pose = 'sit', seed = 0) {
+  const kind = seed % 2 ? 'sutler' : 'priest', P = PEOPLE?.[kind];
+  if (!P) return null;
+  const rig = new Rig(1), J = rig.j;
+  const body = personMesh(rig, P, { skin: 0x9aa0a6, hair: 0x2a2420, cloth: 0x4a1a14, eyes: P.eyes, frozen: 1 });
+  const doublet = frostMat(seed % 3 === 0 ? 0x5a1a14 : seed % 3 === 1 ? 0x2a2a30 : 0x4a3a20), iron = frostMat(0x4a4642, 0.55, 0.7);
+  // the doublet, puffed sleeves, a cloak frozen stiff about the shoulders
+  J.chest.add(new THREE.Mesh(lathe([[0.08, 0.2], [0.18, 0.165], [0.22, 0.07], [0.205, -0.12], [0.19, -0.3], [0.2, -0.44]], 28, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.sin(a * 10) * 0.02); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.012; }), doublet));
+  for (const k of ['R', 'L']) { J['uArm' + k].add(new THREE.Mesh(lathe([[0.075, 0.03], [0.095, -0.12], [0.08, -0.3]], 14, () => {}), doublet)); J['fArm' + k].add(new THREE.Mesh(lathe([[0.07, 0.02], [0.065, -0.2]], 12, () => {}), doublet)); }
+  for (const k of ['R', 'L']) J['thigh' + k].add(new THREE.Mesh(lathe([[0.1, 0.05], [0.11, -0.2], [0.085, -0.42]], 14, () => {}), doublet));
+  const cloak = new THREE.Mesh(lathe([[0.12, 0.2], [0.24, 0.12], [0.32, -0.25], [0.36, -0.7]], 24, (v, a) => { if (Math.cos(a) > 0.55) { v.x *= 0.2; v.z *= 0.2; } const r = Math.hypot(v.x, v.z) * (1 + Math.sin(a * 7 + v.y * 4) * 0.05); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.85 - 0.03; }), frostMat(0x2a2622, 0.9));
+  J.chest.add(cloak);
+  // the morion: crest, brim turned up fore and aft
+  const mor = new THREE.Mesh(lathe([[0, 0.14], [0.06, 0.135], [0.1, 0.1], [0.115, 0.04], [0.12, 0.0], [0.2, -0.01], [0.21, 0.01]], 22, (v, a) => { if (Math.hypot(v.x, v.z) > 0.13) v.y += Math.cos(a) ** 2 * 0.06; v.z *= 1.3; }), iron);
+  const crest = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.012, 20, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).rotateY(Math.PI / 2).translate(0, 0.11, 0), iron); mor.add(crest);
+  seatOnCrown(mor, body, rig, 0.06); J.head.add(mor);
+  const e = (j, x, y, z) => J[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
+  const lr = (fn) => { fn('R', -1); fn('L', 1); };
+  if (pose === 'sit') {   // hunched on the ground, knees up, arms round them, head down on them
+    e('spine', 35, 0, 0); e('chest', 25, 0, 0); e('neck', 30, 0, 0); e('head', 25, 0, 0);
+    lr((k, s) => { e('thigh' + k, -115, 0, s * 8); e('shin' + k, 135, 0, 0); e('foot' + k, -20, 0, 0); e('uArm' + k, -60, 0, s * 18); e('fArm' + k, -85, -s * 50, 0); e('hand' + k, 0, 0, 0); });
+    J.hips.position.y = rig.basePos.y - 0.72;
+  } else if (pose === 'kneel') {   // on his knees, head bowed, hands together
+    e('spine', 10, 0, 0); e('chest', 12, 0, 0); e('neck', 30, 0, 0); e('head', 20, 0, 0);
+    lr((k, s) => { e('thigh' + k, -8, 0, s * 6); e('shin' + k, 110, 0, 0); e('foot' + k, 40, 0, 0); e('uArm' + k, -25, 0, s * 6); e('fArm' + k, -95, -s * 35, 0); });
+    J.hips.position.y = rig.basePos.y - 0.42;
+  } else if (pose === 'slump') {   // sat back against the rock, legs out, head fallen sideways
+    e('spine', -12, 0, 0); e('chest', -6, 0, 0); e('neck', 10, 0, 22); e('head', 15, 20, 18);
+    lr((k, s) => { e('thigh' + k, -88, s * 8, s * 10); e('shin' + k, 12, 0, 0); e('foot' + k, -10, 0, 0); e('uArm' + k, 8, 0, s * 12); e('fArm' + k, -25, 0, 0); });
+    J.hips.position.y = rig.basePos.y - 0.86;
+  } else {   // curled on his side
+    rig.root.rotation.z = Math.PI / 2 * 0.98;
+    e('spine', 30, 0, 0); e('chest', 25, 0, 0); e('neck', 25, 0, 0); e('head', 30, 0, 0);
+    lr((k, s) => { e('thigh' + k, -80, 0, s * 4); e('shin' + k, 100, 0, 0); e('uArm' + k, -70, 0, s * 10); e('fArm' + k, -100, -s * 40, 0); });
+  }
+  // stand him on the ground: the lowest point of the posed body sits at the root's height
+  const wrap = new THREE.Group(); wrap.add(rig.root); wrap.updateMatrixWorld(true);
+  const v = new THREE.Vector3(); let low = 1e9; const n = body.geometry.attributes.position.count;
+  for (let i = 0; i < n; i += 9) { body.getVertexPosition(i, v); v.applyMatrix4(body.matrixWorld); if (v.y < low) low = v.y; }
+  rig.root.position.y -= low - 0.02;
+  wrap.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return { root: wrap, rig, head: J.head };
 }

@@ -4,9 +4,12 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { icoSmooth } from './demons.js';
 import { CHAPTERS, HEALED } from './chapters.js';
-import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture, cloudTexture } from './textures.js';
+import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture, cloudTexture, plasterTextures, thatchTextures, roofTextures, leadedGlassTextures } from './textures.js';
 import { rng, makeNoise, pathSampler, clamp, lerp, smooth, SpatialHash, TAU } from './util.js';
 import { Vista } from './vista.js';
+import { WX, WATER_U } from './weather.js';
+import { makeFlame } from './flame.js';
+import { makeFrozen } from './people.js';
 import { buildFallen } from './battlefield.js';
 
 const HALF = 150, N = 257, CELL = (HALF * 2) / (N - 1);
@@ -21,6 +24,38 @@ function xf(g, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) {
 }
 function clean(g) { for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n); if (!g.attributes.normal) g.computeVertexNormals(); if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2)); if (!g.index) { const a = []; for (let i = 0; i < g.attributes.position.count; i++) a.push(i); g.setIndex(a); } return g; }
 function merge(list) { return mergeGeometries(list.map(clean)); }
+// texture coordinates in metres (box projection on the face's own axis), so a texture keeps its true scale on a
+// beam, a wall or a gable whatever the size of the box it is painted on
+function boxUV(g, tile) {
+  const P = g.attributes.position, N = g.attributes.normal; let uv = g.attributes.uv;
+  if (!uv) { uv = new THREE.Float32BufferAttribute(new Float32Array(P.count * 2), 2); g.setAttribute('uv', uv); }
+  for (let i = 0; i < P.count; i++) {
+    const nx = Math.abs(N.getX(i)), ny = Math.abs(N.getY(i)), nz = Math.abs(N.getZ(i)), x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+    if (ny >= nx && ny >= nz) uv.setXY(i, x / tile, z / tile); else if (nx >= nz) uv.setXY(i, z / tile, y / tile); else uv.setXY(i, x / tile, y / tile);
+  }
+  uv.needsUpdate = true; return g;
+}
+// a building material from a texture set, weathered: dirt and green damp rising up the first metre of wall, and
+// moss on whatever faces the sky low down (gravestones, plinths, sills)
+function buildingMat(t, opts = {}) {
+  const m = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, aoMap: t.aoMap || null, roughness: 1, metalness: 0, side: opts.side || THREE.FrontSide, color: opts.color ?? 0xffffff });
+  if (opts.normalScale) m.normalScale.set(opts.normalScale, opts.normalScale);
+  if (opts.weather !== false) {
+    m.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vOP; varying vec3 vON;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvOP = position; vON = normal;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vOP; varying vec3 vON;\nfloat wh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }\nfloat wn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(mix(wh(i), wh(i+vec3(1,0,0)), f.x), mix(wh(i+vec3(0,1,0)), wh(i+vec3(1,1,0)), f.x), f.y), mix(mix(wh(i+vec3(0,0,1)), wh(i+vec3(1,0,1)), f.x), mix(wh(i+vec3(0,1,1)), wh(i+vec3(1,1,1)), f.x), f.y), f.z); }')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          float wnz = wn(vOP * 2.3) * 0.6 + wn(vOP * 7.0) * 0.4;
+          float damp = (1.0 - smoothstep(${(opts.dampTop ?? 0.9).toFixed(2)}, ${(opts.dampTop ?? 0.9).toFixed(2)} + 0.6, vOP.y + wnz * 0.4)) * ${(opts.damp ?? 0.55).toFixed(2)};
+          float moss = smoothstep(0.55, 0.9, normalize(vON).y) * smoothstep(0.45, 0.75, wnz) * ${(opts.moss ?? 0.5).toFixed(2)} + damp * smoothstep(0.5, 0.8, wnz) * 0.5;
+          diffuseColor.rgb *= 1.0 - damp * 0.45;
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.12, 0.16, 0.06) * (0.7 + wnz * 0.6), clamp(moss, 0.0, 0.85));`)
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor + moss * 0.2 - damp * 0.1, 0.05, 1.0);');
+    };
+    m.customProgramCacheKey = () => 'bld' + (opts.key || '') + (opts.moss ?? 0.5) + (opts.damp ?? 0.55) + (opts.dampTop ?? 0.9);
+  }
+  return m;
+}
 function uvScale(g, su, sv) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv); return g; }
 function lumpy(g, amt, seed) { // perturb a rock along its normals
   const n = makeNoise(seed); const p = g.attributes.position; const v = new THREE.Vector3();
@@ -116,13 +151,16 @@ export class World {
     if (kind === 'mountain') {
       // near the top the way goes into the mountain: a cave through a shoulder of rock (see cave.js)
       this.ledge = null; this.crevasse = null;
-      this.cave = { t0: 0.655, t1: 0.80, R: 3.3, W: 5.4, e: 0.016 };   // e: how far the rock (and the tunnel) runs out past each mouth
+      this.cave = { t0: 0.655, t1: 0.80, R: 3.6, W: 9.6, e: 0.016 };
+      // side passages off the main cave, running into the black: where along it, which side (of the path's left normal), how long, how deep
+      { const C = this.cave, sp = C.t1 - C.t0; C.passages = [{ t: C.t0 + sp * 0.24, side: 1, len: sp * 0.035, depth: 6 }, { t: C.t0 + sp * 0.5, side: -1, len: sp * 0.04, depth: 8 }, { t: C.t0 + sp * 0.77, side: 1, len: sp * 0.03, depth: 7 }]; }   // e: how far the rock (and the tunnel) runs out past each mouth
     }
     // altars along the path
     const n = this.ch.altars; this.altarT = [];
     if (kind === 'peak') {
       for (let i = 0; i < n; i++) { const a = -PI / 2 + (i / n) * TAU + PI / n; this.altarT.push({ x: Math.cos(a) * 22, z: Math.sin(a) * 22 }); }
-    } else for (let i = 0; i < n; i++) { const t = lerp(0.14, 0.86, n === 1 ? 0.5 : i / (n - 1)); this.altarT.push({ t, ...this.path.at(t) }); }
+    } else if (this.ch.terrain.kind === 'mountain' && n === 4) { for (const t of [0.12, 0.34, 0.55, 0.9]) this.altarT.push({ t, ...this.path.at(t) }); }   // clear of the cave and its rock
+    else for (let i = 0; i < n; i++) { const t = lerp(0.14, 0.86, n === 1 ? 0.5 : i / (n - 1)); this.altarT.push({ t, ...this.path.at(t) }); }
     // Devil vantage hills, off to the side of the road
     this.devilSpots = [];
     const w = this.ch.devil?.watch || 0;
@@ -216,9 +254,15 @@ export class World {
     // broken by spurs, gullies and outcrops (where the noise is steep the rock shows); above, the snowfields.
     const y = this.lidHeight(x, z, nr, ph, h);
     const C = this.cave;
-    if (C && nr.t > C.t0 - C.e - 0.002 && nr.t < C.t1 + C.e + 0.002 && nr.d < C.W) return ph + this.noise.fbm(x * 0.35, z * 0.35, 2) * 0.1;   // the cave floor
+    if (C && nr.t > C.t0 - C.e - 0.002 && nr.t < C.t1 + C.e + 0.002 && nr.d < this.caveWidthAt(nr.t, this.pathSide(x, z, nr.t))) return ph + this.noise.fbm(x * 0.35, z * 0.35, 2) * 0.1;   // the cave floor
     return y;
   }
+  // which side of the path a point lies: +1 on the side of the path's left normal (-tz, tx), -1 on the other
+  pathSide(x, z, t) { const p = this.path.at(t), a = this.path.at(Math.max(0, t - 0.003)), b = this.path.at(Math.min(1, t + 0.003)); return ((x - p.x) * -(b.z - a.z) + (z - p.z) * (b.x - a.x)) >= 0 ? 1 : -1; }
+  // how far the side passages carry the cave out from the path, beyond its own width (0 away from them)
+  passageAt(t, side) { let e = 0; for (const P of this.cave?.passages || []) { if (P.side !== side) continue; const u = (t - P.t) / P.len; if (Math.abs(u) < 1) e = Math.max(e, P.depth * Math.pow(1 - u * u, 1.5)); } return e; }
+  // half-width of the trench the cave is cut in, on one side
+  caveWidthAt(t, side) { return this.cave.W + this.passageAt(t, side) * 1.15; }
   // the mountain's surface before the cave is cut under it (the cave's roof is built from this)
   lidHeight(x, z, nr, ph, h) {
     const n = this.noise, t = nr.t;
@@ -237,7 +281,7 @@ export class World {
     }
     return y;
   }
-  inCaveZone(x, z, pad = 2) { const C = this.cave; if (!C) return false; const nr = this.path.nearest(x, z); return nr.t > C.t0 - C.e - 0.01 && nr.t < C.t1 + C.e + 0.01 && nr.d < C.W + pad; }
+  inCaveZone(x, z, pad = 2) { const C = this.cave; if (!C) return false; const nr = this.path.nearest(x, z); return nr.t > C.t0 - C.e - 0.01 && nr.t < C.t1 + C.e + 0.01 && nr.d < this.caveWidthAt(nr.t, this.pathSide(x, z, nr.t)) + pad; }
   // ---------------------------------------------------------------- settlement
   // Farms and the village are laid out on purpose: houses front the road at a set-back, turned to face it, with
   // yards behind; a farmstead is a house and a barn round a yard beside a fenced field; each building stands on
@@ -460,6 +504,7 @@ export class World {
       uWater: { value: T.water !== undefined ? 0.0 : -9999 }, uEmber: { value: this.ch.id === 'peak' ? 0.5 : this.ch.id === 'field' ? 1.6 : 0.9 }, uNStr: { value: 1.0 }, uRockAll: { value: T.kind === 'peak' ? 0.35 : 0 }, uFlatSnow: { value: T.kind === 'peak' || T.kind === 'mountain' ? 1 : 0 }, uSnowFrom: { value: T.kind === 'mountain' ? 10 : -1e4 }, uStrata: { value: T.kind === 'mountain' ? 1 : 0 },
       uDeadTint: { value: new THREE.Color(T.kind === 'fen' ? 0x8a8a78 : T.kind === 'mountain' || T.kind === 'peak' ? 0x9a9090 : 0xffffff) },
       uAliveTint: { value: new THREE.Color(T.kind === 'mountain' ? 0x9aa080 : 0xffffff) },
+      uWet: WX.uWet, uRainA: WX.uRain, uWTime: WX.uWTime, uSnowAcc: WX.uSnowAcc,
     };
     this.terrainUniforms = uniforms;
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
@@ -470,7 +515,23 @@ export class World {
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
         varying vec3 vWPos; varying vec3 vWNorm;
         uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask;
-        uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow, uSnowFrom, uStrata; uniform vec3 uDeadTint, uAliveTint;`)
+        uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow, uSnowFrom, uStrata; uniform vec3 uDeadTint, uAliveTint;
+        uniform float uWet, uRainA, uWTime, uSnowAcc;
+        float wxh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float wxn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(wxh(i), wxh(i + vec2(1, 0)), f.x), mix(wxh(i + vec2(0, 1)), wxh(i + vec2(1, 1)), f.x), f.y); }
+        // rain rings: in each cell a drop lands now and then and a ring runs out from it; returns the slope of the ripples
+        vec2 wxRipples(vec2 p, float t){
+          vec2 g = vec2(0.0); vec2 c0 = floor(p);
+          for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+            vec2 c = c0 + vec2(float(i), float(j)); float r0 = wxh(c);
+            float ph = t * (0.8 + r0 * 0.6) + r0 * 7.0, n = floor(ph), f = fract(ph);
+            vec2 ctr = c + vec2(wxh(c + n * 1.7), wxh(c + n * 3.1 + 5.0));
+            vec2 d = p - ctr; float L = length(d) + 1e-4, R = f * 0.9;
+            float q = (L - R) * 9.0; float w = sin((L - R) * 34.0) * exp(-q * q) * (1.0 - f) * (1.0 - f);
+            g += d / L * w;
+          }
+          return g;
+        }`)
         .replace('#include <map_fragment>', `
         vec2 wuv = vWPos.xz * uTile;
         vec2 muv = vWPos.xz / uSize + 0.5;
@@ -493,18 +554,31 @@ export class World {
         float snow = smoothstep(uSnowLine, uSnowLine + 10.0, vWPos.y + rock.a * 5.0) * (1.0 - rockMix * 0.5);
         // on the summit the snow lies on everything flat enough to hold it, thin and wind-scoured, rock showing through
         snow = max(snow, uFlatSnow * smoothstep(0.62, 0.86, vWNorm.y + (rock.a - 0.5) * 0.3 + (dead2.a - 0.5) * 0.15) * smoothstep(uSnowFrom, uSnowFrom + 70.0, vWPos.y + (rock.a - 0.5) * 16.0));
+        // fresh snow settling on the flats while it falls
+        snow = max(snow, uSnowAcc * smoothstep(0.8, 0.95, vWNorm.y) * smoothstep(0.3, 0.6, wxn(vWPos.xz * 0.4) * 0.6 + dead.a * 0.4 + uSnowAcc * 0.3));
         tcol = mix(tcol, texture2D(tSnow, wuv).rgb, snow);
+        // rain: the ground darkens and goes glossy, and water stands in its hollows (low ground, flat, by the noise)
+        float wetK = uWet * (1.0 - snow);
+        float pn = wxn(vWPos.xz * 0.09) * 0.6 + wxn(vWPos.xz * 0.31 + 3.0) * 0.3 + (1.0 - dead2.a) * 0.1;
+        float puddle = smoothstep(0.66 - uWet * 0.14, 0.7 - uWet * 0.14, pn) * smoothstep(0.94, 0.985, vWNorm.y) * smoothstep(0.3, 0.7, uWet) * (1.0 - snow) * (1.0 - rockMix);
+        tcol *= 1.0 - 0.4 * wetK;
+        tcol = mix(tcol, tcol * 0.3 + vec3(0.008, 0.01, 0.012), puddle);
         float wet = 1.0 - smoothstep(uWater - 0.2, uWater + 0.7, vWPos.y);
         tcol *= mix(1.0, 0.5, wet);
         diffuseColor.rgb = tcol;
         float ember = (1.0 - aliveMix) * (1.0 - rockMix) * (1.0 - snow) * (1.0 - uFlatSnow) * smoothstep(0.06, 0.16, (dead.r - dead.g) * 2.0);
         `)
-        .replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(mix(0.95, 0.82, aliveMix), 0.78, rockMix); roughnessFactor = mix(roughnessFactor, 0.2, wet); roughnessFactor = mix(roughnessFactor, 0.55, snow);`)
+        .replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(mix(0.95, 0.82, aliveMix), 0.78, rockMix); roughnessFactor = mix(roughnessFactor, 0.2, wet); roughnessFactor = mix(roughnessFactor, 0.55, snow); roughnessFactor = mix(roughnessFactor, 0.32, wetK * 0.9); roughnessFactor = mix(roughnessFactor, 0.02, puddle);`)
         .replace('#include <normal_fragment_maps>', `
           vec3 nd = texture2D(tDeadN, wuv).xyz * 2.0 - 1.0, na = texture2D(tAliveN, wuv).xyz * 2.0 - 1.0, nr = texture2D(tRockN, vWPos.xz * uTile * 0.5).xyz * 2.0 - 1.0;
           vec3 tnm = normalize(mix(mix(nd, na, aliveMix), nr, rockMix));
           vec3 Nw = normalize(vWNorm); vec3 Tw = normalize(vec3(1.0, 0.0, 0.0) - Nw * Nw.x); vec3 Bw = normalize(cross(Nw, Tw));
           vec3 nw = normalize(Tw * tnm.x * uNStr - Bw * tnm.y * uNStr + Nw * max(tnm.z, 0.2));
+          // puddles lie flat as glass, ringed by the rain; wet ground takes the splashes too
+          if (wetK > 0.01) {
+            vec2 rg = uRainA > 0.01 ? wxRipples(vWPos.xz * 1.6, uWTime) : vec2(0.0);
+            nw = normalize(mix(nw, Nw, puddle * 0.9) + vec3(rg.x, 0.0, rg.y) * uRainA * (0.35 * puddle + 0.08 * wetK));
+          }
           normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);`)
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.3, 0.06) * ember * uEmber * 0.6;');
     };
@@ -666,7 +740,7 @@ export class World {
       // stay in the ravine
       const nr = this.path.nearest(p.x, p.z);
       // along the ledge, the outer edge is the edge of the world
-      let lim = 13; const L = this.ledge; const CV = this.cave; if (CV && nr.t > CV.t0 - CV.e && nr.t < CV.t1 + CV.e) lim = CV.R - 0.9;
+      let lim = 13; const L = this.ledge; const CV = this.cave; if (CV && nr.t > CV.t0 - CV.e && nr.t < CV.t1 + CV.e) lim = this.caveHalf ? this.caveHalf(nr.t, this.pathSide(p.x, p.z, nr.t)) : CV.R - 0.9;
       if (L && nr.t > L.t0 && nr.t < L.t1) { const a = this.path.at(nr.t), b = this.path.at(Math.min(1, nr.t + 0.004)); const side = Math.sign((p.x - a.x) * -(b.z - a.z) + (p.z - a.z) * (b.x - a.x)); if (side === L.side) lim = 3.0; }
       if (nr.d > lim) { const q = this.path.at(nr.t); const k = lim / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
       // the crevasse: only the bridge crosses it
@@ -761,11 +835,11 @@ export class World {
   buildProps() {
     const P = this.ch.props, r = this.r, kind = this.ch.terrain.kind;
     const bark = barkTextures(); const st = stoneTextures(512, false), stB = stoneTextures(512, true);
-    const barkMat = new THREE.MeshStandardMaterial({ map: bark.map, normalMap: bark.normalMap, roughness: 0.95 });
-    const stoneMat = new THREE.MeshStandardMaterial({ map: st.map, normalMap: st.normalMap, roughness: 0.9 });
-    const brickMat = new THREE.MeshStandardMaterial({ map: stB.map, normalMap: stB.normalMap, roughness: 0.9 });
+    const barkMat = new THREE.MeshStandardMaterial({ map: bark.map, normalMap: bark.normalMap, roughnessMap: bark.roughnessMap, roughness: 1 });
+    const stoneMat = new THREE.MeshStandardMaterial({ map: st.map, normalMap: st.normalMap, roughnessMap: st.roughnessMap, roughness: 1 });
+    const brickMat = new THREE.MeshStandardMaterial({ map: stB.map, normalMap: stB.normalMap, roughnessMap: stB.roughnessMap, roughness: 1 });
     const wd = woodTextures(256, [70, 50, 34]); const charred = woodTextures(256, [26, 20, 18]);
-    const woodMat = new THREE.MeshStandardMaterial({ map: wd.map, normalMap: wd.normalMap, roughness: 0.85 });
+    const woodMat = new THREE.MeshStandardMaterial({ map: wd.map, normalMap: wd.normalMap, roughnessMap: wd.roughnessMap, roughness: 1 });
     const charMat = new THREE.MeshStandardMaterial({ map: charred.map, normalMap: charred.normalMap, roughness: 0.95, emissive: 0x200800, emissiveIntensity: 0.3 });
     this.mats = { barkMat, stoneMat, brickMat, woodMat, charMat };
 
@@ -837,7 +911,9 @@ export class World {
         if (!this.okSpot(x, z, 3, 9) || this.normalAt(x, z).y < 0.94) continue;   // a churchyard is level ground, never a hillside
         list.push({ x, y: this.heightAt(x, z) - 0.15, z, ry: r.range(-0.2, 0.2), rx: r.range(-0.15, 0.15), rz: r.range(-0.15, 0.15), s: r.range(0.85, 1.15) });
       }
-      this.instanced(gs, stoneMat, list);
+      // old headstones: lichened, green with moss on their tops and shoulders, dark with damp at the foot
+      const graveMat = this.graveMat || (this.graveMat = buildingMat(stoneTextures(512, false), { key: 'grave', moss: 0.95, damp: 0.6, dampTop: 0.1 }));
+      this.instanced(boxUV(merge([gs]), 0.7), graveMat, list);
     }
     if (P.crosses) {
       const cg = merge([xf(new THREE.BoxGeometry(0.1, 1.6, 0.1), [0, 0.7, 0]), xf(new THREE.BoxGeometry(0.7, 0.09, 0.09), [0, 1.1, 0])]);
@@ -856,6 +932,7 @@ export class World {
         this.fires.push({ x, y: this.heightAt(x, z), z, s: r.range(0.6, 1.4) });
       }
       this.fireLights = [0, 1, 2].map(() => { const l = new THREE.PointLight(0xff7a30, 0, 18, 2); this.group.add(l); return l; });
+      this.flamePool = [0, 1, 2, 3].map(() => { const f = makeFlame({ height: 1.5, width: 0.95, tongues: 4, sparks: 44 }); f.group.visible = false; this.group.add(f.group); return f; });
     }
     // --- fen: reeds, stumps, boardwalks
     if (P.reeds) {
@@ -931,6 +1008,32 @@ export class World {
     }
   }
 
+  // the village's materials, made once per world: weathered stone, oak, daub, thatch, slate and shingle, leaded
+  // glass, rusted iron, sacking, hay, standing water
+  buildingMats() {
+    if (this._bm) return this._bm;
+    const M = this.mats || {};
+    const st = stoneTextures(512, true), oak = woodTextures(256, [64, 46, 32]);
+    const glassT = leadedGlassTextures(256), ironT = armorTextures('rusted', 256), sack = clothTextures([122, 102, 72], false, 128, 'sacking');
+    const B = {
+      stone: buildingMat(st, { key: 'stone', moss: 0.45, damp: 0.6 }),
+      oak: buildingMat(oak, { key: 'oak', moss: 0.25, damp: 0.4, dampTop: 0.5 }),
+      charred: M.charMat || buildingMat(woodTextures(256, [26, 20, 18]), { key: 'char' }),
+      plaster: buildingMat(plasterTextures(512), { key: 'plaster', side: THREE.DoubleSide, moss: 0.2, damp: 0.5, dampTop: 3.0 }),
+      thatch: buildingMat(thatchTextures(512), { key: 'thatch', normalScale: 1.6, moss: 0.4, damp: 0 }),
+      slate: buildingMat(roofTextures('slate', 512), { key: 'slate', normalScale: 1.4, moss: 0.35, damp: 0 }),
+      shingle: buildingMat(roofTextures('shingle', 512), { key: 'shingle', normalScale: 1.4, moss: 0.35, damp: 0 }),
+      shingleBurnt: buildingMat(roofTextures('shingle', 512), { key: 'shingleB', color: 0x3a302a, damp: 0 }),
+      glass: new THREE.MeshStandardMaterial({ map: glassT.map, normalMap: glassT.normalMap, roughnessMap: glassT.roughnessMap, roughness: 1, metalness: 0, envMapIntensity: 1.5 }),
+      iron: new THREE.MeshStandardMaterial({ map: ironT.map, normalMap: ironT.normalMap, roughnessMap: ironT.roughnessMap, metalnessMap: ironT.metalnessMap, metalness: 1, roughness: 1 }),
+      sacking: new THREE.MeshStandardMaterial({ map: sack.map, normalMap: sack.normalMap, roughnessMap: sack.roughnessMap, roughness: 1, side: THREE.DoubleSide }),
+      hay: buildingMat(thatchTextures(512), { key: 'hay', color: 0xd8c080, weather: false }),
+      water: new THREE.MeshStandardMaterial({ color: 0x0a0d0e, roughness: 0.04, metalness: 0.1, envMapIntensity: 1.4 }),
+      lamp: new THREE.MeshStandardMaterial({ color: 0x40301c, emissive: 0xff9a40, emissiveIntensity: 0.35, roughness: 0.3 }),
+    };
+    return (this._bm = B);
+  }
+
   placeHouse(r, woodMat, charMat, brickMat, big, lot) {
     const x = lot.x, z = lot.z, w = lot.w, dpt = lot.d, yaw = lot.yaw;
     // set the house on its lowest corner; a stone footing takes up the slope
@@ -942,8 +1045,10 @@ export class World {
     const footing = y - lo + 0.9;     // and the footing reaches below the lowest
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
     const walls = [], timber = [], plaster = [], dark = [];
+    const glass = [], iron = [], thatch = [], slate = [], cloth = [], hay = [], water = [], lamp = [];
     walls.push(xf(new THREE.BoxGeometry(w + 0.7, footing, dpt + 0.7), [0, -footing / 2 + 0.12, 0]));
     const intact = big || r() < 0.4;   // some still stand to the eaves; barns are whole
+    const roofKind = r() < 0.55 ? 'thatch' : r() < 0.6 ? 'slate' : 'shingle';
     const eave = 4.8;
     const wall = (len, cx, cz, rot, front) => {
       const segs = Math.max(3, Math.round(len / 1.15)); const sw = len / segs;
@@ -957,6 +1062,21 @@ export class World {
           walls.push(xf(new THREE.BoxGeometry(sw, 0.5, 0.5), P(lx, 2.35, 0), [0, rot, 0]));
           timber.push(xf(new THREE.BoxGeometry(sw + 0.3, 0.22, 0.56), P(lx, 2.1, 0), [0, rot, 0]));
           dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
+          if (intact) {
+            const out = Math.sign(cz || cx) || 1, dw = sw - 0.25;
+            timber.push(xf(new THREE.BoxGeometry(dw, 1.95, 0.07), P(lx, 1.0, 0.27 * out), [0, rot, 0]));
+            for (const hy of [0.4, 1.0, 1.6]) iron.push(xf(new THREE.BoxGeometry(dw * 0.8, 0.05, 0.02), P(lx - dw * 0.08, hy, 0.315 * out), [0, rot, 0]));
+            iron.push(xf(new THREE.TorusGeometry(0.06, 0.012, 6, 14), P(lx + dw * 0.3, 1.0, 0.33 * out), [0, rot, 0]));
+            walls.push(xf(new THREE.BoxGeometry(sw + 0.2, 0.18, 0.6), P(lx, 0.0, 0.55 * out), [0, rot, 0]));   // the step
+            iron.push(xf(new THREE.BoxGeometry(0.04, 0.04, 0.35), P(lx + sw * 0.62, 2.25, 0.4 * out), [0, rot, 0]));   // a lantern on its bracket
+            lamp.push(xf(new THREE.BoxGeometry(0.16, 0.24, 0.16), P(lx + sw * 0.62, 2.05, 0.55 * out), [0, rot, 0]));
+            iron.push(xf(new THREE.ConeGeometry(0.13, 0.12, 4), P(lx + sw * 0.62, 2.23, 0.55 * out), [0, rot + PI / 4, 0]));
+            if (r() < 0.5) {   // a little porch roof over the door on two posts
+              for (const px of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.14, 2.45, 0.14), P(lx + px * (sw / 2 + 0.25), 1.22, 1.15 * out), [0, rot, 0]));
+              (roofKind === 'thatch' ? thatch : slate).push(xf(new THREE.BoxGeometry(sw + 1.0, 0.12, 1.5), P(lx, 2.62, 0.75 * out), [out * 0.32, rot, 0]));
+            }
+            continue;
+          }
           // the door itself, boarded, hanging open on one hinge (or gone)
           if (r() < 0.75) { const sw2 = sw - 0.25, open = r.range(0.5, 1.5); const hx = lx - sw2 / 2; const [dx, , dz] = P(hx + Math.cos(open) * sw2 / 2, 0, 0.28 + Math.sin(open) * sw2 / 2); timber.push(xf(new THREE.BoxGeometry(sw2, 1.95, 0.06), [dx, 1.0, dz], [0, rot - open, r.range(-0.04, 0.04)])); }
           continue;
@@ -968,7 +1088,8 @@ export class World {
           timber.push(xf(new THREE.BoxGeometry(sw * 0.8, 0.12, 0.6), P(lx, 1.02, 0), [0, rot, 0]));
           timber.push(xf(new THREE.BoxGeometry(sw * 0.9, 0.16, 0.58), P(lx, 1.95, 0), [0, rot, 0]));
           for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.08, 0.95, 0.56), P(lx + sx * sw * 0.34, 1.48, 0), [0, rot, 0]));
-          dark.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
+          (intact ? glass : dark).push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
+          if (intact) { timber.push(xf(new THREE.BoxGeometry(0.06, 0.9, 0.14), P(lx, 1.48, 0), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.06, 0.14), P(lx, 1.62, 0), [0, rot, 0])); }
           // shutters: thrown open, one hanging by a hinge, one sometimes fallen
           for (const sx of [-1, 1]) {
             const fate = r(); if (fate < 0.2) continue;
@@ -983,13 +1104,23 @@ export class World {
         }
         // the upper storey: timber frame with plaster panels, where it survives
         if ((intact || (!ruin && r() < 0.5)) && top >= 2.5) {
-          const fy = 2.6, fh = eave - fy;
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, fy, 0.14), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, eave, 0.14), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(0.18, fh, 0.3), P(lx - sw / 2 + 0.09, fy + fh / 2, 0.14), [0, rot, 0]));
+          // the upper storey: jettied out over the street on the long walls of a standing house, its joists' ends
+          // showing under the jetty; studs, a middle rail and a brace in each bay, daub panels between
+          const fy = 2.6, fh = eave - fy, out = Math.sign(cz || cx) || 1, jt = intact && rot === 0 ? 0.42 * out : 0;
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.24, 0.3), P(lx, fy, 0.14 + jt), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, eave, 0.14 + jt), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(0.18, fh, 0.3), P(lx - sw / 2 + 0.09, fy + fh / 2, 0.14 + jt), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw, 0.14, 0.26), P(lx, fy + fh * 0.5, 0.15 + jt), [0, rot, 0]));
           const diag = new THREE.BoxGeometry(0.14, Math.hypot(sw, fh) * 0.95, 0.28);
-          timber.push(xf(diag, P(lx, fy + fh / 2, 0.14), [0, rot, (sg % 2 ? 1 : -1) * Math.atan2(sw, fh)]));
-          plaster.push(xf(new THREE.BoxGeometry(sw, fh, 0.2), P(lx, fy + fh / 2, 0.02), [0, rot, 0]));
+          timber.push(xf(diag, P(lx, fy + fh / 2, 0.14 + jt), [0, rot, (sg % 2 ? 1 : -1) * Math.atan2(sw, fh)]));
+          plaster.push(xf(new THREE.BoxGeometry(sw, fh, 0.2), P(lx, fy + fh / 2, 0.02 + jt), [0, rot, 0]));
+          if (jt) { timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, 0.7), P(lx, fy - 0.2, out * 0.3), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(0.18, 0.5, 0.18), P(lx, fy - 0.42, out * 0.42), [0, rot, out * 0.6])); }
+          // an upper window in alternate bays, leaded, with a sill
+          if (intact && sg % 2 === 0 && sg !== door) {
+            glass.push(xf(new THREE.BoxGeometry(sw * 0.5, fh * 0.42, 0.06), P(lx, fy + fh * 0.48, 0.25 * out + jt), [0, rot, 0]));
+            timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.08, 0.36), P(lx, fy + fh * 0.25, 0.2 * out + jt), [0, rot, 0]));
+            timber.push(xf(new THREE.BoxGeometry(0.05, fh * 0.42, 0.08), P(lx, fy + fh * 0.48, 0.27 * out + jt), [0, rot, 0]));
+          }
         }
         const C2 = Math.cos(yaw), S2 = Math.sin(yaw); const [wx, , wz] = P(lx, 0, 0);
         this.addCollider(x + wx * C2 + wz * S2, z - wx * S2 + wz * C2, 0.6);
@@ -1023,8 +1154,20 @@ export class World {
         }
       }
     }
-    // what is left of the roof: shingled panels on the rafters, with holes burnt through
-    if (intact) {
+    // a standing house is roofed whole: deep thatch with a ridge roll, or slates/shingles with a wooden gutter
+    if (intact && roofKind === 'thatch') {
+      for (const sx of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(rlen + 0.9, 0.42, dpt + 1.3), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.28, 0], [0, 0, -sx * slope]));
+      thatch.push(xf(new THREE.CylinderGeometry(0.3, 0.3, dpt + 1.4, 10), [0, eave + rise + 0.42, 0], [PI / 2, 0, 0]));
+      for (const sz of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(w + 0.8, 0.3, 0.5), [0, eave + 0.05, sz * (dpt / 2 + 0.5)], [0, 0, 0], [1, 1, 1]));
+    } else if (intact) {
+      for (const sx of [-1, 1]) {
+        slate.push(xf(new THREE.BoxGeometry(rlen + 0.5, 0.1, dpt + 0.9), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.17, 0], [0, 0, -sx * slope]));
+        timber.push(xf(new THREE.CylinderGeometry(0.09, 0.09, dpt + 0.9, 8, 1, true, 0, PI), [sx * (w / 2 + 0.45), eave - 0.08, 0], [PI / 2, 0, sx < 0 ? 0 : PI]));   // the gutter
+      }
+      slate.push(xf(new THREE.BoxGeometry(0.3, 0.18, dpt + 1.0), [0, eave + rise + 0.18, 0]));   // ridge tiles
+    }
+    // what is left of the roof of a burnt house: shingled panels on the rafters, with holes burnt through
+    if (!intact && r() < 0.5) {
       for (const sx of [-1, 1]) for (let k = 0; k < 6; k++) {
         if (r() < 0.3) continue;
         const lz = -dpt / 2 - 0.3 + (k + 0.5) * (dpt + 0.6) / 6;
@@ -1033,23 +1176,23 @@ export class World {
       }
     }
     // chimney stack at one end
-    if (r() < 0.7) { const cx = (r() < 0.5 ? -1 : 1) * (w / 2 - 0.5), ch = intact ? 8 : r.range(4, 7); walls.push(xf(new THREE.BoxGeometry(1.1, ch, 0.9), [cx, ch / 2, 0])); walls.push(xf(new THREE.BoxGeometry(1.3, 0.25, 1.1), [cx, ch, 0])); }
+    if (r() < 0.7) { const cx = (r() < 0.5 ? -1 : 1) * (w / 2 - 0.5), ch = intact ? 8 : r.range(4, 7); walls.push(xf(new THREE.BoxGeometry(1.1, ch, 0.9), [cx, ch / 2, 0])); walls.push(xf(new THREE.BoxGeometry(1.3, 0.25, 1.1), [cx, ch, 0])); if (intact) { slate.push(xf(new THREE.CylinderGeometry(0.16, 0.2, 0.55, 10), [cx, ch + 0.4, 0])); } }
     // fallen beams and rubble about the floor
     for (let k = 0; k < 4; k++) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)), [r.range(-w / 3, w / 3), 0.2, r.range(-dpt / 3, dpt / 3)], [r.range(-0.08, 0.08), r() * TAU, r.range(-0.08, 0.08)]));
     for (let k = 0; k < 14; k++) { const sz = r.range(0.2, 0.55), lx = r.range(-w / 2 - 1.2, w / 2 + 1.2), lz = r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2); const inside = Math.abs(lx) < w / 2 + 0.35 && Math.abs(lz) < dpt / 2 + 0.35; const [px, pz] = toW(lx, lz); walls.push(xf(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), [lx, sz * 0.2 + (inside ? 0 : this.heightAt(px, pz) - y), lz], [r() * 0.4, r() * 3, r() * 0.4])); }
     // the yard: barrels, crates, a woodpile against the wall, a cart, a fence
-    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; });
-    const plasterMat = this.plasterMat || (this.plasterMat = new THREE.MeshStandardMaterial({ color: 0xa89a82, roughness: 0.95, side: THREE.DoubleSide }));
+    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind });
+    const B = this.buildingMats();
     const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
-    const shingle = this.shingleMat || (this.shingleMat = new THREE.MeshStandardMaterial({ color: 0x2e2620, roughness: 0.9 }));
-    for (const [list, m] of [[walls, brickMat], [timber, charMat], [plaster, plasterMat], [dark, voidMat], [roofs, shingle]]) {
-      if (!list.length) continue; const mesh = new THREE.Mesh(merge(list), m); mesh.castShadow = mesh.receiveShadow = true; g.add(mesh);
+    for (const [list, m, tile] of [[walls, B.stone, 1.6], [timber, intact ? B.oak : B.charred, 1.1], [plaster, B.plaster, 2.0], [dark, voidMat, 1], [roofs, B.shingleBurnt, 2.2],
+      [glass, B.glass, 0.8], [iron, B.iron, 0.6], [thatch, B.thatch, 2.4], [slate, roofKind === 'shingle' ? B.shingle : B.slate, 2.0], [cloth, B.sacking, 1.0], [hay, B.hay, 1.6], [water, B.water, 1], [lamp, B.lamp, 1]]) {
+      if (!list.length) continue; const geo = boxUV(merge(list), tile); const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.lamp && m !== B.water; mesh.receiveShadow = true; g.add(mesh);
     }
     this.group.add(g);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
   }
 
-  dressYard(r, w, dpt, walls, timber, intact, gy) {
+  dressYard(r, w, dpt, walls, timber, intact, gy, X = {}) {
     // everything out in the yard stands on the yard's own ground (gy: local ground height), not the house floor
     const T = { push: (g) => { g.computeBoundingBox(); const c = g.boundingBox.getCenter(new THREE.Vector3()); g.translate(0, gy(c.x, c.z), 0); timber.push(g); } };
     const along = (side) => { const ox = side % 2 ? (side === 1 ? 1 : -1) * (w / 2 + 0.75) : r.range(-w / 2 + 1, w / 2 - 1); const oz = side % 2 ? r.range(-dpt / 2 + 1, dpt / 2 - 1) : (side === 0 ? 1 : -1) * (dpt / 2 + 0.75); return [ox, oz]; };
@@ -1068,6 +1211,38 @@ export class World {
       T.push(xf(new THREE.BoxGeometry(1.4, 0.12, 2.4), [cx, 0.55, cz], [0, 0.3, tilt])); for (const sx of [-1, 1]) T.push(xf(new THREE.BoxGeometry(0.06, 0.4, 2.4), [cx + sx * 0.68, 0.78 + sx * tilt * 0.6, cz], [0, 0.3, tilt]));
       T.push(xf(new THREE.TorusGeometry(0.5, 0.06, 5, 12), [cx + 0.8, 0.5, cz + 0.9], [0, 0.3 + PI / 2, 0])); T.push(xf(new THREE.TorusGeometry(0.5, 0.06, 5, 12), [cx - 1.6, 0.07, cz - 0.6], [PI / 2, 0, 0]));
       T.push(xf(new THREE.BoxGeometry(0.08, 0.08, 2.0), [cx, 0.3, cz + 2.0], [0.25, 0.3, 0]));
+    }
+    const Y = (list) => ({ push: (g) => { g.computeBoundingBox(); const c = g.boundingBox.getCenter(new THREE.Vector3()); g.translate(0, gy(c.x, c.z), 0); list.push(g); } });
+    const I = Y(X.iron || timber), Cl = Y(X.cloth || timber), Hy = Y(X.hay || timber), Wt = Y(X.water || timber), St = Y(walls);
+    // sacks of grain or meal slumped against the wall
+    for (let k = 0; k < 2 + Math.floor(r() * 3); k++) { const [ox, oz] = along(Math.floor(r() * 4)); const sk = new THREE.SphereGeometry(0.3, 10, 8); sk.scale(1, 1.25, 0.8); const P2 = sk.attributes.position; for (let i = 0; i < P2.count; i++) { const yy = P2.getY(i); if (yy < -0.2) P2.setY(i, -0.2 - (yy + 0.2) * 0.2); } sk.computeVertexNormals(); Cl.push(xf(sk, [ox + r.range(-0.3, 0.3), 0.26, oz], [r.range(-0.2, 0.2), r() * TAU, r.range(-0.15, 0.15)])); }
+    // a well: a stone drum, a winch on two posts, the rope and the bucket
+    if (r() < 0.28) {
+      const wx = r.range(-w / 2, w / 2), wz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 3.2);
+      St.push(xf(new THREE.CylinderGeometry(0.85, 0.9, 0.85, 18, 1, true), [wx, 0.42, wz])); St.push(xf(new THREE.TorusGeometry(0.86, 0.1, 6, 20), [wx, 0.85, wz], [PI / 2, 0, 0]));
+      Wt.push(xf(new THREE.CircleGeometry(0.78, 18), [wx, 0.25, wz], [-PI / 2, 0, 0]));
+      for (const sx of [-1, 1]) T.push(xf(new THREE.BoxGeometry(0.14, 1.9, 0.14), [wx + sx * 0.92, 0.95, wz]));
+      T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 1.9, 8), [wx, 1.6, wz], [0, 0, PI / 2])); T.push(xf(new THREE.BoxGeometry(0.05, 0.3, 0.05), [wx + 1.05, 1.45, wz]));
+      I.push(xf(new THREE.CylinderGeometry(0.008, 0.008, 0.9, 4), [wx, 1.15, wz])); T.push(xf(new THREE.CylinderGeometry(0.15, 0.12, 0.25, 10), [wx, 0.62, wz]));
+      const roofG = new THREE.BoxGeometry(2.2, 0.06, 0.8); T.push(xf(roofG, [wx, 2.05, wz + 0.3], [0.5, 0, 0])); T.push(xf(roofG.clone(), [wx, 2.05, wz - 0.3], [-0.5, 0, 0]));
+    }
+    // a trough of standing water
+    if (r() < 0.45) { const [ox, oz] = along(Math.floor(r() * 4)); const tx2 = ox * 1.15, tz2 = oz * 1.15; for (const [a, b, c2, d] of [[1.6, 0.5, 0.06, [0, 0.25, 0.27]], [1.6, 0.5, 0.06, [0, 0.25, -0.27]], [0.06, 0.5, 0.6, [0.8, 0.25, 0]], [0.06, 0.5, 0.6, [-0.8, 0.25, 0]], [1.6, 0.06, 0.6, [0, 0.03, 0]]]) T.push(xf(new THREE.BoxGeometry(a, b, c2), [tx2 + d[0], d[1], tz2 + d[2]])); Wt.push(xf(new THREE.PlaneGeometry(1.5, 0.5), [tx2, 0.4, tz2], [-PI / 2, 0, 0])); }
+    // a hay heap, or a rick
+    if (r() < 0.4) { const [ox, oz] = along(Math.floor(r() * 4)); const hg = new THREE.SphereGeometry(1, 14, 10, 0, TAU, 0, PI / 2); hg.scale(1.1, 0.9, 0.9); Hy.push(xf(hg, [ox * 1.3, -0.05, oz * 1.3], [0, r() * TAU, 0])); }
+    // tools left leaning on the wall: a pitchfork, a scythe
+    if (r() < 0.6) {
+      const sx = r() < 0.5 ? -1 : 1, lz = r.range(-dpt / 3, dpt / 3);
+      T.push(xf(new THREE.CylinderGeometry(0.02, 0.022, 1.6, 6), [sx * (w / 2 + 0.38), 0.78, lz], [0, 0, sx * 0.18]));
+      for (const t2 of [-0.06, 0, 0.06]) I.push(xf(new THREE.CylinderGeometry(0.008, 0.004, 0.32, 4), [sx * (w / 2 + 0.25) + t2 * 0, 1.66, lz + t2], [0, 0, sx * 0.18]));
+      if (r() < 0.5) { T.push(xf(new THREE.CylinderGeometry(0.02, 0.022, 1.5, 6), [sx * (w / 2 + 0.36), 0.75, lz + 0.7], [0.15, 0, sx * 0.15])); I.push(xf(new THREE.BoxGeometry(0.75, 0.04, 0.012), [sx * (w / 2 + 0.3) - sx * 0.3, 1.45, lz + 0.8], [0, 0, sx * 0.4])); }
+    }
+    // a washing line between two posts, the sheets still pegged out
+    if (intact && r() < 0.45) {
+      const lz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 2.2), x0 = -w / 2 + 0.5, x1 = w / 2 - 0.5;
+      for (const xx of [x0, x1]) T.push(xf(new THREE.BoxGeometry(0.1, 2.1, 0.1), [xx, 1.05, lz]));
+      T.push(xf(new THREE.CylinderGeometry(0.008, 0.008, x1 - x0, 4), [(x0 + x1) / 2, 1.95, lz], [0, 0, PI / 2]));
+      for (let k = 0; k < 3; k++) { const sh = new THREE.PlaneGeometry(0.9, 1.1, 4, 4); const P3 = sh.attributes.position; for (let i = 0; i < P3.count; i++) P3.setZ(i, Math.sin(P3.getX(i) * 4 + k) * 0.05 + (P3.getY(i) < 0 ? -P3.getY(i) * 0.08 : 0)); sh.computeVertexNormals(); Cl.push(xf(sh, [x0 + 0.8 + k * 1.1, 1.38, lz], [0, 0, r.range(-0.05, 0.05)])); }
     }
     // a wattle fence round part of the yard
     if (r() < 0.6) { const sz = -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)])); } }
@@ -1139,7 +1314,7 @@ export class World {
       parts.push(xf(new THREE.BoxGeometry(0.3, 3.2, 0.3), [cx, cy + 2.35, cz]), xf(new THREE.BoxGeometry(1.3, 0.28, 0.28), [cx, cy + 3.2, cz]));
       this.addCollider(x + wx * C0 + wz * S0, z - wx * S0 + wz * C0, 1.2); this.addCollider(x + cx * C0 + cz * S0, z - cx * S0 + cz * C0, 1.0);
       this.wellTop = [wx, wy, wz]; }
-    const m = new THREE.Mesh(merge(parts), brickMat); m.castShadow = m.receiveShadow = true; g.add(m);
+    const m = new THREE.Mesh(boxUV(merge(parts), 1.6), this.buildingMats().stone); m.castShadow = m.receiveShadow = true; g.add(m);
     const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
     if (dark.length) g.add(new THREE.Mesh(merge(dark), voidMat));
     // the bell: bronze, hung from its headstock on a beam across the belfry; it swings when it rings
@@ -1173,7 +1348,7 @@ export class World {
       trusses.push(xf(pew, [sx * 2.1 + (over ? r.range(-0.4, 0.4) : 0), over ? 0.23 : 0, pz], over ? [-PI / 2 + 0.1, r.range(-0.4, 0.4), 0] : [0, r.range(-0.05, 0.05), 0]));
     }
     parts.push(xf(new THREE.BoxGeometry(2.4, 1.05, 1.0), [0, 0.52, -L / 2 + 1.6]));
-    const tm = new THREE.Mesh(merge(trusses), charMat); tm.castShadow = true; g.add(tm);
+    const tm = new THREE.Mesh(boxUV(merge(trusses), 1.1), charMat); tm.castShadow = true; g.add(tm);
     this.group.add(g);
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
@@ -1272,7 +1447,11 @@ export class World {
       }
       const m = new THREE.Mesh(merge(parts), frost); m.castShadow = true; g.add(m); g.add(new THREE.Mesh(merge(helm), rust)); return g;
     };
-    const placeBody = (x, z, yaw, pose) => { const b = body(pose); b.position.set(x, this.heightAt(x, z) - 0.04, z); b.rotation.y = yaw; this.group.add(b); };
+    let nb = 0;
+    const placeBody = (x, z, yaw, pose) => {   // a whole frozen man where there are people to build him from, else the old wrapped shape
+      const fz = makeFrozen(pose === 'lie' ? 'lie' : ['sit', 'kneel', 'slump'][nb % 3], nb++);
+      const b = fz ? fz.root : body(pose); b.position.set(x, this.heightAt(x, z) - 0.04, z); b.rotation.y = yaw; this.group.add(b);
+    };
     for (let k = 0; k < 9; k++) {   // along the way, where they sat down and did not get up
       const t = 0.08 + k * 0.1 + r.range(-0.02, 0.02), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
       const d = half(t) - 0.4, x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d; if (nearCrev(x, z) || nearAltar(x, z, 10)) continue;
@@ -1404,13 +1583,23 @@ export class World {
     const tt = terrainTextures(512);
     mat.normalMap = tt.aliveN; mat.normalScale = new THREE.Vector2(0.25, 0.25);
     mat.onBeforeCompile = (sh) => {
-      sh.uniforms.uTime = uT;
+      sh.uniforms.uTime = uT; Object.assign(sh.uniforms, WATER_U);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vW;').replace('#include <fog_vertex>', '#include <fog_vertex>\nvW = (modelMatrix * vec4(position,1.0)).xz;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vW; uniform float uTime;')
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vW; uniform float uTime; uniform sampler2D uSim; uniform vec4 uSimWin; uniform float uSimTexel;')
         .replace('#include <normal_fragment_maps>', `
           vec3 n1 = texture2D(normalMap, vW * 0.08 + vec2(uTime * 0.01, uTime * 0.006)).xyz * 2.0 - 1.0;
           vec3 n2 = texture2D(normalMap, vW * 0.13 - vec2(uTime * 0.008, -uTime * 0.012)).xyz * 2.0 - 1.0;
           vec3 nn = normalize(vec3((n1.xy + n2.xy) * 0.18, 1.0));
+          // the wave field round the player: wakes, ripples, rain rings
+          if (uSimWin.w > 0.5) {
+            vec2 suv = (vW - uSimWin.xy) / uSimWin.z + 0.5;
+            if (suv.x > 0.0 && suv.y > 0.0 && suv.x < 1.0 && suv.y < 1.0) {
+              float hx = texture2D(uSim, suv + vec2(uSimTexel, 0.0)).r - texture2D(uSim, suv - vec2(uSimTexel, 0.0)).r;
+              float hz = texture2D(uSim, suv + vec2(0.0, uSimTexel)).r - texture2D(uSim, suv - vec2(0.0, uSimTexel)).r;
+              float fade = smoothstep(0.0, 0.1, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
+              nn = normalize(nn + vec3(-hx, -hz, 0.0) * 2.2 * fade);
+            }
+          }
           normal = normalize((viewMatrix * vec4(nn.x, nn.z, -nn.y, 0.0)).xyz);`);
     };
     const m = new THREE.Mesh(g, mat); m.position.y = 0.02; m.receiveShadow = true; m.renderOrder = 1;
@@ -1490,6 +1679,8 @@ export class World {
     if (this.fires.length && camPos) {
       const near = this.fires.map((f) => [f, (f.x - camPos.x) ** 2 + (f.z - camPos.z) ** 2]).sort((a, b) => a[1] - b[1]);
       this.fireLights.forEach((l, i) => { const f = near[i]?.[0]; if (!f || near[i][1] > 90 * 90) { l.intensity = 0; return; } l.position.set(f.x, f.y + 1.2, f.z); l.intensity = (6 + Math.sin(this.time * 17 + i * 3) * 1.5 + Math.sin(this.time * 7.3 + i) * 1.5) * f.s; });
+      // real flames on the nearest few; the rest are glow and sparks at a distance
+      if (this.flamePool) this.flamePool.forEach((F, i) => { const f = near[i]?.[0]; const on = !!f && near[i][1] < 70 * 70; F.group.visible = on; if (!on) return; F.group.position.set(f.x, f.y + 0.05, f.z); F.group.scale.setScalar(f.s); F.update(this.time, camPos, 1); });
     }
   }
   setInst(mesh, i, g) {

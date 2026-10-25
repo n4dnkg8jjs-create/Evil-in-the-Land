@@ -47,11 +47,11 @@ function weaponMats(q) {
   const wood = woodTextures(256, [88, 60, 36]);
   const lt = leatherTextures();
   return {
-    steel: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, metalness: 1, roughness: 0.8, envMapIntensity: 1.4, normalScale: new THREE.Vector2(0.3, 0.3) }),
+    steel: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, metalnessMap: steel.metalnessMap, metalness: 1, roughness: 0.8, envMapIntensity: 1.4, normalScale: new THREE.Vector2(0.3, 0.3) }),
     dark: new THREE.MeshStandardMaterial({ color: 0x2a2a2c, metalness: 1, roughness: 0.45 }),
     brass: new THREE.MeshStandardMaterial({ color: 0xb08a3a, metalness: 1, roughness: 0.35 }),
-    wood: new THREE.MeshStandardMaterial({ map: wood.map, normalMap: wood.normalMap, roughness: 0.7, metalness: 0 }),
-    leather: new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughness: 0.8, metalness: 0 }),
+    wood: new THREE.MeshStandardMaterial({ map: wood.map, normalMap: wood.normalMap, roughnessMap: wood.roughnessMap, roughness: 0.85, metalness: 0 }),
+    leather: new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughnessMap: lt.roughnessMap, roughness: 1, metalness: 0 }),
     cloth: new THREE.MeshStandardMaterial({ color: 0x7a1414, roughness: 0.9, side: THREE.DoubleSide }),
   };
 }
