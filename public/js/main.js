@@ -101,9 +101,6 @@ function buildMenuScene() {
   menu.stage = new MenuStage(e, e.q); menu.world = menu.stage;
   menu.altar = menu.stage.altar;
   makeMenuKnight();
-  // and Him, far off in the fog beyond the ruins, watching
-  menu.watcher = new Watcher(e.scene, null);
-  menu.watcher.pos.set(3.5, 0, -24); menu.watcher.state = 'watch'; menu.watcher.yaw = Math.atan2(-3.5, 24);
   app.audio.music?.setMood('menu');
 }
 function makeMenuKnight() {
@@ -133,14 +130,13 @@ function menuUpdate(dt) {
     S.update(dt, c.position); S.camera(c, dt);
     e.focusShadows(new THREE.Vector3(0, 0, 0));
   }
-  menu.watcher.animate(dt, menu.t, c.position, [k]);
   app.audio.update(dt);
   e.render(dt);
 }
 function disposeMenuScene() {
   if (!menu.world) return;
   menu.stage.dispose(); menu.stage = null;
-  menu.knight.dispose(); app.engine.scene.remove(menu.watcher.mesh);
+  menu.knight.dispose();
   menu.world = null;
 }
 
