@@ -173,15 +173,37 @@ function gauntlet(add, s, sx, S) {
   const H = 'hand' + s;
   // the hand's centrelines, grip and open
   const dirA = (a) => [sx * Math.cos(a), -Math.sin(a)];   // a = 0: toward the back of the hand; increasing: round under the grip
-  const gripFinger = (f) => (sv) => { const a = 0.18 + sv * 4.0 * f.k, d = dirA(a); return [[d[0] * GRIP_R, GRIP_Y + d[1] * GRIP_R, f.z], [d[0], d[1], 0]]; };
+  // gripping: each finger is three straight bones hinged at its knuckles, not a curve. From the knuckle on the back of
+  // the grip each bone swings in as far as its joint allows or until it meets the grip, so the joints take different
+  // angles (the middle knuckle most), the corners stand proud, and the fingertip comes back up the palm side
+  const gripFinger = (f, i) => {
+    const heading = (q) => [-sx * Math.sin(q), -Math.cos(q)];
+    const Ls = [0.044 * f.k, 0.028 * f.k, 0.022 * f.k], lim = [1.5, 1.95, 1.25];
+    const a0 = 0.04 + i * 0.05; let p = [sx * Math.cos(a0) * (GRIP_R + 0.0015), GRIP_Y - Math.sin(a0) * (GRIP_R + 0.0015)];
+    let q = a0 - 0.55 + i * 0.04; const pts = [p.slice()], hs = [];
+    const clear = (pp, qq, L) => { const t = heading(qq); for (let k = 1; k <= 8; k++) { const x = pp[0] + t[0] * L * k / 8, y = pp[1] + t[1] * L * k / 8; if (Math.hypot(x, y - GRIP_Y) < GRIP_R) return false; } return true; };
+    for (let j = 0; j < 3; j++) {
+      let fl = 0; while (fl + 0.02 <= lim[j] && clear(p, q + fl + 0.02, Ls[j])) fl += 0.02;
+      q += fl; hs.push(q); const t = heading(q); p = [p[0] + t[0] * Ls[j], p[1] + t[1] * Ls[j]]; pts.push(p.slice());
+    }
+    const tot = Ls[0] + Ls[1] + Ls[2], cum = [0, Ls[0] / tot, (Ls[0] + Ls[1]) / tot, 1];
+    const fn = (sv, jj) => {
+      let j = jj ?? (sv >= cum[2] ? 2 : sv >= cum[1] ? 1 : 0); const u = (sv - cum[j]) / (cum[j + 1] - cum[j]);
+      const a = pts[j], b = pts[j + 1], qq = hs[j], back = [sx * Math.cos(qq), -Math.sin(qq)];
+      return [[lerp(a[0], b[0], u), lerp(a[1], b[1], u), f.z], [back[0], back[1], 0]];
+    };
+    fn.cum = cum; return fn;
+  };
   const openFinger = (f, i) => (sv) => { const L = 0.088 * f.k * (i === 1 ? 1.04 : 1); return [[sx * (0.0255 - 0.014 * sv * sv), GRIP_Y - 0.004 - sv * L, f.z * (1 - 0.06 * sv)], [sx, 0.12 * sv, 0]]; };
   const segs = [[0, 0.43], [0.38, 0.72], [0.67, 1]];
   for (const [tag, mk] of [['grip', gripFinger], ['open', openFinger]]) {
     const plates = [], glove = [];
     FINGERS.forEach((f, i) => {
       const fn = mk(f, i), rp = f.r + 0.0024;
-      glove.push(fingerTube(fn, f.r));
-      segs.forEach(([s0, s1], j) => plates.push(fingerPlate(fn, s0, s1, rp + j * 0.0004 * 0, { cap: j === 2, wrap: j === 2 ? 1.95 : 1.75 })));
+      glove.push(fingerTube(fn, f.r, 24));
+      // one plate to each bone, each a little over the next at the knuckle (lames overlap; they do not bend)
+      const sg = fn.cum ? [[0, fn.cum[1] + 0.03], [fn.cum[1] - 0.015, fn.cum[2] + 0.03], [fn.cum[2] - 0.015, 1]] : segs;
+      sg.forEach(([s0, s1], j) => plates.push(fingerPlate(fn.cum ? (sv) => fn(sv, j) : fn, s0, s1, rp + (2 - j) * 0.0005, { cap: j === 2, wrap: j === 2 ? 1.95 : 1.75 })));
     });
     // the thumb: from its root in the palm, round over the top of the grip and down beside the index finger
     const thumbPts = tag === 'grip'
