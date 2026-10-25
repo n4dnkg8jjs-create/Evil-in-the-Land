@@ -3,6 +3,7 @@
 // sign of the cross, and a verlet-simulated cape.
 import * as THREE from 'three';
 import { headOnRig } from './people.js';
+import { dressCoif } from './coif.js';
 import { Rig, JOINTS, JI, POSE_SIZE, newPose, poseFromDeg, handQuatFrom, weaponQuatFrom, LOWER, clearTorso, armInTorso } from './rig.js';
 import { dressRig, STYLES } from './armor.js';
 import { dressBody, field } from './body.js';
@@ -302,16 +303,20 @@ export class Knight {
     // each knight his own skin, hair and age; the old built-up head if the people model is missing
     { const n = ((opts.id ?? 0) * 7 + (loadout.style || '').length * 3) % 5;
       const look = { skin: [0xc89a7c, 0xb98a6c, 0xd2a88c, 0x9a6c50, 0xc49478][n], hair: [0x3a2a1c, 0x1c1410, 0x5a3e24, 0x141010, 0x6a5a4a][n], cloth: 0x3a3028, age: [0.35, 0.2, 0.5, 0.3, 0.65][n], seat: [0, 0.05, -0.022], brow: 0.45, shade: 0.18 };   // seat: his eyes at the helmet's sights
-      this.face = headOnRig(this.rig, look, n % 2 ? 'priest' : 'sutler');
-      if (!this.face) this.rig.j.head.add(knightHead()); }
+      const variant = n % 2 ? 'priest' : 'sutler';
+      this.face = headOnRig(this.rig, { ...look, tuck: true }, variant);
+      if (!this.face) this.rig.j.head.add(knightHead());
+      // under the helmet: a quilted wool arming cap and a mail coif over it, so no bare neck shows behind or below the steel
+      else { const M = this.dress.mats, steel = this.dress.meshes.filter((m) => [M.plate, M.trim, M.brass, M.dark].includes(m.material));
+        this.coif = dressCoif(this.rig, this.face, steel, variant + '|' + loadout.style); } }
     scene.add(this.group);
     this.weapon = buildWeapon(loadout.weapon, quality);
     scene.add(this.weapon);
     if (this.wdef.buckler) { this.buckler = buildWeapon('buckler', quality); this.rig.j.handL.add(this.buckler); this.buckler.position.set(0, -0.06, 0); }
     if (loadout.cape) { this.cape = new Cape(her.cloth, this.style); scene.add(this.cape.mesh); }
     // compiled animation
-    const ms = MOVESETS[loadout.weapon];
-    this.st = compileStance(ms, loadout.weapon);
+    const ms = MOVESETS[WEAPONS[loadout.weapon].base || loadout.weapon];
+    this.st = compileStance(ms, WEAPONS[loadout.weapon].base || loadout.weapon);
     this.lights = ms.light.map((c) => compileClip(c, this.st));
     this.heavyClip = compileClip(ms.heavy, this.st);
     this.common = {}; for (const k in COMMON) this.common[k] = compileClip(COMMON[k], this.st);
@@ -387,7 +392,7 @@ export class Knight {
   }
   beginAttack(heavy) {
     const clip = heavy ? this.heavyClip : this.lights[this.combo % this.lights.length];
-    const cost = clip.stamina * this.wdef.stamina;
+    const cost = clip.stamina * this.wdef.stamina * (this.gripMul || 1);
     if (this.stamina < cost * 0.5) { this.events.push({ type: 'tired' }); return false; }
     this.stamina -= cost; this.staminaDelay = 0.9;
     // close on the nearest foe in front: turn to him and let the step of the blow carry you into reach
@@ -429,8 +434,8 @@ export class Knight {
     const toAttacker = Math.atan2(fromPos.x - this.pos.x, fromPos.z - this.pos.z);
     const facing = Math.abs(angleDiff(this.yaw, toAttacker)) < 1.2;
     if (this.blocking && facing && !opts.unblockable) {
-      const parry = this.blockT < 0.22;
-      if (parry) { this.events.push({ type: 'parry' }); return { blocked: true, parried: true, dmg: 0 }; }
+      const parry = this.blockT < 0.22 + 0.06 * (this.riposte || 0);
+      if (parry) { if (this.riposte) this.riposteT = 1.6; this.events.push({ type: 'parry' }); return { blocked: true, parried: true, dmg: 0 }; }
       const cost = dmg * 0.9;
       if (this.stamina >= cost) { this.stamina -= cost; this.staminaDelay = 1; this.flinch = 0.4; this.events.push({ type: 'block' }); return { blocked: true, dmg: 0 }; }
       this.stamina = 0; dmg *= 0.6; // guard broken
@@ -466,6 +471,7 @@ export class Knight {
     this.iframes = Math.max(0, this.iframes - dt);
     this.relicCd = Math.max(0, this.relicCd - dt);
     this.fury = Math.max(0, this.fury - dt);
+    this.blessT = Math.max(0, (this.blessT || 0) - dt); this.riposteT = Math.max(0, (this.riposteT || 0) - dt);
     this.comboReset -= dt; if (this.comboReset < 0 && !this.action) this.combo = 0;
     this.flinch = Math.max(0, this.flinch - dt * 3);
     if (this.downed) {
@@ -475,7 +481,7 @@ export class Knight {
     }
     // stamina
     this.staminaDelay = Math.max(0, (this.staminaDelay || 0) - dt);
-    if (this.staminaDelay <= 0 && !(input.sprint && this.speed > 4)) this.stamina = Math.min(this.maxStamina, this.stamina + dt * 30 * this.style.stamina * (this.blocking ? 0.4 : 1) * (this.dreadStam || 1));
+    if (this.staminaDelay <= 0 && !(input.sprint && this.speed > 4)) this.stamina = Math.min(this.maxStamina, this.stamina + dt * 30 * this.style.stamina * (this.blocking ? 0.4 : 1) * (this.dreadStam || 1) * (this.windMul || 1));
 
     // prayer
     const wantPray = input.pray && !this.action && world.canPrayAt(this);
@@ -554,7 +560,7 @@ export class Knight {
       hs = this.biteT < this.biteFreeze ? 0.05 : lerp(0.22, 1, smooth(clamp((this.biteT - this.biteFreeze) / this.biteDrag, 0, 1)));
     }
     this.biteScale = hs;
-    this.actT += hs * dt * (this.actKind === 'roll' || this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
+    this.actT += hs * dt * (this.actKind === 'roll' ? (this.fleetMul || 1) : this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
     // sound cues
     if (a.sfx) while (this.sfxIdx < a.sfx.length && this.actT >= a.sfx[this.sfxIdx].t) { this.events.push({ type: 'sfx', k: a.sfx[this.sfxIdx].k }); this.sfxIdx++; }
     if (a.release !== undefined && !this.released && this.actT >= a.release) { this.released = true; this.events.push({ type: 'relic', relic: this.actExtra.relic }); }
@@ -576,8 +582,9 @@ export class Knight {
     this.loadout = { ...this.loadout, weapon: key }; this.wdef = WEAPONS[key];
     this.weapon = buildWeapon(key, quality); this.scene.add(this.weapon);
     if (this.wdef.buckler) { this.buckler = buildWeapon('buckler', quality); this.rig.j.handL.add(this.buckler); this.buckler.position.set(0, -0.06, 0); }
-    const ms = MOVESETS[key];
-    this.st = compileStance(ms, key);
+    const ms = MOVESETS[this.wdef.base || key];
+    this.st = compileStance(ms, this.wdef.base || key);
+    this._planted = null;
     this.lights = ms.light.map((c) => compileClip(c, this.st));
     this.heavyClip = compileClip(ms.heavy, this.st);
     this.common = {}; for (const k in COMMON) this.common[k] = compileClip(COMMON[k], this.st);
@@ -588,6 +595,13 @@ export class Knight {
     this.edgeMul = 1 + 0.12 * (u.edge || 0);
     const hp0 = this.maxHp; this.maxHp = 150 + 20 * (u.proof || 0); if (this.hp > 0) this.hp = Math.min(this.maxHp, this.hp + Math.max(0, this.maxHp - hp0));
     this.relicMul = 1 - 0.15 * (u.blessing || 0);
+    // the newer trades: grip (blows cost less), wind (more breath, back sooner), faith (prayer), fleet (the roll), riposte (parries)
+    this.gripMul = 1 - 0.1 * (u.grip || 0);
+    this.maxStamina = 100 + 15 * (u.wind || 0); this.windMul = 1 + 0.12 * (u.wind || 0); this.stamina = Math.min(this.stamina, this.maxStamina);
+    this.prayMul = 1 + 0.2 * (u.faith || 0);
+    this.fleetMul = 1 + 0.12 * (u.fleet || 0);
+    this.riposte = u.riposte || 0;
+    this.secondWind = u.secondwind || 0;
   }
   deflectWeapon(wp, wd) {
     // capsules sized to the harness, not the body: cuirass and fauld, pauldrons, helm, cuisses and greaves
@@ -619,7 +633,7 @@ export class Knight {
       else { q.copy(wp).addScaledVector(wd, bt).addScaledVector(best, (pen + 0.012) * (bt < 0 ? -1 : 1)); wd.subVectors(q, wp).multiplyScalar(bt < 0 ? -1 : 1).normalize(); }   // the blade: swing it clear about the grip
     }
   }
-  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1) * (this.dreadMul || 1) * (this.edgeMul || 1); }
+  dmgMul() { return this.wdef.dmg * (this.fury > 0 ? 1.5 : 1) * (this.dreadMul || 1) * (this.edgeMul || 1) * (this.blessT > 0 ? 1.15 : 1) * (this.riposteT > 0 ? 1 + 0.25 * this.riposte : 1); }
 
   // Active hit windows this frame (attack authority runs collision)
   currentHits() {
@@ -901,7 +915,8 @@ export class Knight {
     this.weapon.updateMatrixWorld(true);
     // hit segment
     this.prevTip.copy(this.tip); this.prevBase.copy(this.base);
-    const seg = (a && a.hits && a.hits[0] && a.hits[0].seg) || [this.wdef.hitFrom, this.wdef.hitTo];
+    let seg = (a && a.hits && a.hits[0] && a.hits[0].seg) || [this.wdef.hitFrom, this.wdef.hitTo];
+    if (seg[1] > this.wdef.hitTo + 0.05) seg = [Math.min(seg[0], this.wdef.hitFrom), this.wdef.hitTo];   // a borrowed moveset never reaches past this weapon's own point
     this.base.copy(wp).addScaledVector(wd, seg[0]); this.tip.copy(wp).addScaledVector(wd, seg[1]);
     this.weaponDir = wd;
 
@@ -912,7 +927,7 @@ export class Knight {
   // where the weapon goes while kneeling in prayer
   plantedSpec() {
     if (this._planted) return this._planted;
-    const k = this.loadout.weapon;
+    const k = this.wdef.base || this.loadout.weapon;
     const w = this.wdef;
     let spec;
     if (k === 'longsword' || k === 'zweihander') {

@@ -16,22 +16,35 @@ export const TRADE_TIME = 75;   // seconds the sutler waits before he whips up t
 const KEY = 'evil.armoury';
 const START_WEAPONS = ['longsword', 'mace', 'pike'];
 export const PRICES = { zweihander: 180, halberd: 140, pollaxe: 160 };
+for (const [k, w] of Object.entries(WEAPONS)) if (w.price) PRICES[k] = w.price;
+// every trade the wagon offers, by the section of the panel it sits in; each stage costs more
 export const UPGRADES = {
-  edge: { name: 'Temper the edge', desc: 'The armourer re-hardens and hones your weapon. +12% damage per stage.', max: 3, cost: [80, 150, 240] },
-  proof: { name: 'Proof the harness', desc: 'Thicker plates riveted in where the demons find gaps. +20 health per stage.', max: 3, cost: [100, 180, 280] },
-  blessing: { name: 'Have the relic blessed', desc: 'A friar travelling with the wagon says a Mass over it. Relic ready 15% sooner per stage.', max: 2, cost: [90, 170] },
+  edge: { tab: 'harness', name: 'Temper the edge', desc: 'The armourer re-hardens and hones the weapon in your hands. +12% damage per stage.', max: 3, cost: [80, 150, 240] },
+  grip: { tab: 'harness', name: 'Rewrap the grip', desc: 'Ray-skin and waxed cord, so the blows take less out of you. Attacks cost 10% less breath per stage.', max: 3, cost: [70, 130, 210] },
+  proof: { tab: 'harness', name: 'Proof the harness', desc: 'Thicker plates riveted in where the demons find gaps. +20 health per stage.', max: 3, cost: [100, 180, 280] },
+  fleet: { tab: 'harness', name: 'Lighten the harness', desc: 'Mail cut away under the plates, straps re-hung. You roll 12% quicker per stage.', max: 2, cost: [110, 220] },
+  wind: { tab: 'harness', name: 'Train your wind', desc: 'The old sergeant\'s drills. +15 breath and it comes back 12% sooner per stage.', max: 3, cost: [90, 160, 250] },
+  riposte: { tab: 'harness', name: 'Learn the riposte', desc: 'A master\'s tricks of the bind. A wider moment to parry, and for a breath after a parry your blows strike 25% harder per stage.', max: 2, cost: [140, 260] },
+  blessing: { tab: 'faith', name: 'Have the relic blessed', desc: 'Father Bertram says a Mass over it. Relic ready 15% sooner per stage.', max: 2, cost: [90, 170] },
+  faith: { tab: 'faith', name: 'Keep a vigil', desc: 'A night on your knees before the wagon\'s little altar. Your prayers at the altars and over the fallen are 20% swifter per stage, and they quiet the dread.', max: 3, cost: [80, 150, 230] },
+  secondwind: { tab: 'faith', name: 'Second wind', desc: 'A scapular blessed for the dying. Once each chapter, if you fall with no brother near, you rise again by yourself.', max: 1, cost: [300] },
+  satchel: { tab: 'stores', name: 'A bigger satchel', desc: 'Room for another draught. Carry 4, then 5.', max: 2, cost: [80, 140] },
+  physic: { tab: 'stores', name: 'Stronger physic', desc: 'Better wine, dearer myrrh. Each draught heals 30 more per stage.', max: 2, cost: [90, 170] },
 };
-const DRAUGHT = { name: 'Healing draught', desc: 'Wine, myrrh and a prayer. Press H in battle to drink: heals 70 over three seconds. Carry up to three.', cost: 35, max: 3 };
+const DRAUGHT = { name: 'Healing draught', desc: 'Wine, myrrh and a prayer. Press H in battle to drink; it heals over three seconds.', cost: 35, max: 3 };
+const FLASK = { name: 'Flask of holy water', desc: 'Press G to hurl it: it bursts in holy fire that burns every demon it splashes, whatever relic you carry. Carry up to three.', cost: 45, max: 3 };
+const BLESS_TIME = 240;   // the blessing lasts the next stretch of road
+export const draughtMax = (a) => DRAUGHT.max + (a.up.satchel || 0);
 
 export function loadArmoury() {
   let a = account.get(KEY, null);
-  a = Object.assign({ silver: 60, owned: [...START_WEAPONS], up: {}, draughts: 1 }, a || {});
+  a = Object.assign({ silver: 60, owned: [...START_WEAPONS], up: {}, draughts: 1, flasks: 0 }, a || {});
   for (const w of START_WEAPONS) if (!a.owned.includes(w)) a.owned.push(w);
   return a;
 }
 export function saveArmoury(a) { account.set(KEY, a); }
 // edge is kept per weapon; proof and blessing belong to the knight
-export function upgradesFor(a, weapon) { return { edge: (a.up['edge:' + weapon] || 0), proof: a.up.proof || 0, blessing: a.up.blessing || 0 }; }
+export function upgradesFor(a, weapon) { const u = { ...a.up }; u.edge = a.up['edge:' + weapon] || 0; return u; }
 
 // ---------------------------------------------------------------- the wagon
 function wagonModel(quality) {
@@ -170,8 +183,26 @@ export class Shop {
   }
   // the knight as the armoury left him: weapon edge, harness proof, relic blessing
   applyToMe() { const me = this.g.me; me.applyUpgrades(upgradesFor(this.a, me.loadout.weapon)); this.showWallet(); }
-  earn(n, why) { this.a.silver += n; saveArmoury(this.a); this.showWallet(true); if (why) this.g.ui.toast(`+${n} silver · ${why}`, 1.6); }
-  showWallet(flash) { if (!this.wallet) return; this.wallet.textContent = `${this.a.silver} silver · ${this.a.draughts} draught${this.a.draughts === 1 ? '' : 's'}`; if (flash) { this.wallet.classList.remove('flash'); void this.wallet.offsetWidth; this.wallet.classList.add('flash'); } }
+  earn(n, why) {
+    this.a.silver += n; this.a.earned = (this.a.earned || 0) + n; saveArmoury(this.a); this.showWallet(true);
+    if (why) this.g.ui.toast(`+${n} silver · ${why}`, 2.2);
+    // a running tally beside the purse: kills in quick succession add up
+    if (!this.pop && this.wallet) { this.pop = document.createElement('div'); this.pop.className = 'silver-pop'; this.wallet.parentNode.appendChild(this.pop); }
+    if (this.pop) { this.popN = (this.popT > 0 ? this.popN : 0) + n; this.popT = 1.6; this.pop.textContent = `+${this.popN}`; this.pop.classList.remove('go'); void this.pop.offsetWidth; this.pop.classList.add('go'); }
+  }
+  showWallet(flash) {
+    if (!this.wallet) return; const a = this.a;
+    this.wallet.textContent = `${a.silver} silver · ${a.draughts} draught${a.draughts === 1 ? '' : 's'}${a.flasks ? ` · ${a.flasks} flask${a.flasks === 1 ? '' : 's'}` : ''}`;
+    if (flash) { this.wallet.classList.remove('flash'); void this.wallet.offsetWidth; this.wallet.classList.add('flash'); }
+  }
+  // the blessing on the HUD: a small cross and how long it has left
+  showBlessing() {
+    const me = this.g.me; const t = me?.blessT || 0;
+    if (!this.blessEl && t > 0 && this.wallet) { this.blessEl = document.createElement('div'); this.blessEl.className = 'bless-icon'; this.wallet.parentNode.appendChild(this.blessEl); }
+    if (!this.blessEl) return;
+    if (t <= 0) { this.blessEl.remove(); this.blessEl = null; return; }
+    const s = Math.ceil(t); this.blessEl.innerHTML = `<span class="x">✠</span> Blessed <b>${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}</b>${me.blessRise ? ' · <i>rise once</i>' : ''}`;
+  }
 
   build(world) {
     this.dispose();
@@ -294,18 +325,29 @@ export class Shop {
       if (l < S.r + 0.5) { const k = (S.r + 0.6) / (l || 1); d.pos.x = S.x + dx * k; d.pos.z = S.z + dz * k; d.flinch = 1; if (Math.random() < dt * 2) g.fx.holyMotes(d.chest, 0.6, 3); }
     }
     if (!this.open && this.nearPriest() && I.pressed('KeyF')) {
-      if (!this.blessed) { this.blessed = true; this.priest?.bless?.(); this.blessFx = 2.6; me.hp = me.maxHp; g.dread.level = 0; g.audio.holy?.(me.pos, 0.6); g.fx.holyBurst(me.pos, 2); g.ui.subtitle(['Benedicat te omnipotens Deus. Go with God, my son, and keep close to your brothers.', ''], 5); }
+      if (!this.blessed) {
+        this.blessed = true; this.priest?.bless?.(); this.blessFx = 2.6; me.hp = me.maxHp; g.dread.level = 0; g.audio.holy?.(me.pos, 0.6); g.fx.holyBurst(me.pos, 2);
+        me.blessT = BLESS_TIME; me.blessRise = true;
+        g.ui.subtitle(['Benedicat te omnipotens Deus. Go with God, my son, and keep close to your brothers.', ''], 5);
+        setTimeout(() => g.ui.toast('Blessed for the road ahead: wounds healed, dread lifted, +15% against demons, the fear comes slower, and if you fall you will rise once by yourself', 7), 2600);
+      }
       else g.ui.subtitle(['I have blessed you already. Go. They are waiting for you out there.', ''], 3.5);
       return;
     }
     // the healing draught
-    if (this.heal > 0) { const h = Math.min(this.heal, dt * 70 / 3); this.heal -= h; if (!me.downed) me.hp = Math.min(me.maxHp, me.hp + h); }
+    this.popT = (this.popT || 0) - dt; this.showBlessing();
+    if (this.heal > 0) { const h = Math.min(this.heal, dt * this.healAmt() / 3); this.heal -= h; if (!me.downed) me.hp = Math.min(me.maxHp, me.hp + h); }
     if (!this.open && I.pressed('KeyH') && this.a.draughts > 0 && !me.downed && me.hp < me.maxHp && this.heal <= 0) {
-      this.a.draughts--; saveArmoury(this.a); this.heal = 70; g.audio.holy?.(me.pos, 0.3); g.fx.holyMotes(me.pos.clone().setY(me.pos.y + 1.2), 0.6, 6); this.showWallet(true);
+      this.a.draughts--; saveArmoury(this.a); this.heal = this.healAmt(); g.audio.holy?.(me.pos, 0.3); g.fx.holyMotes(me.pos.clone().setY(me.pos.y + 1.2), 0.6, 6); this.showWallet(true);
+    }
+    if (!this.open && I.pressed('KeyG') && this.a.flasks > 0 && me.canAct && !me.action && !g.cinema.active) {
+      this.a.flasks--; saveArmoury(this.a); this.showWallet(true);
+      me.startAction(me.common.relicThrow, 'relic', { relic: 'water' });
     }
     if (this.open && (I.pressed('Escape') || I.pressed('KeyF') || (this.spot && !this.near()))) { this.close(); return; }
     if (!this.open && this.near() && !this.nearPriest() && I.pressed('KeyF') && !g.cinema.active) this.show();
   }
+  healAmt() { return 70 + 30 * (this.a.up.physic || 0); }
   prompt() { if (this.open) return ''; if (this.nearPriest()) return '<kbd>F</kbd>Ask Father Bertram for his blessing'; return this.near() ? '<kbd>F</kbd>Trade with the sutler' : ''; }
 
   show() {
@@ -320,29 +362,45 @@ export class Shop {
   }
   render() {
     if (!this.el) return;
-    const a = this.a, me = this.g.me, cur = me.loadout.weapon;
-    const w = Object.entries(WEAPONS).map(([k, d]) => {
-      const owned = a.owned.includes(k), price = PRICES[k] || 0, equipped = k === cur;
-      const btn = equipped ? '<span class="tag">Wielding</span>' : owned ? `<button class="btn small" data-equip="${k}">Take up</button>` : `<button class="btn small" data-buy="${k}" ${a.silver < price ? 'disabled' : ''}>Buy · ${price}</button>`;
-      return `<div class="ware${equipped ? ' on' : ''}"><div><b>${d.name}</b> ${a.up['edge:' + k] ? `<span class="tag">tempered ${'✦'.repeat(a.up['edge:' + k])}</span>` : ''}<p>${d.desc}</p></div>${btn}</div>`;
-    }).join('');
-    const u = Object.entries(UPGRADES).map(([k, d]) => {
-      const key = k === 'edge' ? 'edge:' + cur : k; const lvl = a.up[key] || 0; const maxed = lvl >= d.max; const cost = d.cost[lvl];
-      return `<div class="ware"><div><b>${d.name}${k === 'edge' ? ` (${WEAPONS[cur].name})` : ''}</b> <span class="tag">${'✦'.repeat(lvl)}${'·'.repeat(d.max - lvl)}</span><p>${d.desc}</p></div>${maxed ? '<span class="tag">Done</span>' : `<button class="btn small" data-up="${key}" ${a.silver < cost ? 'disabled' : ''}>${cost}</button>`}</div>`;
-    }).join('');
-    const dr = `<div class="ware"><div><b>${DRAUGHT.name}</b> <span class="tag">${a.draughts} / ${DRAUGHT.max}</span><p>${DRAUGHT.desc}</p></div>${a.draughts >= DRAUGHT.max ? '<span class="tag">Full</span>' : `<button class="btn small" data-draught="1" ${a.silver < DRAUGHT.cost ? 'disabled' : ''}>${DRAUGHT.cost}</button>`}</div>`;
-    this.el.innerHTML = `<div class="panel shop-panel"><h2 class="title-sm">The Sutler's Wagon</h2><p class="small">"Steel, sirs. Good steel, for good silver. The dead don't need it." · You have <b>${a.silver} silver</b></p>
-      <h4>Arms</h4>${w}<h4>The armourer and the friar</h4>${u}<h4>Supplies</h4>${dr}
+    const a = this.a, me = this.g.me, cur = me.loadout.weapon, tab = this.tab || 'arms';
+    const btn = (attrs, cost, label) => `<button class="btn small" ${attrs} ${a.silver < cost ? 'disabled' : ''}>${label || cost}</button>`;
+    const pips = (lvl, max) => `<span class="pips">${'<i class="on"></i>'.repeat(lvl)}${'<i></i>'.repeat(Math.max(0, max - lvl))}</span>`;
+    const weaponRow = ([k, d]) => {
+      const owned = a.owned.includes(k), price = PRICES[k] || 0, equipped = k === cur, temper = a.up['edge:' + k] || 0;
+      const act = equipped ? '<span class="tag">Wielding</span>' : owned ? `<button class="btn small" data-equip="${k}">Take up</button>` : btn(`data-buy="${k}"`, price, `Buy · ${price}`);
+      return `<div class="ware${equipped ? ' on' : ''}${d.legendary ? ' relic' : ''}"><div><b>${d.name}</b> ${temper ? pips(temper, 3) : ''}${d.lore ? `<p class="lore">${d.lore}</p>` : ''}<p>${d.desc}</p></div>${act}</div>`;
+    };
+    const upRow = (k) => {
+      const d = UPGRADES[k]; const key = k === 'edge' ? 'edge:' + cur : k; const lvl = a.up[key] || 0; const cost = d.cost[lvl];
+      return `<div class="ware"><div><b>${d.name}${k === 'edge' ? ` · ${WEAPONS[cur].name}` : ''}</b> ${pips(lvl, d.max)}<p>${d.desc}</p></div>${lvl >= d.max ? '<span class="tag">Done</span>' : btn(`data-up="${key}"`, cost)}</div>`;
+    };
+    const stock = (name, desc, have, max, cost, attr) => `<div class="ware"><div><b>${name}</b> <span class="tag">${have} / ${max}</span><p>${desc}</p></div>${have >= max ? '<span class="tag">Full</span>' : btn(attr, cost)}</div>`;
+    const W = Object.entries(WEAPONS).filter(([k]) => k !== 'buckler');
+    const body = {
+      arms: `<h4>Arms</h4>${W.filter(([, d]) => !d.legendary).map(weaponRow).join('')}`,
+      relics: `<p class="small">Holy arms that no armoury sells. The sutler will not say how he came by them.</p>${W.filter(([, d]) => d.legendary).map(weaponRow).join('')}`,
+      harness: Object.keys(UPGRADES).filter((k) => UPGRADES[k].tab === 'harness').map(upRow).join(''),
+      faith: `<p class="small">Father Bertram's own blessing is free: speak to him before you ride.</p>` + Object.keys(UPGRADES).filter((k) => UPGRADES[k].tab === 'faith').map(upRow).join(''),
+      stores: stock(DRAUGHT.name, `${DRAUGHT.desc} Heals ${this.healAmt()}.`, a.draughts, draughtMax(a), DRAUGHT.cost, 'data-draught="1"') + stock(FLASK.name, FLASK.desc, a.flasks || 0, FLASK.max, FLASK.cost, 'data-flask="1"') + Object.keys(UPGRADES).filter((k) => UPGRADES[k].tab === 'stores').map(upRow).join(''),
+    }[tab];
+    const tabs = [['arms', 'Arms'], ['relics', 'Holy Relics'], ['harness', 'Armourer'], ['faith', 'Relic & Faith'], ['stores', 'Provisions']]
+      .map(([k, n]) => `<button class="shop-tab${k === tab ? ' on' : ''}" data-tab="${k}">${n}</button>`).join('');
+    this.el.innerHTML = `<div class="panel shop-panel"><h2 class="title-sm">The Sutler's Wagon</h2>
+      <p class="small">"Steel, sirs. Good steel, for good silver. The dead don't need it."</p>
+      <div class="shop-purse"><span class="coin"></span><b>${a.silver}</b> silver</div>
+      <div class="shop-tabs">${tabs}</div><div class="shop-body">${body}</div>
       <div class="row"><button class="btn primary" data-close="1">Ride on (F)</button></div></div>`;
   }
   onClick(e) {
     const b = e.target.closest('button'); if (!b || b.disabled) return;
     const a = this.a, me = this.g.me, d = b.dataset;
     if (d.close) return this.close();
-    if (d.buy) { const p = PRICES[d.buy]; if (a.silver < p) return; a.silver -= p; a.owned.push(d.buy); this.equip(d.buy); this.g.audio.clang?.(me.pos, 0.3, 1.4); }
+    if (d.tab) { this.tab = d.tab; return this.render(); }
+    if (d.buy) { const p = PRICES[d.buy]; if (a.silver < p || a.owned.includes(d.buy)) return; a.silver -= p; a.owned.push(d.buy); this.equip(d.buy); this.g.audio.clang?.(me.pos, 0.3, 1.4); if (WEAPONS[d.buy].legendary) { this.g.audio.holy?.(me.pos, 0.8); this.g.fx.holyBurst(me.pos, 2); this.g.ui.toast(`${WEAPONS[d.buy].name} is yours`, 3); } }
     else if (d.equip) this.equip(d.equip);
     else if (d.up) { const k = d.up.startsWith('edge') ? 'edge' : d.up; const lvl = a.up[d.up] || 0; const cost = UPGRADES[k].cost[lvl]; if (cost === undefined || a.silver < cost) return; a.silver -= cost; a.up[d.up] = lvl + 1; this.g.audio.clang?.(me.pos, 0.3, 1.2); this.applyToMe(); }
-    else if (d.draught) { if (a.silver < DRAUGHT.cost || a.draughts >= DRAUGHT.max) return; a.silver -= DRAUGHT.cost; a.draughts++; }
+    else if (d.draught) { if (a.silver < DRAUGHT.cost || a.draughts >= draughtMax(a)) return; a.silver -= DRAUGHT.cost; a.draughts++; }
+    else if (d.flask) { if (a.silver < FLASK.cost || (a.flasks || 0) >= FLASK.max) return; a.silver -= FLASK.cost; a.flasks = (a.flasks || 0) + 1; }
     saveArmoury(a); this.showWallet(); this.render();
   }
   equip(key) {

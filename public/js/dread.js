@@ -48,8 +48,9 @@ export class Dread {
       fall += Math.min(0.03, this.alliesNear(me, 6) * 0.012);
       if (life > 0.7) fall += 0.02;
       rise *= 0.7 + 0.8 * (g.terror ? g.terror.level : 0.5);   // deeper into the blight, the fear comes faster
+      if (me.blessT > 0) rise *= 0.55;   // Father Bertram's blessing keeps the fear off
     } else fall += 0.1;
-    if (me.praying) fall += 0.07;
+    if (me.praying) fall += 0.07 * (me.prayMul || 1);
     if (g.shop?.inSanctuary(me.pos)) fall += 0.12;   // the priest's sanctuary keeps it off
     for (const a of w.altars) if (a.state === 'cleansed' && Math.hypot(a.x - me.pos.x, a.z - me.pos.z) < 12) { fall += 0.05; break; }
     // wounds feed it; kills starve it

@@ -53,6 +53,11 @@ function weaponMats(q) {
     wood: new THREE.MeshStandardMaterial({ map: wood.map, normalMap: wood.normalMap, roughnessMap: wood.roughnessMap, roughness: 0.85, metalness: 0 }),
     leather: new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughnessMap: lt.roughnessMap, roughness: 1, metalness: 0 }),
     cloth: new THREE.MeshStandardMaterial({ color: 0x7a1414, roughness: 0.9, side: THREE.DoubleSide }),
+    // the relics: gold that holds a little light of its own, silver, and the old iron of the lance
+    gold: new THREE.MeshStandardMaterial({ color: 0xd9a845, metalness: 1, roughness: 0.28, emissive: 0x3a2400, emissiveIntensity: 0.6 }),
+    silver: new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 1, roughness: 0.32 }),
+    iron: new THREE.MeshStandardMaterial({ color: 0x4a4440, metalness: 0.85, roughness: 0.62 }),
+    relic: new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffd890, emissiveIntensity: 1.6, roughness: 0.2, metalness: 0, transparent: true, opacity: 0.85 }),
   };
 }
 
@@ -157,6 +162,97 @@ const BUILD = {
     steel.push(xf(new THREE.ConeGeometry(0.018, 0.08, 6), [0, -0.5, 0], [PI, 0, 0]));
     return { steel, wood, brass };
   },
+  // ---------------------------------------------------------------- the relics (bought dear from the sutler)
+  // The Holy Lance: an old leaf-bladed iron spearhead, broken across the middle and bound again with a silver
+  // sleeve and a gold one over it; a nail of the Passion is set into the slot down its centre with gold wire,
+  // and little brass crosses are hammered into the blade. On a new ash shaft with a gilt socket.
+  lance() {
+    const wood = [], steel = [], iron = [], gold = [], silver = [], dark = [];
+    wood.push(xf(cyl(0.0195, 0.017, 2.34, 12), [0, 0.55, 0]));
+    steel.push(xf(new THREE.ConeGeometry(0.02, 0.06, 8), [0, -0.645, 0], [PI, 0, 0]));
+    for (const y of [-0.5, 1.45, 1.58]) gold.push(xf(new THREE.TorusGeometry(0.02, 0.0035, 5, 14), [0, y, 0], [PI / 2, 0, 0]));
+    // silver wire wound round the hand-hold
+    for (let i = 0; i < 18; i++) silver.push(xf(new THREE.TorusGeometry(0.0198, 0.0016, 4, 12), [0, -0.12 + i * 0.016, 0], [PI / 2 + 0.06, 0, 0]));
+    // the socket: a gilt collar flaring up into the iron
+    gold.push(xf(cyl(0.021, 0.017, 0.14, 12), [0, 1.69, 0]));
+    gold.push(xf(new THREE.TorusGeometry(0.019, 0.004, 5, 14), [0, 1.76, 0], [PI / 2, 0, 0]));
+    // the leaf blade, dark old iron, with two little wings at its foot
+    const leaf = blade(0.4, 0.016, 0.05, 0.007, { fuller: 0, point: 0.5 });
+    iron.push(xf(leaf, [0, 1.76, 0]));
+    for (const sd of [-1, 1]) { const w = new THREE.Shape(); w.moveTo(0, 0); w.lineTo(sd * 0.042, -0.012); w.lineTo(sd * 0.03, 0.03); w.lineTo(0, 0.05);
+      iron.push(xf(new THREE.ExtrudeGeometry(w, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 1 }), [0, 1.79, -0.003])); }
+    // the break, bound: silver sleeve beneath, gold sleeve over it, both flattened to the blade
+    silver.push(xf(cyl(0.05, 0.048, 0.1, 18), [0, 1.93, 0], [0, 0, 0], [1, 1, 0.26]));
+    gold.push(xf(cyl(0.054, 0.052, 0.07, 18), [0, 1.935, 0], [0, 0, 0], [1, 1, 0.3]));
+    for (const y of [1.905, 1.965]) gold.push(xf(new THREE.TorusGeometry(0.053, 0.0025, 4, 20), [0, y, 0], [PI / 2, 0, 0], [1, 0.3, 1]));
+    // the nail in its slot, held by turns of gold wire
+    dark.push(xf(cyl(0.0042, 0.0032, 0.2, 6), [0, 1.86, 0.0055]));
+    dark.push(xf(new THREE.SphereGeometry(0.0075, 8, 6), [0, 1.765, 0.0055], [0, 0, 0], [1, 0.5, 1]));
+    for (let i = 0; i < 7; i++) gold.push(xf(new THREE.TorusGeometry(0.0062, 0.0011, 3, 8), [0, 1.8 + i * 0.012, 0.0055], [PI / 2, 0, 0]));
+    // brass crosses hammered into the iron, either side of the nail
+    for (const sd of [-1, 1]) for (const z of [0.0072, -0.0072]) { gold.push(xf(new THREE.BoxGeometry(0.004, 0.016, 0.0012), [sd * 0.022, 1.86, z])); gold.push(xf(new THREE.BoxGeometry(0.011, 0.004, 0.0012), [sd * 0.022, 1.864, z])); }
+    return { wood, steel, iron, gold, silver, dark };
+  },
+  // Joyeuse: Charlemagne's sword, they say, with a sliver of the Lance in a crystal set into its gold pommel
+  joyeuse() {
+    const steel = [], gold = [], leather = [], relic = [];
+    steel.push(xf(blade(0.94, 0.025, 0.013, 0.0065, { fuller: 0.7, point: 0.1 }), [0, 0.07, 0]));
+    // a gold cross with arms bent down toward the blade, ending in knobs
+    for (const sd of [-1, 1]) {
+      gold.push(xf(new THREE.BoxGeometry(0.1, 0.016, 0.02), [sd * 0.05, 0.062, 0], [0, 0, sd * -0.12]));
+      gold.push(xf(new THREE.BoxGeometry(0.03, 0.014, 0.018), [sd * 0.108, 0.078, 0], [0, 0, sd * -0.5]));
+      gold.push(xf(new THREE.SphereGeometry(0.014, 10, 8), [sd * 0.122, 0.09, 0]));
+    }
+    gold.push(xf(cyl(0.02, 0.026, 0.03, 12), [0, 0.065, 0]));
+    leather.push(xf(cyl(0.0205, 0.019, 0.24, 12), [0, -0.075, 0]));
+    for (let i = 0; i < 13; i++) gold.push(xf(new THREE.TorusGeometry(0.0205, 0.0014, 4, 12), [0, -0.18 + i * 0.018, 0], [PI / 2 + 0.08, 0, 0]));
+    // the reliquary pommel: a gold disc, a crystal window front and back, the relic glowing within
+    gold.push(xf(cyl(0.038, 0.038, 0.026, 20), [0, -0.235, 0], [PI / 2, 0, 0]));
+    gold.push(xf(new THREE.TorusGeometry(0.038, 0.005, 6, 20), [0, -0.235, 0]));
+    relic.push(xf(cyl(0.02, 0.02, 0.03, 16), [0, -0.235, 0], [PI / 2, 0, 0]));
+    gold.push(xf(new THREE.ConeGeometry(0.01, 0.024, 8), [0, -0.284, 0], [PI, 0, 0]));
+    return { steel, gold, leather, relic };
+  },
+  // the Flamberge of Saint Michael: a two-hander whose blade waves like a flame, the archangel's sword
+  flamberge() {
+    const steel = [], leather = [], gold = [];
+    const bl = blade(1.2, 0.03, 0.015, 0.007, { fuller: 0.35, ricasso: 0.26, point: 0.08 });
+    const P = bl.attributes.position;
+    for (let i = 0; i < P.count; i++) { const y = P.getY(i); if (y < 0.28) continue; const f = Math.min(1, (y - 0.28) / 0.08) * (1 - Math.max(0, (y - 1.05) / 0.15)); P.setX(i, P.getX(i) + Math.sin((y - 0.28) * 34) * 0.0085 * f); }
+    bl.computeVertexNormals(); steel.push(xf(bl, [0, 0.07, 0]));
+    leather.push(xf(cyl(0.02, 0.02, 0.16, 12), [0, 0.17, 0]));
+    gold.push(xf(new THREE.BoxGeometry(0.44, 0.02, 0.022), [0, 0.06, 0]));
+    for (const sd of [-1, 1]) {
+      gold.push(xf(new THREE.TorusGeometry(0.04, 0.008, 5, 12, PI), [sd * 0.2, 0.09, 0], [0, 0, sd > 0 ? -PI / 2 : PI / 2]));
+      gold.push(xf(new THREE.ConeGeometry(0.011, 0.07, 6), [sd * 0.07, 0.33, 0], [0, 0, -sd * 1.1]));
+      gold.push(xf(new THREE.SphereGeometry(0.018, 10, 8), [sd * 0.22, 0.06, 0]));
+      gold.push(xf(new THREE.TorusGeometry(0.03, 0.005, 5, 14), [sd * 0.0, 0.06, sd * 0.03], [0, 0, 0]));   // side rings
+    }
+    leather.push(xf(cyl(0.0215, 0.02, 0.42, 12), [0, -0.15, 0]));
+    for (let i = 0; i < 4; i++) gold.push(xf(new THREE.TorusGeometry(0.0215, 0.002, 4, 12), [0, -0.33 + i * 0.12, 0], [PI / 2, 0, 0]));
+    gold.push(xf(new THREE.SphereGeometry(0.036, 14, 10), [0, -0.385, 0], [0, 0, 0], [1, 1.3, 1]));
+    return { steel, leather, gold };
+  },
+  // the Hammer of Saint Eligius, patron of smiths: a war hammer forged and blessed at his shrine, crowned face and beak
+  hammer() {
+    const steel = [], leather = [], gold = [], dark = [];
+    steel.push(xf(cyl(0.014, 0.016, 0.56, 10), [0, 0.15, 0]));
+    for (const sd of [-1, 1]) steel.push(xf(new THREE.BoxGeometry(0.005, 0.22, 0.016), [0, 0.34, sd * 0.016]));
+    leather.push(xf(cyl(0.0205, 0.0195, 0.15, 12), [0, -0.03, 0]));
+    gold.push(xf(cyl(0.022, 0.02, 0.025, 12), [0, -0.115, 0]));
+    gold.push(xf(new THREE.SphereGeometry(0.02, 10, 8), [0, -0.135, 0]));
+    // the head: a square hammer crowned with four teeth, a curved beak behind, a spike on top
+    steel.push(xf(new THREE.BoxGeometry(0.05, 0.07, 0.05), [0, 0.43, 0]));
+    steel.push(xf(new THREE.BoxGeometry(0.06, 0.055, 0.055), [0.055, 0.43, 0]));
+    for (let a = 0; a < 4; a++) steel.push(xf(new THREE.ConeGeometry(0.013, 0.022, 4), [0.093, 0.43 + (a < 2 ? 0.014 : -0.014), (a % 2 ? 0.014 : -0.014)], [0, 0, -PI / 2]));
+    const bk = new THREE.Shape(); bk.moveTo(0, -0.025); bk.quadraticCurveTo(-0.08, -0.02, -0.13, -0.07); bk.quadraticCurveTo(-0.07, 0.0, 0, 0.025);
+    steel.push(xf(new THREE.ExtrudeGeometry(bk, { depth: 0.014, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1 }), [-0.02, 0.43, -0.007]));
+    steel.push(xf(new THREE.ConeGeometry(0.016, 0.1, 4), [0, 0.51, 0]));
+    // gilt bands with a cross on each face of the socket
+    for (const y of [0.395, 0.465]) gold.push(xf(new THREE.BoxGeometry(0.054, 0.006, 0.054), [0, y, 0]));
+    for (const sd of [-1, 1]) { gold.push(xf(new THREE.BoxGeometry(0.004, 0.03, 0.002), [0, 0.43, sd * 0.026])); gold.push(xf(new THREE.BoxGeometry(0.018, 0.004, 0.002), [0, 0.436, sd * 0.026])); }
+    return { steel, leather, gold, dark };
+  },
 };
 
 export const WEAPONS = {
@@ -166,6 +262,12 @@ export const WEAPONS = {
   halberd: { butt: 0.62, name: 'Halberd', desc: 'Axe, spike and hook on a long haft. Chop, thrust and sweep.', twoHanded: true, leftGrip: 0.5, gripRange: [0.18, 0.95], roll: [150, 150], hitFrom: 1.25, hitTo: 1.88, kind: 'cut', dmg: 1.15, speed: 0.9, stamina: 1.15, hand: 'pole' },
   pike: { butt: 0.62, name: 'Pike', desc: 'Four metres of ash. Thrusts skewer several demons in a line.', twoHanded: true, leftGrip: 0.62, gripRange: [0.28, 1.15], roll: [150, 150], hitFrom: 2.0, hitTo: 3.06, kind: 'pierce', dmg: 0.95, speed: 1.05, stamina: 0.9, hand: 'pole' },
   pollaxe: { butt: 0.62, name: 'Pollaxe', desc: 'Hammer, fluke and spike. Breaks the hide of the great ones.', twoHanded: true, leftGrip: 0.45, gripRange: [0.16, 0.8], roll: [150, 150], hitFrom: 0.95, hitTo: 1.28, kind: 'blunt', dmg: 1.2, speed: 0.92, stamina: 1.1, hand: 'pole', armorBreak: 1.6 },
+  // relics: never in the starting armoury, bought only from the sutler for a great deal of silver.
+  // 'base' borrows the moves of an ordinary weapon; 'holy' burns demons it strikes; the rest are their own gifts.
+  lance: { base: 'pike', legendary: true, price: 3000, name: 'The Holy Lance', lore: 'The hasta of Longinus, that pierced the side of Christ. Broken, bound in silver and gold, a nail of the Passion set in its blade.', desc: 'Thrusts of terrible holy force that set demons burning. A charged thrust runs through every demon in the line. It glows faintly gold.', butt: 0.62, twoHanded: true, leftGrip: 0.55, gripRange: [0.22, 0.95], roll: [150, 150], hitFrom: 1.55, hitTo: 2.17, kind: 'pierce', dmg: 1.5, speed: 1.08, stamina: 0.85, hand: 'pole', holy: 1, pierceAll: true, glow: [1, 0.85, 0.45] },
+  joyeuse: { base: 'longsword', legendary: true, price: 1800, name: 'Joyeuse', lore: 'Charlemagne\'s sword, the old songs say, with a sliver of the Lance sealed in the crystal of its pommel.', desc: 'A longsword that cuts true and burns the unholy. Every demon it banishes gives back a little of your strength.', butt: 0.29, twoHanded: true, leftGrip: -0.15, gripRange: [-0.21, -0.09], roll: [90, 90], hitFrom: 0.12, hitTo: 1.01, kind: 'cut', dmg: 1.3, speed: 1.05, stamina: 0.95, hand: 'two', holy: 0.5, lifeSteal: 4, glow: [1, 0.9, 0.6] },
+  flamberge: { base: 'zweihander', legendary: true, price: 2400, name: 'Flamberge of St Michael', lore: 'The archangel\'s blade, its edge waved like a flame. It was carried before the host that threw down the Dragon.', desc: 'A flame-bladed two-hander. Its wounds tear and keep burning, and its heavy blows leave holy fire on the ground.', butt: 0.47, twoHanded: true, leftGrip: -0.25, gripRange: [-0.36, -0.14], roll: [90, 90], hitFrom: 0.3, hitTo: 1.28, kind: 'cut', dmg: 1.65, speed: 0.85, stamina: 1.25, hand: 'two', holy: 0.8, fireHeavy: true, glow: [1, 0.6, 0.25] },
+  hammer: { base: 'mace', legendary: true, price: 1500, name: 'Hammer of St Eligius', lore: 'Forged at the shrine of the smiths\' saint and blessed on his feast. The great ones break under it.', desc: 'A war hammer with a buckler. Crushes the hides of the great demons, staggers them hard, and each heavy blow rings out in a wave of holy force.', butt: 0.14, twoHanded: false, roll: [80, 90], hitFrom: 0.33, hitTo: 0.56, kind: 'blunt', dmg: 1.25, speed: 1.1, stamina: 0.85, hand: 'one', buckler: true, armorBreak: 2.2, holy: 0.4, shockHeavy: true, glow: [0.9, 0.85, 1] },
 };
 
 let _mats = null;

@@ -68,7 +68,7 @@ export class Game {
 
   // ================================================================ chapters
   loadChapter(n, { skipIntro = false } = {}) {
-    this.chT0 = performance.now();
+    this.chT0 = performance.now(); this.myDowns = 0; this.secondWindUsed = false; this.burns = [];
     this.ui.fade(true);
     this.chapterIdx = n; const ch = CHAPTERS[n];
     if (this.world) this.world.dispose();
@@ -228,6 +228,7 @@ export class Game {
       // combat for knights this machine owns
       for (const k of this.knightList) if (this.owns(k)) this.resolveKnightCombat(k, dt);
       this.updateProjectiles(dt);
+      this.updateBurns(dt);
       this.updateConsecrations(dt);
     }
     // ---- animate
@@ -236,6 +237,7 @@ export class Game {
     for (const k of this.knightList) { k.animate(k === me ? dt * hs : dt, this.world); this.knightEvents(k); this.updateTrail(k, dt); }
     this.horde.animate(dt, this.time, this.world, this.fx, camPos);
     if (this.boss) this.boss.animate(dt, this.time, this.fx);
+    if (this.boss && (!this.boss.alive || this.boss.hp <= 0) && !this.boss._paid) { this.boss._paid = true; this.shop.earn(this.boss.kind === 'serpent' ? 250 : 350, 'the great one is cast down'); }
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
@@ -393,8 +395,9 @@ export class Game {
     }
     if (o.ph === 'pray') {
       const a = this.world.altars[o.a];
-      const n = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - a.x, k.pos.z - a.z) < ALTAR_R + 0.5).length;
-      let rate = n ? 1 + (n - 1) * 0.55 : 0;
+      const pk = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - a.x, k.pos.z - a.z) < ALTAR_R + 0.5);
+      const n = pk.length, faith = n ? pk.reduce((m, k) => Math.max(m, k.prayMul || 1), 1) : 1;
+      let rate = n ? (1 + (n - 1) * 0.55) * faith : 0;
       for (const d of this.horde.list) if (d.alive && d.type === 'wraith' && d.pos.distanceTo(a) < 10) { rate *= 0.5; break; }
       o.p[o.a] = Math.min(1, o.p[o.a] + dt * rate / (ch.prayer * this.diff.prayer));
       a.progress = o.p[o.a];
@@ -634,6 +637,7 @@ export class Game {
     for (const h of hits) {
       const kind = h.kind || k.wdef.kind;
       let cleave = h.cleave || 1;
+      if (k.wdef.pierceAll && k.actKind === 'heavy') cleave = 99;   // the Lance's charged thrust runs through the whole line
       const dmgBase = h.dmg * k.dmgMul();
       const leftSrc = h.src === 'left';
       // demons
@@ -660,8 +664,10 @@ export class Game {
         k.hitSet.add(d.id); cleave--;
         let dmg = dmgBase; if (d.def.big && kind === 'blunt') dmg *= (k.wdef.armorBreak || 1.25);
         if (kind === 'pierce' && d.def.big) dmg *= 1.15;
+        if (k.wdef.holy) dmg *= 1 + 0.3 * k.wdef.holy;
         const dir = new THREE.Vector3(d.pos.x - k.pos.x, 0, d.pos.z - k.pos.z).normalize();
         this.onWeaponHit(k, hitP, kind, d.def.big ? 1.2 : 1, dir, false, d, d.hp - dmg <= 0);
+        if (k.wdef.legendary) this.relicHit(k, d, dmg, hitP, d.hp - dmg <= 0);
         if (this.isHost) { if (d.takeHit(dmg, dir, h.stagger || 0.5, this.hostCtx(), k.id)) { this.stats.kills++; if (k === this.me) account.record('kill'); } }
         else this.net.send('hit', { d: d.id, dmg, dx: dir.x, dz: dir.z, st: h.stagger || 0.5 }, this.net.hostId);
       }
@@ -784,8 +790,8 @@ export class Game {
   }
 
   // ================================================================ relics
-  knightRelic(k) {
-    const r = k.loadout.relic;
+  knightRelic(k, relic) {
+    const r = relic || k.loadout.relic;
     if (r === 'water') {
       const f = V(Math.sin(k.yaw), 0, Math.cos(k.yaw)); const hand = k.rig.j.handL.getWorldPosition(new THREE.Vector3());
       let to = k.pos.clone().addScaledVector(f, 11);
@@ -839,9 +845,18 @@ export class Game {
     const t = this.downedNear(k); if (!t) { k.reviving = null; return; }
     k.reviving = t; inp.mx = inp.mz = 0;
     if (!k.praying) return; // the knight kneels to raise his brother
-    const prog = (t._revLocal = Math.min(1, (t._revLocal || t.reviveProgress || 0) + dt / 3));
+    const prog = (t._revLocal = Math.min(1, (t._revLocal || t.reviveProgress || 0) + dt / 3 * (k.prayMul || 1)));
     if (this.owns(t)) { t.reviveProgress = Math.max(t.reviveProgress, prog); if (t.reviveProgress >= 1) this.reviveKnight(t); }
     else { this.reviveSend -= dt; if (this.reviveSend <= 0 || prog >= 1) { this.reviveSend = 0.25; this.net.send('rev', { to: t.id, p: prog }, t.isAI ? this.net.hostId : t.id); } if (prog >= 1) t._revLocal = 0; }
+  }
+  // the priest's blessing raises you once by itself; the second wind, once a chapter, if no brother is near to do it
+  selfRise(k) {
+    const alone = !this.knightList.some((o) => o !== k && !o.downed && o.pos.distanceTo(k.pos) < 25);
+    let why = null, hp = 0.3;
+    if (k.blessRise) { k.blessRise = false; why = 'Father Bertram\'s blessing raises you'; hp = 0.5; }
+    else if (k.secondWind && !this.secondWindUsed && alone) { this.secondWindUsed = true; why = 'Second wind'; }
+    if (!why) return;
+    setTimeout(() => { if (k.downed && this.me === k) { k.revive(hp); this.fx.holyBurst(k.pos, 2.5); this.audio.holy(k.pos, 0.7); this.ui.downed(false); this.ui.toast(why, 2.5); } }, 2200);
   }
   reviveKnight(k) { k.revive(0.45); k._revLocal = 0; this.fx.holyBurst(k.pos, 2.5); this.audio.holy(k.pos, 0.6); if (k === this.me) this.ui.downed(false); }
 
@@ -869,10 +884,10 @@ export class Game {
         }
         break;
       }
-      case 'relic': if (this.owns(k)) this.knightRelic(k); break;
+      case 'relic': if (this.owns(k)) this.knightRelic(k, e.relic); break;
       case 'parry': break;
       case 'block': break;
-      case 'downed': this.audio.clang(p, 0.8, 0.5); this.fx.dust(k.pos, 8); if (k === this.me) { this.ui.downed(true); this.audio.heartbeat(0.7); } else this.ui.toast(`${k.name} has fallen`, 2.5); break;
+      case 'downed': this.audio.clang(p, 0.8, 0.5); this.fx.dust(k.pos, 8); if (k === this.me) { this.ui.downed(true); this.audio.heartbeat(0.7); this.myDowns = (this.myDowns || 0) + 1; this.selfRise(k); } else this.ui.toast(`${k.name} has fallen`, 2.5); break;
       case 'revived': if (k === this.me) this.ui.downed(false); break;
       case 'prayStart': if (k === this.me && !k.reviving) { this.prayerLine = 0; this.prayerLineT = 0.4; } break;
       case 'cross': this.audio.bell(p, 2.2, 0.08); break;
@@ -885,9 +900,45 @@ export class Game {
     const a = k.action; const active = !!(a && a.hits && a.hits.some((h) => k.actT >= h.t0 - 0.05 && k.actT <= h.t1 + 0.03));
     tr.update(dt, k.base, k.tip, active);
     if (k.fury > 0 && R() < 0.5) this.fx.holyMotes(k.tip, 0.15, 1, [1, 0.8, 0.4]);
+    if (k.wdef.glow && R() < dt * 9) this.fx.holyMotes(k.base.clone().lerp(k.tip, 0.6 + R() * 0.4), 0.08, 1, k.wdef.glow);
+    if (k.blessT > 0 && R() < dt * 5) this.fx.holyMotes(k.chestPos, 0.45, 1, [1, 0.92, 0.65]);
   }
+  // ---------------------------------------------------------------- the relic weapons' gifts
+  // a hit on a demon from this machine: the host applies it, a guest sends it to the host
+  strikeDemon(k, d, dmg, st = 0.5) {
+    if (!d.alive) return; const dir = new THREE.Vector3(d.pos.x - k.pos.x, 0, d.pos.z - k.pos.z).normalize();
+    if (this.isHost) { if (d.takeHit(dmg, dir, st, this.hostCtx(), k.id)) { this.stats.kills++; if (k === this.me) account.record('kill'); } }
+    else this.net.send('hit', { d: d.id, dmg, dx: dir.x, dz: dir.z, st }, this.net.hostId);
+  }
+  relicHit(k, d, dmg, p, kill) {
+    const w = k.wdef; if (!this.owns(k)) return;
+    if (w.holy && !kill) { const b = this.burns.find((x) => x.d === d); if (b) b.t = 3; else this.burns.push({ d, k, t: 3, tick: 0.5, dps: 7 * w.holy * (w.fireHeavy ? 1.6 : 1) }); }
+    if (w.lifeSteal && kill && !k.downed) { k.hp = Math.min(k.maxHp, k.hp + w.lifeSteal); this.fx.holyMotes(k.chestPos, 0.4, 3, [1, 0.9, 0.6]); }
+    if (k.actKind === 'heavy' && !k.hitSet.has('relicFx')) {
+      k.hitSet.add('relicFx');
+      if (w.fireHeavy) {   // holy fire where the blade came down: it burns everything standing in it
+        const c = p.clone(); c.y = this.world.heightAt(c.x, c.z);
+        this.fx.holyBurst(c, 1.5); this.fx.flames?.(c, 1.2); this.audio.holy?.(c, 0.5);
+        for (const o of this.horde.list) if (o.alive && o !== d && o.pos.distanceTo(c) < 3) { this.strikeDemon(k, o, 14); if (!this.burns.find((x) => x.d === o)) this.burns.push({ d: o, k, t: 3, tick: 0.5, dps: 9 }); }
+      }
+      if (w.shockHeavy) {   // the hammer rings: a wave of holy force round the blow
+        const c = p.clone(); this.fx.holyBurst(c, 2.2); this.audio.bell?.(c, 1.6, 0.5); this.engine.shake(0.06, 0.2);
+        for (const o of this.horde.list) if (o.alive && o !== d && o.pos.distanceTo(c) < 3.5) this.strikeDemon(k, o, 22, 1.2);
+      }
+    }
+  }
+  updateBurns(dt) {
+    if (!this.burns?.length) return;
+    for (const b of this.burns) {
+      b.t -= dt; b.tick -= dt; const d = b.d; if (!d.alive) { b.t = 0; continue; }
+      if (R() < dt * 14) this.fx.glow.emit({ x: d.chest.x + (R() - 0.5) * 0.5, y: d.chest.y + (R() - 0.3) * 0.8, z: d.chest.z + (R() - 0.5) * 0.5, vy: 1.4, color: [1, 0.75, 0.35], size: 0.22, grow: 0.6, life: 0.5, cell: 3, spin: 2 });
+      if (b.tick <= 0) { b.tick = 0.5; this.strikeDemon(b.k, d, b.dps * 0.5, 0.1); }
+    }
+    this.burns = this.burns.filter((b) => b.t > 0);
+  }
+  // silver for each demon banished near you, by how dangerous it was
   demonDeathFx(d) {
-    if (this.me && !this.me.downed && d.pos.distanceTo(this.me.pos) < 35) this.shop.earn(d.def.big ? 8 : 2);
+    if (this.me && !this.me.downed && d.pos.distanceTo(this.me.pos) < 35) this.shop.earn(d.def.silver || 3 + (d.def.score || 1) * 3, null, d.chest);
     this.fx.death(d.chest, d.def.big ? 2 : 1);
     this.audio.shriek(d.chest, d.def.big ? 0.5 : 0.82 + R() * 0.2, d.def.big ? 1.2 : 0.5, 0.3);
   }
@@ -921,7 +972,7 @@ export class Game {
   }
   cleanseFx(i) {
     const a = this.world.altars[i]; if (!a) return;
-    this.shop.earn(25, 'the altar is hallowed');
+    this.shop.earn(50, 'the altar is hallowed');
     this.world.cleanse(i);
     const p = V(a.x, a.y, a.z);
     this.fx.holyBurst(p, 10); this.fx.beam(p, 0xffe8b0, 6, 3, 90); this.fx.holyMotes(p, 20, 120);
@@ -982,7 +1033,10 @@ export class Game {
     ], null, { skippable: true });
   }
   playOutro(n) {
-    this.shop.earn(60, 'the road is won');
+    { const mins = this.chT0 ? (performance.now() - this.chT0) / 60000 : 99; let bonus = 0; const why = ['the road is won'];
+      if (!this.myDowns) { bonus += 80; why.push('never fell'); }
+      if (mins < 12) { bonus += 60; why.push('swift'); }
+      this.shop.earn(150 + bonus, why.join(' · ')); }
     const ch = CHAPTERS[n]; const w = this.world; const last = w.altars[w.altars.length - 1];
     this.setMood('triumph', 0);
     this.blendAtmosphere(0.45);

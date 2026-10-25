@@ -258,6 +258,23 @@ export function headOnRig(rig, look = {}, variant = 'sutler') {
     sub = HEAD_SUB[variant] = new THREE.BufferGeometry(); for (const k in g.attributes) sub.setAttribute(k, g.attributes[k]);
     sub.setIndex(tris); sub.computeBoundingSphere();
   }
+  // look.tuck: under a mail coif the neck is drawn in a little toward its own axis, so no skin can push out through the mail
+  if (look.tuck) {
+    const key = variant + '|tuck';
+    if (!HEAD_SUB[key]) {
+      const g = P.geo, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, PA = g.attributes.position.clone(), ni = JOINTS.indexOf('neck');
+      let cx = 0, cz = 0, n = 0; for (let i = 0; i < PA.count; i++) if (SI.getX(i) === ni && SW.getX(i) > 0.5) { cx += PA.getX(i); cz += PA.getZ(i); n++; }
+      cx /= n || 1; cz /= n || 1;
+      for (let i = 0; i < PA.count; i++) {
+        let w = 0; for (let c = 0; c < 4; c++) if (SI.array[i * 4 + c] === ni) w += SW.array[i * 4 + c];
+        if (w <= 0.05) continue; const s = 1 - 0.13 * Math.min(1, w * 1.4);
+        PA.setX(i, cx + (PA.getX(i) - cx) * s); PA.setZ(i, cz + (PA.getZ(i) - cz) * s);
+      }
+      const t = HEAD_SUB[key] = new THREE.BufferGeometry(); for (const k in sub.attributes) t.setAttribute(k, k === 'position' ? PA : sub.attributes[k]);
+      t.setIndex(sub.index); t.computeBoundingSphere();
+    }
+    sub = HEAD_SUB[key];
+  }
   const root = rig.root, sp = root.position.clone(), sq = root.quaternion.clone(), ss = root.scale.clone();
   const saved = JOINTS.map((n) => rig.j[n].quaternion.clone()), savedHip = rig.j.hips.position.clone();
   for (const n of JOINTS) { const q = P.bind[n]; rig.j[n].quaternion.set(q[0], q[1], q[2], q[3]); }

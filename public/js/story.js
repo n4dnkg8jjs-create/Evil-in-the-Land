@@ -203,7 +203,7 @@ export class Story {
     const el = document.getElementById('page');
     if (el) { el.innerHTML = `<div class="page-num">Brother Anselm · page ${s.pageIdx + 1} of ${PAGES.length}</div><h3>${title}</h3><p>${text}</p>`; el.classList.add('show'); }
     this.cardT = 13 + text.length * 0.02;
-    this.game.audio.paper?.(); this.game.shop?.earn(10); this.game.ui.toast('A page from the First Company · +10 silver from his purse', 3);
+    this.game.audio.paper?.(); this.game.shop?.earn(25); this.game.ui.toast('A page from the First Company · +25 silver from his purse', 3);
     // the fear is named: from here on the dread shows on the HUD
     if (s.pageIdx >= 4) this.game.dread?.reveal();
     // the first page ever found: the camera lingers on the cairn while Anselm's words are read
@@ -214,7 +214,7 @@ export class Story {
     const L = s.lore, el = document.getElementById('page');
     if (el) { el.innerHTML = `<div class="page-num">${L.who}</div><h3>${L.title}</h3><p>${L.text}</p>`; el.classList.add('show'); }
     this.cardT = 14 + L.text.length * 0.02;
-    this.game.audio.paper?.(); this.game.shop?.earn(5); this.game.ui.toast('Lore of the road · +5 silver', 2.5);
+    this.game.audio.paper?.(); this.game.shop?.earn(10); this.game.ui.toast('Lore of the road · +10 silver', 2.5);
     const ch = CHAPTERS[this.game.chapterIdx];
     const nar = ch?.narration?.[1];
     this.cinematic(s, s.loreKey, [nar || [L.title, ''], [L.text.split('. ')[0] + '.', '']]);
