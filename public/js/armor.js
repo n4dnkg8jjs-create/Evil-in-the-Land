@@ -141,7 +141,7 @@ const SPINE_TO_CHEST = 0.22, HIPS_TO_SPINE = [0.10, -0.01], CLAV_TO_SHOULDER = 0
 // sign of the cross). Each finger: a leather glove finger, and three overlapping plates (proximal, middle, a capped
 // fingertip) with a raised medial ridge; the thumb the same in two plates; over the back of the hand three lames
 // and a knuckle plate with bosses over each knuckle; a flared cuff with a rolled edge; rivets.
-const GRIP_Y = -0.08, GRIP_R = 0.0272;
+const GRIP_Y = -0.08, GRIP_R = 0.0318;   // the finger's centreline round the grip: a ~0.02 grip, plus glove and plate
 const FINGERS = [   // z of each finger, radius of the glove finger, how far it curls (index, middle, ring, little)
   { z: 0.027, r: 0.0088, k: 0.95 }, { z: 0.005, r: 0.0092, k: 1.0 }, { z: -0.017, r: 0.0088, k: 0.96 }, { z: -0.038, r: 0.0078, k: 0.84 },
 ];

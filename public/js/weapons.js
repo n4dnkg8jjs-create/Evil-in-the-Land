@@ -63,31 +63,31 @@ const BUILD = {
     steel.push(xf(blade(0.96, 0.024, 0.012, 0.0065, { fuller: 0.55, point: 0.1 }), [0, 0.07, 0]));
     steel.push(xf(new THREE.BoxGeometry(0.24, 0.016, 0.018), [0, 0.06, 0])); // crossguard
     steel.push(xf(new THREE.SphereGeometry(0.014, 8, 6), [0.12, 0.06, 0])); steel.push(xf(new THREE.SphereGeometry(0.014, 8, 6), [-0.12, 0.06, 0]));
-    steel.push(xf(cyl(0.012, 0.022, 0.02, 10), [0, 0.065, 0]));
-    leather.push(xf(cyl(0.015, 0.013, 0.28, 10), [0, -0.08, 0]));
-    dark.push(xf(new THREE.TorusGeometry(0.0145, 0.0025, 4, 10), [0, 0.02, 0], [PI / 2, 0, 0]));
-    dark.push(xf(new THREE.TorusGeometry(0.0145, 0.0025, 4, 10), [0, -0.12, 0], [PI / 2, 0, 0]));
+    steel.push(xf(cyl(0.018, 0.024, 0.02, 12), [0, 0.065, 0]));
+    leather.push(xf(cyl(0.0205, 0.019, 0.28, 12), [0, -0.08, 0]));
+    dark.push(xf(new THREE.TorusGeometry(0.0205, 0.0025, 4, 12), [0, 0.02, 0], [PI / 2, 0, 0]));
+    dark.push(xf(new THREE.TorusGeometry(0.0195, 0.0025, 4, 12), [0, -0.12, 0], [PI / 2, 0, 0]));
     steel.push(xf(new THREE.SphereGeometry(0.03, 12, 8), [0, -0.245, 0], [0, 0, 0], [1, 1.25, 0.65])); // wheel pommel
     return { steel, leather, dark };
   },
   zweihander() {
     const steel = [], leather = [], dark = [];
     steel.push(xf(blade(1.22, 0.028, 0.014, 0.007, { fuller: 0.45, ricasso: 0.26, point: 0.08 }), [0, 0.07, 0]));
-    leather.push(xf(cyl(0.017, 0.017, 0.16, 10), [0, 0.17, 0])); // leather-wrapped ricasso
+    leather.push(xf(cyl(0.02, 0.02, 0.16, 12), [0, 0.17, 0])); // leather-wrapped ricasso
     steel.push(xf(new THREE.BoxGeometry(0.42, 0.02, 0.02), [0, 0.06, 0]));
     for (const s of [-1, 1]) {
       steel.push(xf(new THREE.TorusGeometry(0.04, 0.008, 5, 12, PI), [s * 0.2, 0.09, 0], [0, 0, s > 0 ? -PI / 2 : PI / 2]));
       steel.push(xf(new THREE.ConeGeometry(0.01, 0.06, 6), [s * 0.065, 0.32, 0], [0, 0, -s * 1.1])); // parrierhaken
       steel.push(xf(new THREE.SphereGeometry(0.016, 8, 6), [s * 0.21, 0.06, 0]));
     }
-    leather.push(xf(cyl(0.017, 0.015, 0.42, 10), [0, -0.15, 0]));
+    leather.push(xf(cyl(0.0215, 0.02, 0.42, 12), [0, -0.15, 0]));
     steel.push(xf(new THREE.SphereGeometry(0.034, 12, 8), [0, -0.38, 0], [0, 0, 0], [1, 1.4, 1]));
     return { steel, leather, dark };
   },
   mace() {
     const steel = [], leather = [], dark = [];
     steel.push(xf(cyl(0.013, 0.015, 0.5, 10), [0, 0.13, 0]));
-    leather.push(xf(cyl(0.017, 0.016, 0.14, 10), [0, -0.02, 0]));
+    leather.push(xf(cyl(0.0205, 0.0195, 0.14, 12), [0, -0.02, 0]));
     steel.push(xf(cyl(0.022, 0.02, 0.03, 10), [0, -0.1, 0]));
     // seven flanges, each a pointed gothic leaf
     for (let i = 0; i < 7; i++) {
@@ -118,7 +118,7 @@ const BUILD = {
   },
   halberd() {
     const steel = [], wood = [], leather = [];
-    wood.push(xf(cyl(0.017, 0.016, 1.95, 10), [0, 0.38, 0]));
+    wood.push(xf(cyl(0.0205, 0.019, 1.95, 12), [0, 0.38, 0]));
     // langets running down the shaft
     for (const s of [-1, 1]) steel.push(xf(new THREE.BoxGeometry(0.006, 0.36, 0.018), [0, 1.18, s * 0.018]));
     // axe blade (facing +X), back fluke (-X), top spike
@@ -145,7 +145,7 @@ const BUILD = {
   },
   pollaxe() {
     const steel = [], wood = [], brass = [];
-    wood.push(xf(cyl(0.018, 0.017, 1.55, 10), [0, 0.3, 0]));
+    wood.push(xf(cyl(0.021, 0.0195, 1.55, 12), [0, 0.3, 0]));
     for (const s of [-1, 1]) steel.push(xf(new THREE.BoxGeometry(0.006, 0.32, 0.02), [0, 0.96, s * 0.019]));
     // hammer head (+X face crowned with four teeth), fluke (-X), top spike
     steel.push(xf(new THREE.BoxGeometry(0.1, 0.06, 0.06), [0.05, 1.12, 0]));
