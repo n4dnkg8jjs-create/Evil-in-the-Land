@@ -121,7 +121,7 @@ let EYE_TEX = null;
 function personMat(look) {
   if (!EYE_TEX) { EYE_TEX = new THREE.TextureLoader().load('models/eye.png'); EYE_TEX.colorSpace = THREE.SRGBColorSpace; }
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0 });
-  const U = { uFrozen: { value: look.frozen || 0 }, uDead: { value: look.dead || 0 }, uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
+  const U = { uFrozen: { value: look.frozen || 0 }, uDead: { value: look.dead || 0 }, uBrow: { value: look.brow ?? 1 }, uAge: { value: look.age || 0 }, uEyeL: { value: new THREE.Vector3(...(look.eyes?.[0] || [0, 0, 0])) }, uEyeR: { value: new THREE.Vector3(...(look.eyes?.[1] || [0, 0, 0])) }, uSkin: { value: new THREE.Color(look.skin) }, uHair: { value: new THREE.Color(look.hair) }, uCloth: { value: new THREE.Color(look.cloth) }, uShoe: { value: new THREE.Color(0x2a1d14) }, uEye: { value: EYE_TEX } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float region;\nattribute float hairAmt;\nflat varying float vReg;\nvarying float vHair;\nvarying vec2 vUv0;\nvarying vec3 vObj;\nvarying vec3 vWN;')
@@ -130,7 +130,7 @@ function personMat(look) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         flat varying float vReg; varying float vHair; varying vec2 vUv0; varying vec3 vObj; varying vec3 vWN;
-        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge, uFrozen, uDead;
+        uniform vec3 uSkin, uHair, uCloth, uShoe, uEyeL, uEyeR; uniform sampler2D uEye; uniform float uAge, uFrozen, uDead, uBrow;
         float ph(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
         float pn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(ph(i), ph(i+vec3(1,0,0)), f.x), mix(ph(i+vec3(0,1,0)), ph(i+vec3(1,1,0)), f.x), f.y),
@@ -171,7 +171,12 @@ function personMat(look) {
         // hair: fine strands running down the head
         float strand = pn(vec3(vObj.x * 420.0, vObj.y * 30.0, vObj.z * 420.0));
         vec3 hair = uHair * (0.6 + 0.7 * strand);
-        float rH = rS0 * smoothstep(0.15, 0.6, vHair * (0.75 + 0.5 * strand)) * (1.0 - uDead); float rS = rS0 - rH;   // the dead one: not a hair on him, not even brows
+        float rH = rS0 * smoothstep(0.15, 0.6, vHair * (0.75 + 0.5 * strand)) * (1.0 - uDead);   // the dead one: not a hair on him, not even brows
+        // brows: thinned to separate hairs, skin showing through, a little lighter than the hair (uBrow < 1)
+        { vec3 bq = vObj - (uEyeL + uEyeR) * 0.5; float bz = smoothstep(0.004, 0.012, bq.y) * (1.0 - smoothstep(0.03, 0.04, bq.y)) * (1.0 - smoothstep(0.05, 0.065, abs(bq.x))) * smoothstep(-0.02, 0.0, bq.z);
+          float hairs = smoothstep(0.35, 0.75, pn(vec3(vObj.x * 900.0, vObj.y * 140.0, vObj.z * 900.0)));
+          rH *= mix(1.0, uBrow * (0.35 + 0.65 * hairs), bz); hair = mix(hair, hair * 1.35 + vec3(0.03, 0.02, 0.01), bz * (1.0 - uBrow)); }
+        float rS = rS0 - rH;
         vec3 cloth = uCloth * (0.75 + 0.35 * pn(vObj * vec3(160.0, 40.0, 160.0)));
         vec3 shoe = uShoe * (0.8 + 0.4 * pn(vObj * 60.0));
         vec3 eye = texture2D(uEye, vUv0).rgb;
@@ -219,7 +224,7 @@ function personMat(look) {
         reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02) * (1.0 - uFrozen) * (1.0 - uDead);
         reflectedLight.indirectDiffuse *= 1.0 - 0.45 * uDead;   // the dead one: no fill in the hollows, only hard light and dark`);
   };
-  mat.customProgramCacheKey = () => 'personSkin-v5';
+  mat.customProgramCacheKey = () => 'personSkin-v6';
   return mat;
 }
 function personMesh(rig, P, look) {

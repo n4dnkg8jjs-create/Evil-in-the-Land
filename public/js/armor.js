@@ -20,13 +20,14 @@ export const STYLES = {
 };
 
 // ---------------------------------------------------------------- geometry helpers
-function surf(fn, nu, nv) {
+function surf(fn, nu, nv, skip = null) {   // skip(u, v) at a cell's centre: leave that cell open (a slit, a hole)
   const pos = [], uv = [], idx = [];
   for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
     const u = i / nu, v = j / nv; const p = fn(u, v);
     pos.push(p[0], p[1], p[2]); uv.push(u, v);
   }
   for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+    if (skip && skip((i + 0.5) / nu, (j + 0.5) / nv)) continue;
     const a = j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1;
     idx.push(a, c, b, b, c, d);
   }
@@ -494,27 +495,46 @@ export function buildHarness(style, opts = {}) {
 function buildHelm(S, style, add, opts) {
   const plume = opts.plume ?? true;
   if (S.helm === 'sallet') {
-    // German sallet: rounded skull flowing into a long tail, with a slit visor; bevor covers the jaw
-    const sk = surf((u, v) => {
-      const th = lerp(-PI, PI, u); const ph = lerp(0, PI * 0.62, v);
-      const back = Math.max(0, -Math.cos(th));
-      const R = 0.128;
-      let y = 0.115 + Math.cos(ph) * R * 1.02; let r = Math.sin(ph) * R;
-      // tail sweeps out and down at the back
-      if (v > 0.7) { const t = (v - 0.7) / 0.3; y -= back * t * 0.06; r += back * t * 0.05; }
-      const comb = Math.exp(-((th / 0.12) ** 2 + (th - PI) ** 2 / 0.02)) * 0;
-      return [Math.sin(th) * r, y + comb, Math.cos(th) * r * 1.08 + 0.01];
-    }, 36, 16);
-    add('head', 'plate', sk);
-    // low comb ridge
-    add('head', 'plate', tubeAlong([[0, 0.2, 0.11], [0, 0.247, 0.02], [0, 0.235, -0.07], [0, 0.18, -0.12]], 0.007, 16, 5));
-    // visor slit
-    add('head', 'dark', xf(new THREE.BoxGeometry(0.15, 0.012, 0.03), { p: [0, 0.115, 0.122], s: [1, 1, 1] }));
-    add('head', 'trim', edge((u, v) => { const th = lerp(-1.3, 1.3, u); return [Math.sin(th) * 0.13, 0.105, Math.cos(th) * 0.13 * 1.08 + 0.01]; }, 'u0', 0.005, 16));
+    // German (Gothic) sallet: a low skull with a keel running from brow to nape, close over the head, coming down in
+    // front to below the eyes with the sight cut clean through it; its lower edge flares out all round like a brim and
+    // sweeps back into a long pointed tail; the edge rolled and bound in brass. The bevor rises to meet it in front.
+    const YC = 0.112, RY = 0.123, RH = 0.121, PE = 2.08, PF = 1.84;   // centre, vertical and horizontal radius; the edge; where the flare begins
+    const SL0 = 0.079, SL1 = 0.095, SW = 1.0;                         // the sight: from y SL0 to SL1, ±SW round the front
+    const salletAt = (th, ph, inset = 0) => {
+      const ft = Math.max(0, (ph - PF) / (PE - PF)), back = Math.max(0, -Math.cos(th)), side = Math.abs(Math.sin(th));
+      let y = YC + Math.cos(ph) * RY, r = Math.sin(ph) * RH;
+      // the brim: out a little in front, more at the sides, far out behind into the tail (which comes to a point)
+      const tail = Math.pow(back, 3) * 0.1 * (0.6 + 0.4 * Math.pow(back, 6));
+      r += ft * ft * (0.006 + side * 0.03 + tail);
+      y += ft * ft * (back * 0.012 - 0.004);
+      let x = Math.sin(th) * r * 0.9, z = Math.cos(th) * r * 1.07 + 0.012;
+      // the keel: a sharp ridge down the middle from the brow over the crown to the nape
+      const keel = 0.011 * Math.exp(-((x / 0.011) ** 2)) * (1 - smooth(clamp((ph - 1.45) / 0.35, 0, 1)) * (Math.cos(th) > 0 ? 1 : 0.4));
+      const nx = Math.sin(ph) * Math.sin(th), ny = Math.cos(ph), nz = Math.sin(ph) * Math.cos(th);
+      x += nx * (keel - inset); y += ny * (keel - inset); z += nz * (keel - inset);
+      return [x, y, z];
+    };
+    const slit = (th, ph) => { const y = YC + Math.cos(ph) * RY; return Math.abs(th) < SW && y > SL0 && y < SL1; };
+    const NU = 72, NV = 28, sk = (u, v) => salletAt(lerp(-PI, PI, u), lerp(0, PE, v)), skip = (u, v) => slit(lerp(-PI, PI, u), lerp(0, PE, v));
+    add('head', 'plate', surf(sk, NU, NV, skip));
+    // the inside (the brim and the tail are seen from below, the sight from in front): the same shell turned inward
+    add('head', 'leather', surf((u, v) => salletAt(lerp(PI, -PI, u), lerp(0, PE, v), 0.004), NU, NV, (u, v) => slit(lerp(PI, -PI, u), lerp(0, PE, v))));
+    // the brass-bound edge all round, and the sight's lips
+    add('head', 'brass', edge((u) => salletAt(lerp(-PI, PI, u), PE - 0.004), 'v0', 0.0032, 72));
+    const phOfY = (y) => Math.acos(clamp((y - YC) / RY, -1, 1));
+    add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), phOfY(SL1) - 0.004), 'v0', 0.0028, 24));
+    add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), phOfY(SL0) + 0.004), 'v0', 0.0028, 24));
+    // rivets for the lining band, round the skull above the brim
+    add('head', 'brass', mergeGeometries([-2.3, -1.4, 1.4, 2.3, PI].map((th) => { const p = salletAt(th, 1.62), n = [Math.sin(th), 0, Math.cos(th)]; return rivetOut(p, n, 0.0045); })));
     // bevor: chin/throat defence strapped to the breastplate (chest joint)
-    const bv = shell({ a0: -1.8, a1: 1.8, y0: 0.2, y1: 0.33, rx: (v) => lerp(0.11, 0.135, v), rz: (v) => lerp(0.1, 0.14, v), cz: 0.03, nu: 24, nv: 6, extra: (th, v) => 0.015 * Math.exp(-((th / 0.4) ** 2)) * v });
+    // shaped to the chin: broad over the collar, swelling round the jaw with a ridge down the front, narrowing at the top
+    // to tuck under the sallet's lip
+    const bv = shell({ a0: -1.85, a1: 1.85, y0: 0.215, y1: 0.37, rx: (v) => lerp(0.112, 0.09, Math.pow(v, 1.2)), rz: (v) => lerp(0.1, 0.11, v) + 0.016 * Math.sin(v * PI * 0.95), cz: 0.03, nu: 30, nv: 10, extra: (th, v) => 0.012 * Math.exp(-((th / 0.4) ** 2)) * Math.sin(Math.min(1, v * 1.1) * PI * 0.9) });
     add('chest', 'plate', bv.geo, { joint: 'neck', k: 0.35, pivot: [0, 0.2, 0] });
-    add('chest', 'trim', edge(bv.fn, 'v1', 0.006, 22), { joint: 'neck', k: 0.35, pivot: [0, 0.2, 0] });
+    add('chest', 'brass', edge(bv.fn, 'v1', 0.0045, 26), { joint: 'neck', k: 0.35, pivot: [0, 0.2, 0] });
+    // a mail collar (a standard) round the neck under the bevor and the sallet's tail: the back of the neck is never bare
+    const st = shell({ a0: 0, a1: PI * 2, y0: 0.17, y1: 0.36, rx: (v) => lerp(0.112, 0.07, Math.pow(v, 0.7)), rz: (v) => lerp(0.108, 0.072, Math.pow(v, 0.7)), cz: 0.0, nu: 28, nv: 6 });
+    add('chest', 'mail', st.geo, { joint: 'neck', k: 0.6, pivot: [0, 0.2, 0] });
   } else {
     // armet / close helmet: rounded bowl with comb, articulated visor, bevor and neck lames
     const sk = surf((u, v) => {
