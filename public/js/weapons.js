@@ -41,6 +41,47 @@ function blade(len, w0, w1, thick, { fuller = 0.45, ricasso = 0, point = 0.12 } 
 }
 
 function cyl(r0, r1, h, seg = 10) { return new THREE.CylinderGeometry(r1, r0, h, seg); }
+const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+// a lathe from [radius, y] pairs, upright along +Y
+function lathe(pts, seg = 12) { return new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg); }
+// a blade (or sleeve) from a half-width profile w(t) and half-thickness th(t), t = 0..1 along +Y.
+// Bevelled edges, an optional fuller [t0, t1] or raised midrib, an optional sideways wave(t) for flame blades.
+function shapedBlade(len, w, th, { fuller = null, rib = 0, wave = null, segs = 64, point = true, ring = 'blade' } = {}) {
+  const pos = [], uv = [], ind = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs, y = t * len; const W = Math.max(point && i === segs ? 0.0004 : 0.0006, w(t)), T = Math.max(0.0005, th(t)), dx = wave ? wave(t) : 0;
+    let c = T; if (fuller && t > fuller[0] && t < fuller[1]) { const e = Math.min(1, (t - fuller[0]) * 40, (fuller[1] - t) * 40); c = T * (1 - 0.55 * e); } if (rib) c = T * rib;
+    const R = ring === 'flat'
+      ? [[W, 0], [W * 0.9, T * 0.8], [W * 0.5, T], [0, T], [-W * 0.5, T], [-W * 0.9, T * 0.8], [-W, 0], [-W * 0.9, -T * 0.8], [-W * 0.5, -T], [0, -T], [W * 0.5, -T], [W * 0.9, -T * 0.8]]
+      : [[W, 0], [W * 0.7, T * 0.55], [W * 0.3, T], [0, c], [-W * 0.3, T], [-W * 0.7, T * 0.55], [-W, 0], [-W * 0.7, -T * 0.55], [-W * 0.3, -T], [0, -c], [W * 0.3, -T], [W * 0.7, -T * 0.55]];
+    for (let k = 0; k < R.length; k++) { pos.push(R[k][0] + dx, y, R[k][1]); uv.push(k / R.length, t); }
+  }
+  const N = 12;
+  for (let i = 0; i < segs; i++) for (let k = 0; k < N; k++) { const a = i * N + k, b = i * N + (k + 1) % N, c = a + N, d = b + N; ind.push(a, c, b, b, c, d); }
+  if (!point) { // close both ends
+    const base = pos.length / 3; pos.push(0, 0, 0, 0, len, 0); uv.push(0.5, 0, 0.5, 1);
+    for (let k = 0; k < N; k++) { const k1 = (k + 1) % N; ind.push(base, k, k1); ind.push(base + 1, segs * N + k1, segs * N + k); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(ind);
+  g.computeVertexNormals(); return g;
+}
+// a tube swept along points with a tapering radius r(t); sz squashes it across the curve's binormal
+function sweep(pts, r, { seg = 8, n = 0, sz = 1 } = {}) {
+  const curve = new THREE.CatmullRomCurve3(pts); const steps = n || Math.max(8, pts.length * 8);
+  const fr = curve.computeFrenetFrames(steps, false); const pos = [], uv = [], ind = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps, P = curve.getPointAt(t), N = fr.normals[i], B = fr.binormals[i], rr = r(t);
+    for (let k = 0; k < seg; k++) { const a = k / seg * PI * 2; const cx = Math.cos(a) * rr, cy = Math.sin(a) * rr * sz; pos.push(P.x + N.x * cx + B.x * cy, P.y + N.y * cx + B.y * cy, P.z + N.z * cx + B.z * cy); uv.push(k / seg, t); }
+  }
+  for (let i = 0; i < steps; i++) for (let k = 0; k < seg; k++) { const a = i * seg + k, b = i * seg + (k + 1) % seg, c = a + seg, d = b + seg; ind.push(a, b, c, b, d, c); }
+  // caps
+  const P0 = curve.getPointAt(0), P1 = curve.getPointAt(1), base = pos.length / 3; pos.push(P0.x, P0.y, P0.z, P1.x, P1.y, P1.z); uv.push(0, 0, 0, 1);
+  for (let k = 0; k < seg; k++) { const k1 = (k + 1) % seg; ind.push(base, k1, k); ind.push(base + 1, steps * seg + k, steps * seg + k1); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(ind);
+  g.computeVertexNormals(); return g;
+}
 
 function weaponMats(q) {
   const steel = armorTextures('bright', q.tex);
@@ -53,11 +94,12 @@ function weaponMats(q) {
     wood: new THREE.MeshStandardMaterial({ map: wood.map, normalMap: wood.normalMap, roughnessMap: wood.roughnessMap, roughness: 0.85, metalness: 0 }),
     leather: new THREE.MeshStandardMaterial({ map: lt.map, normalMap: lt.normalMap, roughnessMap: lt.roughnessMap, roughness: 1, metalness: 0 }),
     cloth: new THREE.MeshStandardMaterial({ color: 0x7a1414, roughness: 0.9, side: THREE.DoubleSide }),
-    // the relics: gold that holds a little light of its own, silver, and the old iron of the lance
-    gold: new THREE.MeshStandardMaterial({ color: 0xd9a845, metalness: 1, roughness: 0.28, emissive: 0x3a2400, emissiveIntensity: 0.6 }),
-    silver: new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 1, roughness: 0.32 }),
-    iron: new THREE.MeshStandardMaterial({ color: 0x4a4440, metalness: 0.85, roughness: 0.62 }),
-    relic: new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffd890, emissiveIntensity: 1.6, roughness: 0.2, metalness: 0, transparent: true, opacity: 0.85 }),
+    // the relics: real gilt (warm, a little worn), silver, the old dark steel of the Lance, blackened steel with gilt
+    gold: new THREE.MeshStandardMaterial({ color: 0xd8b062, metalness: 1, roughness: 0.3, roughnessMap: steel.roughnessMap, normalMap: steel.normalMap, normalScale: new THREE.Vector2(0.15, 0.15), envMapIntensity: 1.5 }),
+    silver: new THREE.MeshStandardMaterial({ color: 0xdfe2e6, metalness: 1, roughness: 0.26, roughnessMap: steel.roughnessMap, normalMap: steel.normalMap, normalScale: new THREE.Vector2(0.2, 0.2), envMapIntensity: 1.4 }),
+    oldsteel: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, color: 0xb0a89e, metalness: 0.75, roughness: 0.62, envMapIntensity: 1.6, normalScale: new THREE.Vector2(0.5, 0.5) }),
+    black: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, color: 0x4a4644, metalness: 1, roughness: 0.6, envMapIntensity: 1.4, normalScale: new THREE.Vector2(0.4, 0.4) }),
+    relic: new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffd890, emissiveIntensity: 1.2, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.9 }),
   };
 }
 
@@ -163,95 +205,123 @@ const BUILD = {
     return { steel, wood, brass };
   },
   // ---------------------------------------------------------------- the relics (bought dear from the sutler)
-  // The Holy Lance: an old leaf-bladed iron spearhead, broken across the middle and bound again with a silver
-  // sleeve and a gold one over it; a nail of the Passion is set into the slot down its centre with gold wire,
-  // and little brass crosses are hammered into the blade. On a new ash shaft with a gilt socket.
+  // The Holy Lance, after the one kept in Vienna: a long, slender leaf of old dark steel with a raised midrib and two
+  // small wings at its foot; across the middle, where it once broke, a silver sleeve and a shorter gold one over it;
+  // a nail of the Passion laid along the face under the sleeves, bound with gold wire; a wire-bound socket on ash.
   lance() {
-    const wood = [], steel = [], iron = [], gold = [], silver = [], dark = [];
-    wood.push(xf(cyl(0.0195, 0.017, 2.34, 12), [0, 0.55, 0]));
-    steel.push(xf(new THREE.ConeGeometry(0.02, 0.06, 8), [0, -0.645, 0], [PI, 0, 0]));
-    for (const y of [-0.5, 1.45, 1.58]) gold.push(xf(new THREE.TorusGeometry(0.02, 0.0035, 5, 14), [0, y, 0], [PI / 2, 0, 0]));
-    // silver wire wound round the hand-hold
-    for (let i = 0; i < 18; i++) silver.push(xf(new THREE.TorusGeometry(0.0198, 0.0016, 4, 12), [0, -0.12 + i * 0.016, 0], [PI / 2 + 0.06, 0, 0]));
-    // the socket: a gilt collar flaring up into the iron
-    gold.push(xf(cyl(0.021, 0.017, 0.14, 12), [0, 1.69, 0]));
-    gold.push(xf(new THREE.TorusGeometry(0.019, 0.004, 5, 14), [0, 1.76, 0], [PI / 2, 0, 0]));
-    // the leaf blade, dark old iron, with two little wings at its foot
-    const leaf = blade(0.4, 0.016, 0.05, 0.007, { fuller: 0, point: 0.5 });
-    iron.push(xf(leaf, [0, 1.76, 0]));
-    for (const sd of [-1, 1]) { const w = new THREE.Shape(); w.moveTo(0, 0); w.lineTo(sd * 0.042, -0.012); w.lineTo(sd * 0.03, 0.03); w.lineTo(0, 0.05);
-      iron.push(xf(new THREE.ExtrudeGeometry(w, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 1 }), [0, 1.79, -0.003])); }
-    // the break, bound: silver sleeve beneath, gold sleeve over it, both flattened to the blade
-    silver.push(xf(cyl(0.05, 0.048, 0.1, 18), [0, 1.93, 0], [0, 0, 0], [1, 1, 0.26]));
-    gold.push(xf(cyl(0.054, 0.052, 0.07, 18), [0, 1.935, 0], [0, 0, 0], [1, 1, 0.3]));
-    for (const y of [1.905, 1.965]) gold.push(xf(new THREE.TorusGeometry(0.053, 0.0025, 4, 20), [0, y, 0], [PI / 2, 0, 0], [1, 0.3, 1]));
-    // the nail in its slot, held by turns of gold wire
-    dark.push(xf(cyl(0.0042, 0.0032, 0.2, 6), [0, 1.86, 0.0055]));
-    dark.push(xf(new THREE.SphereGeometry(0.0075, 8, 6), [0, 1.765, 0.0055], [0, 0, 0], [1, 0.5, 1]));
-    for (let i = 0; i < 7; i++) gold.push(xf(new THREE.TorusGeometry(0.0062, 0.0011, 3, 8), [0, 1.8 + i * 0.012, 0.0055], [PI / 2, 0, 0]));
-    // brass crosses hammered into the iron, either side of the nail
-    for (const sd of [-1, 1]) for (const z of [0.0072, -0.0072]) { gold.push(xf(new THREE.BoxGeometry(0.004, 0.016, 0.0012), [sd * 0.022, 1.86, z])); gold.push(xf(new THREE.BoxGeometry(0.011, 0.004, 0.0012), [sd * 0.022, 1.864, z])); }
-    return { wood, steel, iron, gold, silver, dark };
+    const wood = [], oldsteel = [], gold = [], silver = [], dark = [], leather = [];
+    wood.push(xf(cyl(0.0195, 0.0172, 2.3, 14), [0, 0.53, 0]));
+    oldsteel.push(xf(lathe([[0, -0.07], [0.012, -0.065], [0.019, -0.04], [0.02, 0]], 12), [0, -0.62, 0]));      // butt shoe
+    leather.push(xf(cyl(0.0212, 0.0212, 0.3, 14), [0, 0.02, 0]));
+    for (const y of [-0.13, 0.17]) gold.push(xf(new THREE.TorusGeometry(0.0212, 0.0026, 5, 16), [0, y, 0], [PI / 2, 0, 0]));
+    // socket: a tapering octagonal iron tube, bound in gold wire top and bottom
+    oldsteel.push(xf(lathe([[0.0205, 0], [0.0198, 0.06], [0.0165, 0.13], [0.0125, 0.17], [0.009, 0.185]], 8), [0, 1.6, 0]));
+    for (let i = 0; i < 6; i++) gold.push(xf(new THREE.TorusGeometry(0.0204 - i * 0.0002, 0.0013, 4, 14), [0, 1.605 + i * 0.0045, 0], [PI / 2, 0, 0]));
+    for (let i = 0; i < 5; i++) gold.push(xf(new THREE.TorusGeometry(0.0158 - i * 0.0004, 0.0012, 4, 12), [0, 1.735 + i * 0.004, 0], [PI / 2, 0, 0]));
+    // the leaf: narrow neck, widest a third of the way up, a long fine point
+    const Y0 = 1.78, LEN = 0.52;
+    const lw = (t) => t < 0.36 ? 0.007 + 0.025 * Math.sin((t / 0.36) * PI / 2) : 0.032 * Math.pow((1 - t) / 0.64, 0.9);
+    oldsteel.push(xf(shapedBlade(LEN, lw, (t) => 0.0034 * (1 - 0.5 * t), { rib: 1.9 }), [0, Y0, 0]));
+    // the two little wings at its foot, flattened in the blade's plane
+    for (const sd of [-1, 1]) {
+      const w = new THREE.Shape(); w.moveTo(0, 0); w.quadraticCurveTo(sd * 0.03, -0.004, sd * 0.034, -0.026); w.quadraticCurveTo(sd * 0.018, -0.006, 0, 0.018);
+      oldsteel.push(xf(new THREE.ExtrudeGeometry(w, { depth: 0.0036, bevelEnabled: true, bevelThickness: 0.001, bevelSize: 0.001, bevelSegments: 1 }), [sd * 0.006, Y0 + 0.05, -0.0018]));
+    }
+    // the nail, square in section, laid along the front face below the sleeves and bound in gold wire
+    const nail = new THREE.CylinderGeometry(0.0021, 0.0034, 0.17, 4); nail.rotateY(PI / 4);
+    dark.push(xf(nail, [0, Y0 + 0.13, 0.0072]));
+    dark.push(xf(new THREE.CylinderGeometry(0.0062, 0.0062, 0.0025, 10), [0, Y0 + 0.045, 0.0072]));
+    for (let i = 0; i < 4; i++) gold.push(xf(new THREE.TorusGeometry(0.0045, 0.0009, 3, 10), [0, Y0 + 0.07 + i * 0.026, 0.0062], [PI / 2, 0, 0], [1, 1, 0.9]));
+    // the sleeves: flat lozenge tubes that hug the blade where it broke; silver beneath, a narrower gold band over it
+    const sy0 = 0.37, sy1 = 0.6;
+    silver.push(xf(shapedBlade(LEN * (sy1 - sy0), (u) => lw(sy0 + u * (sy1 - sy0)) + 0.0032, () => 0.0105, { point: false, segs: 10, ring: 'flat' }), [0, Y0 + LEN * sy0, 0]));
+    const gy0 = 0.43, gy1 = 0.54;
+    gold.push(xf(shapedBlade(LEN * (gy1 - gy0), (u) => lw(gy0 + u * (gy1 - gy0)) + 0.0058, () => 0.0126, { point: false, segs: 6, ring: 'flat' }), [0, Y0 + LEN * gy0, 0]));
+    for (const u of [gy0, gy1]) gold.push(xf(shapedBlade(0.004, () => lw(u) + 0.0068, () => 0.0136, { point: false, segs: 1, ring: 'flat' }), [0, Y0 + LEN * u - 0.002, 0]));
+    // little crosses chased into the steel above the sleeves
+    for (const z of [0.0049, -0.0049]) { gold.push(xf(new THREE.BoxGeometry(0.0022, 0.014, 0.0008), [0, Y0 + LEN * 0.66, z])); gold.push(xf(new THREE.BoxGeometry(0.009, 0.0022, 0.0008), [0, Y0 + LEN * 0.66 + 0.003, z])); }
+    return { wood, oldsteel, gold, silver, dark, leather };
   },
-  // Joyeuse: Charlemagne's sword, they say, with a sliver of the Lance in a crystal set into its gold pommel
+  // Joyeuse, after the sword in the Louvre: a gilt cross whose arms sweep toward the blade and end in little beast
+  // heads, a grip bound in a lattice of gold wire, and a two-lobed pommel with a crystal over a relic of the Lance.
   joyeuse() {
     const steel = [], gold = [], leather = [], relic = [];
-    steel.push(xf(blade(0.94, 0.025, 0.013, 0.0065, { fuller: 0.7, point: 0.1 }), [0, 0.07, 0]));
-    // a gold cross with arms bent down toward the blade, ending in knobs
+    steel.push(xf(shapedBlade(0.94, (t) => THREE.MathUtils.lerp(0.025, 0.012, t) * (t > 0.88 ? Math.sqrt((1 - t) / 0.12) : 1), (t) => 0.0062 * (1 - 0.5 * t), { fuller: [0.03, 0.7] }), [0, 0.07, 0]));
+    // the cross: two tapering arms bending up toward the blade, each ending in a small head with an open mouth
     for (const sd of [-1, 1]) {
-      gold.push(xf(new THREE.BoxGeometry(0.1, 0.016, 0.02), [sd * 0.05, 0.062, 0], [0, 0, sd * -0.12]));
-      gold.push(xf(new THREE.BoxGeometry(0.03, 0.014, 0.018), [sd * 0.108, 0.078, 0], [0, 0, sd * -0.5]));
-      gold.push(xf(new THREE.SphereGeometry(0.014, 10, 8), [sd * 0.122, 0.09, 0]));
+      const pts = [V3(0, 0.062, 0), V3(sd * 0.045, 0.064, 0), V3(sd * 0.085, 0.074, 0), V3(sd * 0.112, 0.094, 0)];
+      gold.push(sweep(pts, (t) => 0.0105 - 0.004 * t, { seg: 8, sz: 0.85 }));
+      gold.push(xf(new THREE.SphereGeometry(0.0105, 12, 8), [sd * 0.116, 0.1, 0], [0, 0, -sd * 0.6], [1, 1.35, 0.85]));
+      gold.push(xf(new THREE.ConeGeometry(0.0065, 0.02, 8), [sd * 0.124, 0.115, 0], [0, 0, -sd * 0.55]));
+      for (const z of [-1, 1]) relic.push(xf(new THREE.SphereGeometry(0.0022, 6, 4), [sd * 0.118, 0.104, z * 0.0075]));
     }
-    gold.push(xf(cyl(0.02, 0.026, 0.03, 12), [0, 0.065, 0]));
-    leather.push(xf(cyl(0.0205, 0.019, 0.24, 12), [0, -0.075, 0]));
-    for (let i = 0; i < 13; i++) gold.push(xf(new THREE.TorusGeometry(0.0205, 0.0014, 4, 12), [0, -0.18 + i * 0.018, 0], [PI / 2 + 0.08, 0, 0]));
-    // the reliquary pommel: a gold disc, a crystal window front and back, the relic glowing within
-    gold.push(xf(cyl(0.038, 0.038, 0.026, 20), [0, -0.235, 0], [PI / 2, 0, 0]));
-    gold.push(xf(new THREE.TorusGeometry(0.038, 0.005, 6, 20), [0, -0.235, 0]));
-    relic.push(xf(cyl(0.02, 0.02, 0.03, 16), [0, -0.235, 0], [PI / 2, 0, 0]));
-    gold.push(xf(new THREE.ConeGeometry(0.01, 0.024, 8), [0, -0.284, 0], [PI, 0, 0]));
+    // the écusson over the blade's root
+    gold.push(xf(lathe([[0, 0], [0.024, 0.003], [0.02, 0.026], [0.0, 0.036]], 4), [0, 0.056, 0], [0, PI / 4, 0], [1, 1, 0.45]));
+    leather.push(xf(cyl(0.0198, 0.0186, 0.235, 14), [0, -0.075, 0]));
+    // gold wire lattice over the grip: two counter-wound helices
+    for (const dir of [-1, 1]) { const pts = []; for (let i = 0; i <= 60; i++) { const t = i / 60, a = dir * t * PI * 2 * 5; pts.push(V3(Math.cos(a) * 0.0202, -0.19 + t * 0.23, Math.sin(a) * 0.0202)); } gold.push(sweep(pts, () => 0.0011, { seg: 4 })); }
+    for (const y of [-0.19, 0.042]) gold.push(xf(new THREE.TorusGeometry(0.0205, 0.0026, 5, 16), [0, y, 0], [PI / 2, 0, 0]));
+    // the pommel: a neck, two lobes like folded wings, a crystal boss on each face over the glowing relic
+    gold.push(xf(lathe([[0.016, 0], [0.02, -0.008], [0.013, -0.016]], 12), [0, -0.192, 0]));
+    gold.push(xf(new THREE.SphereGeometry(0.03, 18, 12), [0, -0.24, 0], [0, 0, 0], [1.25, 0.92, 0.52]));
+    for (const sd of [-1, 1]) gold.push(xf(new THREE.SphereGeometry(0.017, 12, 8), [sd * 0.03, -0.25, 0], [0, 0, 0], [1, 1.2, 0.75]));
+    relic.push(xf(new THREE.SphereGeometry(0.012, 14, 10), [0, -0.24, 0], [0, 0, 0], [1, 1, 1.45]));
+    gold.push(xf(new THREE.TorusGeometry(0.0128, 0.0018, 5, 16), [0, -0.24, 0.0135])); gold.push(xf(new THREE.TorusGeometry(0.0128, 0.0018, 5, 16), [0, -0.24, -0.0135]));
+    gold.push(xf(new THREE.SphereGeometry(0.006, 8, 6), [0, -0.276, 0]));
     return { steel, gold, leather, relic };
   },
-  // the Flamberge of Saint Michael: a two-hander whose blade waves like a flame, the archangel's sword
+  // the Flamberge of Saint Michael: a two-hander whose blade waves like a flame; blackened guard with gilt,
+  // long S-curved quillons, side rings, parrying hooks at the ricasso, and a long grip with a pear pommel
   flamberge() {
-    const steel = [], leather = [], gold = [];
-    const bl = blade(1.2, 0.03, 0.015, 0.007, { fuller: 0.35, ricasso: 0.26, point: 0.08 });
-    const P = bl.attributes.position;
-    for (let i = 0; i < P.count; i++) { const y = P.getY(i); if (y < 0.28) continue; const f = Math.min(1, (y - 0.28) / 0.08) * (1 - Math.max(0, (y - 1.05) / 0.15)); P.setX(i, P.getX(i) + Math.sin((y - 0.28) * 34) * 0.0085 * f); }
-    bl.computeVertexNormals(); steel.push(xf(bl, [0, 0.07, 0]));
-    leather.push(xf(cyl(0.02, 0.02, 0.16, 12), [0, 0.17, 0]));
-    gold.push(xf(new THREE.BoxGeometry(0.44, 0.02, 0.022), [0, 0.06, 0]));
+    const steel = [], leather = [], gold = [], black = [];
+    const fw = (t) => { const y = t * 1.22; let w = y < 0.26 ? 0.019 : THREE.MathUtils.lerp(0.031, 0.016, (y - 0.26) / 0.96); if (t > 0.9) w *= Math.sqrt((1 - t) / 0.1); return w; };
+    const wave = (t) => { const y = t * 1.22; if (y < 0.29) return 0; const f = Math.min(1, (y - 0.29) / 0.05) * (1 - Math.max(0, (t - 0.84) / 0.16)); return Math.sin((y - 0.29) * 46) * 0.0072 * f; };
+    steel.push(xf(shapedBlade(1.22, fw, (t) => 0.0068 * (1 - 0.45 * t), { fuller: [0.28, 0.62], wave, segs: 120 }), [0, 0.07, 0]));
+    leather.push(xf(cyl(0.0205, 0.0205, 0.15, 14), [0, 0.17, 0]));                                                     // leather-bound ricasso
+    for (const y of [0.093, 0.247]) gold.push(xf(new THREE.TorusGeometry(0.021, 0.0022, 5, 16), [0, y, 0], [PI / 2, 0, 0]));
+    // the guard
+    black.push(xf(lathe([[0, -0.012], [0.03, -0.01], [0.034, 0.0], [0.03, 0.012], [0, 0.014]], 8), [0, 0.062, 0], [0, PI / 8, 0], [1, 1, 0.75]));
     for (const sd of [-1, 1]) {
-      gold.push(xf(new THREE.TorusGeometry(0.04, 0.008, 5, 12, PI), [sd * 0.2, 0.09, 0], [0, 0, sd > 0 ? -PI / 2 : PI / 2]));
-      gold.push(xf(new THREE.ConeGeometry(0.011, 0.07, 6), [sd * 0.07, 0.33, 0], [0, 0, -sd * 1.1]));
-      gold.push(xf(new THREE.SphereGeometry(0.018, 10, 8), [sd * 0.22, 0.06, 0]));
-      gold.push(xf(new THREE.TorusGeometry(0.03, 0.005, 5, 14), [sd * 0.0, 0.06, sd * 0.03], [0, 0, 0]));   // side rings
+      const q = [V3(0, 0.062, 0), V3(sd * 0.09, 0.06, 0), V3(sd * 0.17, 0.07, 0), V3(sd * 0.215, 0.1, 0), V3(sd * 0.226, 0.135, 0)];
+      black.push(sweep(q, (t) => 0.0115 - 0.0045 * t, { seg: 8 }));
+      gold.push(xf(new THREE.SphereGeometry(0.0125, 12, 8), [sd * 0.226, 0.142, 0], [0, 0, 0], [1, 1.3, 1]));
+      gold.push(xf(new THREE.TorusGeometry(0.0118, 0.0018, 4, 14), [sd * 0.226, 0.13, 0], [PI / 2, 0, 0]));
+      // side rings, standing out from the faces of the guard
+      black.push(xf(new THREE.TorusGeometry(0.036, 0.0058, 6, 22), [0, 0.07, sd * 0.038], [0, PI / 2, 0]));
+      // parrying hooks at the top of the ricasso, curling back toward the hands
+      const h = [V3(sd * 0.018, 0.255, 0), V3(sd * 0.05, 0.262, 0), V3(sd * 0.075, 0.245, 0), V3(sd * 0.078, 0.22, 0)];
+      black.push(sweep(h, (t) => 0.0068 - 0.0045 * t, { seg: 6 }));
     }
-    leather.push(xf(cyl(0.0215, 0.02, 0.42, 12), [0, -0.15, 0]));
-    for (let i = 0; i < 4; i++) gold.push(xf(new THREE.TorusGeometry(0.0215, 0.002, 4, 12), [0, -0.33 + i * 0.12, 0], [PI / 2, 0, 0]));
-    gold.push(xf(new THREE.SphereGeometry(0.036, 14, 10), [0, -0.385, 0], [0, 0, 0], [1, 1.3, 1]));
-    return { steel, leather, gold };
+    leather.push(xf(lathe([[0.0195, 0], [0.0225, 0.12], [0.023, 0.21], [0.0215, 0.3], [0.019, 0.42]], 14), [0, -0.36, 0]));
+    for (let i = 0; i < 5; i++) gold.push(xf(new THREE.TorusGeometry(0.0222, 0.0016, 4, 14), [0, -0.33 + i * 0.075, 0], [PI / 2, 0, 0]));
+    black.push(xf(lathe([[0.012, 0.0], [0.03, -0.03], [0.034, -0.06], [0.024, -0.085], [0.006, -0.1], [0, -0.104]], 16), [0, -0.355, 0]));
+    gold.push(xf(new THREE.TorusGeometry(0.033, 0.0028, 5, 20), [0, -0.405, 0], [PI / 2, 0, 0]));
+    return { steel, leather, gold, black };
   },
-  // the Hammer of Saint Eligius, patron of smiths: a war hammer forged and blessed at his shrine, crowned face and beak
+  // the Hammer of Saint Eligius, patron of smiths: a horseman's war hammer, its octagonal face crowned with four
+  // teeth, a long curved beak behind, a square spike above, steel langets down an iron haft, gilt bands and crosses
   hammer() {
-    const steel = [], leather = [], gold = [], dark = [];
-    steel.push(xf(cyl(0.014, 0.016, 0.56, 10), [0, 0.15, 0]));
-    for (const sd of [-1, 1]) steel.push(xf(new THREE.BoxGeometry(0.005, 0.22, 0.016), [0, 0.34, sd * 0.016]));
-    leather.push(xf(cyl(0.0205, 0.0195, 0.15, 12), [0, -0.03, 0]));
-    gold.push(xf(cyl(0.022, 0.02, 0.025, 12), [0, -0.115, 0]));
-    gold.push(xf(new THREE.SphereGeometry(0.02, 10, 8), [0, -0.135, 0]));
-    // the head: a square hammer crowned with four teeth, a curved beak behind, a spike on top
-    steel.push(xf(new THREE.BoxGeometry(0.05, 0.07, 0.05), [0, 0.43, 0]));
-    steel.push(xf(new THREE.BoxGeometry(0.06, 0.055, 0.055), [0.055, 0.43, 0]));
-    for (let a = 0; a < 4; a++) steel.push(xf(new THREE.ConeGeometry(0.013, 0.022, 4), [0.093, 0.43 + (a < 2 ? 0.014 : -0.014), (a % 2 ? 0.014 : -0.014)], [0, 0, -PI / 2]));
-    const bk = new THREE.Shape(); bk.moveTo(0, -0.025); bk.quadraticCurveTo(-0.08, -0.02, -0.13, -0.07); bk.quadraticCurveTo(-0.07, 0.0, 0, 0.025);
-    steel.push(xf(new THREE.ExtrudeGeometry(bk, { depth: 0.014, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 1 }), [-0.02, 0.43, -0.007]));
-    steel.push(xf(new THREE.ConeGeometry(0.016, 0.1, 4), [0, 0.51, 0]));
-    // gilt bands with a cross on each face of the socket
-    for (const y of [0.395, 0.465]) gold.push(xf(new THREE.BoxGeometry(0.054, 0.006, 0.054), [0, y, 0]));
-    for (const sd of [-1, 1]) { gold.push(xf(new THREE.BoxGeometry(0.004, 0.03, 0.002), [0, 0.43, sd * 0.026])); gold.push(xf(new THREE.BoxGeometry(0.018, 0.004, 0.002), [0, 0.436, sd * 0.026])); }
-    return { steel, leather, gold, dark };
+    const steel = [], leather = [], gold = [], black = [];
+    steel.push(xf(cyl(0.0125, 0.0145, 0.56, 8), [0, 0.15, 0], [0, PI / 8, 0]));
+    for (const sd of [-1, 1]) steel.push(xf(new THREE.BoxGeometry(0.0045, 0.2, 0.012), [0, 0.33, sd * 0.0145]));
+    leather.push(xf(lathe([[0.019, 0], [0.0212, 0.07], [0.0198, 0.15]], 14), [0, -0.105, 0]));
+    steel.push(xf(new THREE.CylinderGeometry(0.036, 0.036, 0.004, 20), [0, 0.06, 0]));                                    // rondel over the hand
+    gold.push(xf(new THREE.TorusGeometry(0.036, 0.002, 4, 24), [0, 0.06, 0], [PI / 2, 0, 0]));
+    steel.push(xf(lathe([[0, 0], [0.022, -0.005], [0.024, -0.02], [0.012, -0.034], [0, -0.038]], 12), [0, -0.105, 0]));
+    // the socket block with chamfered corners
+    steel.push(xf(lathe([[0.02, -0.042], [0.026, -0.036], [0.026, 0.036], [0.02, 0.042]], 8), [0, 0.43, 0], [0, PI / 8, 0]));
+    // the hammer: an octagonal neck widening to a face crowned with four pyramids
+    const hm = lathe([[0.017, 0], [0.019, 0.03], [0.026, 0.058], [0.026, 0.066]], 8); hm.rotateY(PI / 8);
+    steel.push(xf(hm, [0.02, 0.43, 0], [0, 0, -PI / 2]));
+    for (let a = 0; a < 4; a++) steel.push(xf(new THREE.ConeGeometry(0.011, 0.016, 4), [0.093, 0.43 + (a < 2 ? 0.011 : -0.011), (a % 2 ? 0.011 : -0.011)], [0, 0, -PI / 2]));
+    // the beak: long, square-ish, curving down to a point
+    steel.push(sweep([V3(-0.02, 0.43, 0), V3(-0.07, 0.428, 0), V3(-0.12, 0.41, 0), V3(-0.16, 0.37, 0)], (t) => 0.016 * Math.pow(1 - t, 0.8) + 0.0012, { seg: 4, sz: 0.8 }));
+    // the top spike, square in section
+    const sp = new THREE.ConeGeometry(0.014, 0.12, 4); sp.rotateY(PI / 4); steel.push(xf(sp, [0, 0.532, 0]));
+    // gilt bands and a cross on each face of the socket
+    for (const y of [0.39, 0.47]) gold.push(xf(lathe([[0.0272, -0.003], [0.0272, 0.003]], 8), [0, y, 0], [0, PI / 8, 0]));
+    for (const sd of [-1, 1]) { gold.push(xf(new THREE.BoxGeometry(0.0035, 0.032, 0.0016), [0, 0.43, sd * 0.0245])); gold.push(xf(new THREE.BoxGeometry(0.016, 0.0035, 0.0016), [0, 0.437, sd * 0.0245])); }
+    return { steel, leather, gold, black };
   },
 };
 
