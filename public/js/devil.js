@@ -1395,7 +1395,7 @@ export class Cryptid extends Boss {
       const up = smooth(clamp(T / wind, 0, 1)), sk = smooth(clamp((T - wind) / 0.22, 0, 1)), w = up * (1 - smooth(clamp((T - wind - 0.4) / 0.35, 0, 1)));
       if (this.atk === 2) {
         for (const [k, m] of [['R', 1], ['L', -1]]) { mix('uArm' + k, [lerp(-172, -62, sk), 0, -m * lerp(22, 6, sk)], w); mix('fArm' + k, [lerp(-30, -8, sk), 0, 0], w); mix('hand' + k, [lerp(-20, 30, sk), 0, 0], w); }
-        mix('spine', [lerp(-12, 42, sk), 0, 0], w); mix('chest', [lerp(-12, 26, sk), 0, 0], w); mix('neck', [lerp(-20, 10, sk), 0, 0], w); mix('head', [lerp(-25, 5, sk), 0, 0], w); drop = 0.14 * sk * w;
+        mix('spine', [lerp(-12, 32, sk), 0, 0], w); mix('chest', [lerp(-12, 16, sk), 0, 0], w); mix('neck', [lerp(-20, 10, sk), 0, 0], w); mix('head', [lerp(-25, 5, sk), 0, 0], w); drop = 0.14 * sk * w;
       } else {
         const k = this.atk === 1 ? 'L' : 'R', m = this.atk === 1 ? -1 : 1;   // m: +1 for the right arm (on his -x side)
         mix('uArm' + k, [lerp(-150, -38, sk), lerp(0, 58 * m, sk), lerp(-46 * m, -10 * m, sk)], w); mix('fArm' + k, [lerp(-42, -8, sk), 0, 0], w); mix('hand' + k, [lerp(-30, 25, sk), 0, 0], w);
@@ -1404,16 +1404,16 @@ export class Cryptid extends Boss {
       }
     } else if (st === 'grasp') {
       const up = smooth(clamp(T / wind, 0, 1)), rk = smooth(clamp((T - wind) / 0.3, 0, 1)), rise = smooth(clamp((T - wind - 0.32 - (this.phase >= 3 ? 1.0 : 1.45) + 0.5) / 0.5, 0, 1)), w = (1 - rise);
-      mix('spine', [lerp(-10 * up, 44, rk), 0, 0], w); mix('chest', [lerp(-6 * up, 22, rk), lerp(-12 * up, 0, rk), 0], w); mix('neck', [lerp(-8, 14, rk), 0, 0], w); mix('head', [lerp(-14, -10, rk), 0, 0], w);
+      mix('spine', [lerp(-10 * up, 34, rk), 0, 0], w); mix('chest', [lerp(-6 * up, 14, rk), lerp(-12 * up, 0, rk), 0], w); mix('neck', [lerp(-8, 18, rk), 0, 0], w); mix('head', [lerp(-14, -10, rk), 0, 0], w);
       mix('uArmR', [lerp(38, -70, rk), 0, lerp(-24, -10, rk)], w); mix('fArmR', [lerp(-70, -10, rk), 0, 0], w); mix('handR', [lerp(-30, 20, rk), 0, 0], w);
       mix('uArmL', [lerp(-6, -40, rk), 0, 30], w * 0.8); mix('fArmL', [-30, 0, 0], w * 0.8);
       mix('thighR', [-30, 0, -3], rk * w); mix('thighL', [18, 0, 3], rk * w);
-      drop = 0.16 * rk * w; ikHand = 'R'; ikW = rk * w;
+      drop = 0.22 * rk * w; ikHand = 'R'; ikW = rk * w;
     } else if (st === 'stomp') {
       const up = smooth(clamp(T / wind, 0, 1)), sl = smooth(clamp((T - wind) / 0.16, 0, 1)), rise = smooth(clamp((T - wind - 1.1) / 0.45, 0, 1)), w = up * (1 - rise);
       for (const [k, m] of [['R', 1], ['L', -1]]) { mix('uArm' + k, [lerp(-160, -55, sl), 0, -m * lerp(38, 18, sl)], w); mix('fArm' + k, [lerp(-25, -10, sl), 0, 0], w); }
-      mix('spine', [lerp(-14, 52, sl), 0, 0], w); mix('chest', [lerp(-12, 22, sl), 0, 0], w); mix('neck', [lerp(-18, 12, sl), 0, 0], w); mix('head', [lerp(-28, -12, sl), 0, 0], w);
-      drop = 0.24 * sl * w; ikBoth = sl * w;
+      mix('spine', [lerp(-14, 36, sl), 0, 0], w); mix('chest', [lerp(-12, 14, sl), 0, 0], w); mix('neck', [lerp(-18, 12, sl), 0, 0], w); mix('head', [lerp(-28, -12, sl), 0, 0], w);
+      drop = 0.3 * sl * w; ikBoth = sl * w;
     } else if (st === 'vanish' || st === 'appear') {
       if (st === 'vanish') { const w = smooth(clamp(T / 0.6, 0, 1)); mix('neck', [30, 0, 0], w); mix('head', [25, 0, 20], w); mix('spine', [20, 0, 0], w); for (const [k, m] of [['R', 1], ['L', -1]]) mix('uArm' + k, [-40, 30 * m, -20 * m], w); }
       else { const sk = smooth(clamp((T - 0.22) / 0.22, 0, 1)), w = 1 - smooth(clamp((T - 0.7) / 0.4, 0, 1)); for (const [k, m] of [['R', 1], ['L', -1]]) { mix('uArm' + k, [lerp(30, -150, sk), 0, -m * lerp(30, 40, sk)], w); mix('fArm' + k, [lerp(-60, -15, sk), 0, 0], w); } mix('spine', [lerp(30, -10, sk), 0, 0], w); mix('head', [lerp(10, -25, sk), 0, 0], w); }
@@ -1431,9 +1431,9 @@ export class Cryptid extends Boss {
     } else if (st === 'stagger' || st === 'death') {
       const t2 = st === 'death' ? this.deathT : T, w = smooth(clamp(t2 / 0.4, 0, 1)) * (st === 'death' ? 1 : 1 - smooth(clamp((t2 - 1.9) / 0.45, 0, 1)));
       const fall = st === 'death' ? smooth(clamp((t2 - 1.0) / 1.2, 0, 1)) : 0;
-      mix('spine', [50 + fall * 25, 0, 6], w); mix('chest', [30, 0, 0], w); mix('neck', [20, 0, 10], w); mix('head', [24, 0, 18], w);
+      mix('spine', [30 + fall * 30, 0, 6], w); mix('chest', [14, 0, 0], w); mix('neck', [26, 0, 10], w); mix('head', [28, 0, 18], w);
       for (const [k, m] of [['R', 1], ['L', -1]]) { mix('uArm' + k, [-40 - fall * 40, 0, -m * 10], w); mix('fArm' + k, [-20, 0, 0], w); mix('hand' + k, [20, 0, 0], w); }
-      drop = 0.36 * w; kneel = w;
+      drop = 0.45 * w; kneel = w;
     } else if (st === 'intro') {
       const r = smooth(clamp((T - 2.0) / 1.6, 0, 1));
       mix('neck', [lerp(30, 6, r), 0, 0], 1); mix('head', [lerp(30, -14, r), 0, lerp(25, 8, r)], 1); mix('spine', [lerp(20, 8, r), 0, 0], 1);

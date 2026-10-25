@@ -478,10 +478,13 @@ function robeMat(sway, top, DU) {
   return dissolvable(m, DU);
 }
 export function tickRobes(time) { ROBE_U.uTime.value = time; }
-// The robe hangs. Whatever the body inside it is doing (stooped, lunging, crouched), the cloth falls plumb from the
-// collar and its hem lies on the ground, gathered a little there (sink), rather than swinging stiffly with the chest
-// and lifting off the earth behind him. root: the model's own group, whose y = 0 is the ground under him.
+// The robe hangs. Whatever the body inside it is doing, the cloth falls from the collar toward the ground and its hem
+// lies there, gathered a little (sink), rather than swinging stiffly with the chest and lifting off the earth behind
+// him. Up to a slight stoop it hangs plumb; when he bows deeply it goes partway with him (bent forward from the collar,
+// the hem down in front and drawn up behind), so the robe never stands up empty while the body folds out of it.
+// root: the model's own group, whose y = 0 is the ground under him.
 const _rbM = new THREE.Matrix4(), _rbQ = new THREE.Quaternion(), _rbP = new THREE.Vector3(), _rbS = new THREE.Vector3(), _rbC = new THREE.Vector3();
+const _rbQ2 = new THREE.Quaternion(), _rbI = new THREE.Quaternion(), _rbU = new THREE.Vector3(), _rbO = new THREE.Vector3();
 export function plantRobe(B, root, sink = 0.04) {
   const robe = B.robe; if (!robe || !robe.visible || robe.userData.L === undefined) return;
   const u = robe.userData;
@@ -490,13 +493,18 @@ export function plantRobe(B, root, sink = 0.04) {
   _rbM.copy(root.matrixWorld).invert().multiply(B.chest.matrixWorld); _rbM.decompose(_rbP, _rbQ, _rbS);
   // where the collar sits on him now, in that frame
   _rbC.copy(u.pos0); _rbC.y += u.top; _rbC.applyQuaternion(_rbQ).add(_rbP);
-  // the length that takes it from the collar to the ground
-  const sy = clamp((_rbC.y + sink) / (u.top + u.L), 0.55, 1.25);
-  // undo the chest's turn so the robe is upright in the model's frame, hanging from the collar
-  _rbQ.invert(); robe.quaternion.copy(_rbQ);
+  // how far the robe goes with him: not at all to a stoop of 15 degrees, then up to a little over half his bow
+  const bow = Math.acos(clamp(_rbU.set(0, 1, 0).applyQuaternion(_rbQ).y, -1, 1));
+  const k = clamp((bow - 0.26) / 1.05, 0, 0.55);
+  _rbQ2.copy(_rbI).slerp(_rbQ, k);                                   // the robe's own turn, in the model's frame
+  const tilt = Math.acos(clamp(_rbU.set(0, 1, 0).applyQuaternion(_rbQ2).y, -1, 1));
+  // the length that takes it from the collar to the ground (along its slant)
+  const sy = clamp((_rbC.y + sink) / ((u.top + u.L) * Math.max(0.5, Math.cos(tilt))), 0.5, 1.25);
   robe.scale.set(u.base.x, sy, u.base.z);
-  // position (chest frame) = R^-1 (collar - scale * collar-in-robe - chest origin)
-  robe.position.set(_rbC.x - _rbP.x, _rbC.y - sy * u.top - _rbP.y, _rbC.z - _rbP.z).applyQuaternion(_rbQ);
+  // origin = collar - (turned) collar-in-robe; then into the chest's frame
+  _rbO.set(0, sy * u.top, 0).applyQuaternion(_rbQ2); _rbO.subVectors(_rbC, _rbO).sub(_rbP);
+  _rbQ.invert(); robe.position.copy(_rbO).applyQuaternion(_rbQ);
+  robe.quaternion.copy(_rbQ).multiply(_rbQ2);
 }
 // wind on the Devil's robes, in his own frame (+x his left)
 export function robeWind(x, z) { ROBE_U.uWind.value.set(x, z); }

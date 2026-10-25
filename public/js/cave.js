@@ -65,7 +65,7 @@ export class Cave {
               vec4 A = uCuts[i * 3], B = uCuts[i * 3 + 1], Q = uCuts[i * 3 + 2];
               if (abs(A.w - piece) > 0.5) continue;
               if (A.z < 1.5) {   // a chamber's dome
-                vec2 d = p.xz - A.xy; float th = atan(d.y, d.x);
+                vec2 d = p.xz - A.xy; if (dot(d, d) > B.x * B.x * 1.6) continue; float th = atan(d.y, d.x);
                 float q = length(d) / (B.x * (1.0 + B.w * cos(th - Q.x) + Q.y * cos(2.0 * th - Q.z)) * 0.97), hy = (p.y - B.z) / B.y;
                 if (hy > -0.25 && (hy < 0.0 ? q < 1.0 : pow(q, ${P}) + pow(hy, ${P}) < 1.0)) return true;
               } else {           // a passage's end
@@ -349,8 +349,6 @@ export class Cave {
       const geo = this.mergeAll(list); this.paint(geo, -1, this.wallColor); geo.computeVertexNormals();
       const m = new THREE.Mesh(geo, this.rock); m.castShadow = true; m.receiveShadow = true; this.group.add(m);
     }
-    // a little grey daylight just inside each mouth
-    this.portalLights = S.portals.map((M) => { const L = new THREE.PointLight(0x9aa8bc, 0, 11, 1.6); L.position.set(M.x + M.dx * 1.6, M.y + 2.2, M.z + M.dz * 1.6); this.group.add(L); return L; });
     // the soldiers, below the first mouth, and the torch
     const F = S.mainAt(S.sA - 5), nx = -F.tz, nz = F.tx, wood = new THREE.MeshStandardMaterial({ color: 0x3a2a1c, roughness: 0.85 });
     const poses = ['lie', 'sit', 'kneel'];
@@ -405,7 +403,11 @@ export class Cave {
         L.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z)); this.limb.K = K.clone(); this.limb.X = X; this.limb.s = this.S.sample(K.x, K.z)?.prog ?? 0; this.group.add(L); } }
     // the crack in the Nave's roof, and the thread of grey light down from it
     { const F = S.fissure, e = S.sample(F.x, F.z), fl = e ? e.floor : S.yA, top = e ? e.roof - 0.1 : fl + 9;
-      const sp = new THREE.SpotLight(0x8c9cb4, 26, 24, 0.24, 0.75, 1.1); sp.position.set(F.x, top, F.z); sp.target.position.set(F.x + 0.6, fl, F.z - 0.4); this.group.add(sp, sp.target); this.shaft = sp;
+      // (no light of its own: every light added costs every material in the chapter; a pale pool where it falls instead)
+      const pool = new THREE.Mesh(new THREE.CircleGeometry(1.7, 32), new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -8,
+        vertexShader: 'varying vec2 vU; void main(){ vU = uv - 0.5; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: 'varying vec2 vU; void main(){ float r = length(vU) * 2.0; gl_FragColor = vec4(vec3(0.42, 0.47, 0.56) * pow(1.0 - clamp(r, 0.0, 1.0), 1.6) * 0.55, 1.0); }' }));
+      pool.rotation.x = -Math.PI / 2; pool.position.set(F.x + 0.3, this.W.heightAt(F.x + 0.3, F.z - 0.2) + 0.05, F.z - 0.2); this.group.add(pool);
       const h = top - fl, cg = new THREE.CylinderGeometry(0.12, 1.5, h, 24, 1, true); cg.translate(0, -h / 2, 0);
       const bm = new THREE.ShaderMaterial({ uniforms: { uA: { value: 0.8 }, uH: { value: h }, uTime: this.uni.uTime }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
         vertexShader: 'varying vec3 vP; varying vec3 vN; varying vec3 vV; void main(){ vP = position; vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position, 1.0); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }',
@@ -493,7 +495,6 @@ export class Cave {
     const deep = ce && !ce.out && ce.sdf < 0.6 && cam.position.y < ce.roof + 1 ? smooth(clamp((ce.prog - S.sA + 0.6) / 3, 0, 1)) * smooth(clamp((S.sB + 0.6 - ce.prog) / 3, 0, 1)) : 0;
     this.inCam = damp(this.inCam || 0, deep, 3, dt); this.inside = inT ? 1 : 0;
     this.applyDark(this.inCam);
-    for (const L of this.portalLights) L.intensity = 2.2 * this.inCam;
     // no going in without a light
     if (!this.torch && inT && e.prog > S.sA + 0.4) {
       const F = S.mainAt(S.sA - 1.4); me.pos.x = F.x; me.pos.z = F.z; me.pos.y = W.heightAt(F.x, F.z);
