@@ -178,12 +178,13 @@ function gauntlet(add, s, sx, S) {
   // angles (the middle knuckle most), the corners stand proud, and the fingertip comes back up the palm side
   const gripFinger = (f, i) => {
     const heading = (q) => [-sx * Math.sin(q), -Math.cos(q)];
-    const Ls = [0.044 * f.k, 0.028 * f.k, 0.022 * f.k], lim = [1.5, 1.95, 1.25];
+    const Ls = [0.044 * f.k, 0.028 * f.k, 0.022 * f.k], lim = [1.5, 1.35, 1.3];   // the middle knuckle stops short, so the last one has room to turn in
     const a0 = 0.04 + i * 0.05; let p = [sx * Math.cos(a0) * (GRIP_R + 0.0015), GRIP_Y - Math.sin(a0) * (GRIP_R + 0.0015)];
     let q = a0 - 0.55 + i * 0.04; const pts = [p.slice()], hs = [];
     const clear = (pp, qq, L) => { const t = heading(qq); for (let k = 1; k <= 8; k++) { const x = pp[0] + t[0] * L * k / 8, y = pp[1] + t[1] * L * k / 8; if (Math.hypot(x, y - GRIP_Y) < GRIP_R) return false; } return true; };
     for (let j = 0; j < 3; j++) {
       let fl = 0; while (fl + 0.02 <= lim[j] && clear(p, q + fl + 0.02, Ls[j])) fl += 0.02;
+      if (j === 2) fl = Math.max(fl, 0.8);   // the fingertip always curls in, pressing on the grip
       q += fl; hs.push(q); const t = heading(q); p = [p[0] + t[0] * Ls[j], p[1] + t[1] * Ls[j]]; pts.push(p.slice());
     }
     const tot = Ls[0] + Ls[1] + Ls[2], cum = [0, Ls[0] / tot, (Ls[0] + Ls[1]) / tot, 1];
