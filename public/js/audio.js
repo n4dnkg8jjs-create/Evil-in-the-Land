@@ -332,7 +332,7 @@ const RENDER = {
     const env = (t) => { let e = 0; for (const s of swells) { const d = t - s.t; e += s.a * Math.exp(-((d / (d < 0 ? s.up : s.down)) ** 2)); } return e * Math.exp(-Math.max(0, t - t0) / (near ? 6.5 : 6.5)); };
     let br = 0, l1 = 0, l2 = 0, m1 = 0, m2 = 0, fl = 0, fl2 = 0;
     const k = (fc) => 1 - Math.exp(-2 * Math.PI * fc / SR);
-    const kM1 = k(520), kM2 = k(140), kF = k(3);
+    const kM1 = k(240), kM2 = k(70), kF = k(3);
     for (let i = 0; i < N; i++) {
       const t = i / SR, w = R() * 2 - 1;
       br = (br + 0.03 * w) * 0.9985;                                   // brown noise
@@ -341,15 +341,17 @@ const RENDER = {
       m1 += kM1 * (w - m1); m2 += kM2 * (w - m2);                      // a middle band, for the grumble
       fl += kF * ((R() * 2 - 1) - fl); fl2 += kF * (fl - fl2);         // and its flutter
       const e = env(t);
-      out[i] = l2 * 9 * e + (m1 - m2) * 0.35 * e * Math.min(1, Math.abs(fl2) * 40) * (near ? 1 : 0.5);
+      out[i] = l2 * 9 * e + (m1 - m2) * 0.08 * e * (near ? 1 : 0.5);   // a little body above the roll, smooth (no flutter)
     }
     if (near) {
-      // the crack: the main report, then a tearing crackle of smaller ones running on and thinning out
-      const cracks = [{ t: 0, a: 1.0, d: 0.02 }]; let ct = 0.012;
-      for (let j = 0; j < 46; j++) { cracks.push({ t: ct, a: (0.9 - j / 60) * (0.5 + R() * 0.5), d: 0.003 + R() * 0.012 }); ct += 0.004 + Math.pow(j / 46, 1.8) * 0.05 * (0.5 + R()); }
-      for (const c of cracks) {
-        const i0 = Math.floor(c.t * SR), len = Math.floor(c.d * 6 * SR); let prev = 0;
-        for (let i = 0; i < len && i0 + i < N; i++) { const w = R() * 2 - 1, hp = w - prev * 0.6; prev = w; out[i0 + i] += hp * c.a * 1.05 * Math.exp(-i / (c.d * SR)); }
+      // the crack: one sharp report, and the air ripping straight after it, a continuous tearing that dies in a
+      // third of a second (bright noise whose loudness flickers fast, not separate clicks)
+      let prev = 0, fk = 0; const nc = Math.floor(0.45 * SR);
+      for (let i = 0; i < nc && i < N; i++) {
+        const t = i / SR, w = R() * 2 - 1, hp = w - prev * 0.85; prev = w;
+        fk += 0.08 * ((R() * 2 - 1) - fk);                                   // the flicker of the rip
+        const report = Math.exp(-t / 0.012), rip = Math.exp(-t / 0.11) * (0.55 + 0.45 * Math.abs(fk) * 3) * Math.min(1, t / 0.004);
+        out[i] += hp * (report * 1.1 + rip * 0.55);
       }
       // the boom under it: a falling low thud with body
       let ph = 0; const nb = Math.floor(3.5 * SR);
