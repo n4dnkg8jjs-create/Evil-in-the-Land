@@ -102,7 +102,8 @@ export class World {
     const r = this.r, kind = this.ch.terrain.kind;
     let pts;
     if (kind === 'mountain') {
-      pts = [{ x: -40, z: -128 }, { x: 55, z: -100 }, { x: -55, z: -62 }, { x: 55, z: -24 }, { x: -55, z: 14 }, { x: 55, z: 52 }, { x: -30, z: 88 }, { x: 0, z: 124 }];
+      // a climbing line that follows the lie of the mountain (a valley, a shoulder, a long traverse), not a zig-zag
+      pts = [{ x: -30, z: -128 }, { x: -6, z: -108 }, { x: 22, z: -86 }, { x: 34, z: -60 }, { x: 18, z: -36 }, { x: -14, z: -18 }, { x: -38, z: 6 }, { x: -30, z: 34 }, { x: 2, z: 54 }, { x: 30, z: 76 }, { x: 26, z: 100 }, { x: 4, z: 124 }];
     } else if (kind === 'peak') {
       pts = [{ x: 0, z: -40 }, { x: 0, z: -20 }, { x: 0, z: 0 }, { x: 0, z: 20 }];
     } else {
@@ -113,10 +114,9 @@ export class World {
     }
     this.path = pathSampler(pts);
     if (kind === 'mountain') {
-      // a ledge stretch with the drop on the outside of the bend, and a crevasse split across the track
-      this.ledge = { t0: 0.47, t1: 0.57, side: 1 };
-      const ct = 0.27, c0 = this.path.at(ct), c1 = this.path.at(ct + 0.004); let tx = c1.x - c0.x, tz = c1.z - c0.z; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      this.crevasse = { t: ct, x: c0.x, z: c0.z, nx: tx, nz: tz };   // its line runs across the track (normal = the track direction)
+      // near the top the way goes into the mountain: a cave through a shoulder of rock (see cave.js)
+      this.ledge = null; this.crevasse = null;
+      this.cave = { t0: 0.655, t1: 0.80, R: 3.3, W: 5.4, e: 0.016 };   // e: how far the rock (and the tunnel) runs out past each mouth
     }
     // altars along the path
     const n = this.ch.altars; this.altarT = [];
@@ -212,33 +212,32 @@ export class World {
   // half the width of the Ascent's track at t: wide at the foot where the company gathers, narrow above
   trackHalf(t) { return 4.6 + this.noise.fbm(t * 9, 3.1, 2) * 2.2 + 9 * (1 - smooth(clamp(t / 0.07, 0, 1))); }
   gorgeHeight(x, z, nr, ph, h) {
-    // the Ascent: a narrow track up a gorge. Its walls stand up as cliffs from the track's edge, bedded in strata
-    // (benches where harder beds stand out), split by fractures; above them broken slopes climb into snow. In one
-    // stretch the track is a ledge along the cliff with a drop into the gorge on its outer side; a crevasse splits
-    // it further on, crossed by a rope bridge.
-    const n = this.noise, t = nr.t;
-    const half = this.trackHalf(t);                                                     // how wide the track is here
-    const wall = Math.max(0, nr.d - half);
-    let rise = Math.min(wall, 9) * 2.4 + Math.max(0, wall - 9) * 1.15 + Math.pow(Math.max(0, wall - 14), 1.25) * 0.08;
-    const bands = 5.5 + n.fbm(x * 0.01, z * 0.01, 2) * 2;                             // strata: harder beds make benches
-    const q = rise / bands, f = q - Math.floor(q);
-    rise = (Math.floor(q) + smooth(clamp((f - 0.25) / 0.5, 0, 1))) * bands * 0.55 + rise * 0.45;
-    rise += (n.ridge(x * 0.11, z * 0.11, 3) - 0.5) * 3.2 * smooth(clamp(wall / 3, 0, 1));   // fractures and buttresses
-    rise += n.fbm(x * 0.04, z * 0.04, 3) * 6 * smooth(clamp((wall - 10) / 10, 0, 1));
-    let y = ph + rise + h * 0.15 * smooth(clamp((wall - 12) / 20, 0, 1));
-    // the track itself: rough, cambered a little, scattered with grit
-    y += n.fbm(x * 0.3, z * 0.3, 2) * 0.12 * (1 - smooth(clamp(wall, 0, 1)));
-    // the ledge: one side of the track falls away into the gorge
-    const L = this.ledge; if (L && t > L.t0 && t < L.t1) {
-      const k = smooth(clamp((t - L.t0) / 0.03, 0, 1)) * smooth(clamp((L.t1 - t) / 0.03, 0, 1));
-      const p = this.path.at(t), q2 = this.path.at(Math.min(1, t + 0.004)); const nx = -(q2.z - p.z), nz = q2.x - p.x;
-      const side = Math.sign((x - p.x) * nx + (z - p.z) * nz);
-      if (side === L.side && nr.d > 3.2) y = lerp(y, ph - Math.min(40, (nr.d - 3.2) * 4.5) - 2, k);
-    }
-    // the crevasse across the track
-    const C = this.crevasse; if (C) { const d = Math.abs((x - C.x) * C.nx + (z - C.z) * C.nz); const along = Math.abs((x - C.x) * C.nz - (z - C.z) * C.nx); if (d < 3.4 && along < 26) y -= (1 - smooth(d / 3.4)) * 9 * (1 - smooth(clamp((along - 14) / 12, 0, 1))); }
+    // the Ascent: the track climbs a mountain valley. Away from it the ground rises in natural slopes, steepening,
+    // broken by spurs, gullies and outcrops (where the noise is steep the rock shows); above, the snowfields.
+    const y = this.lidHeight(x, z, nr, ph, h);
+    const C = this.cave;
+    if (C && nr.t > C.t0 - C.e - 0.002 && nr.t < C.t1 + C.e + 0.002 && nr.d < C.W) return ph + this.noise.fbm(x * 0.35, z * 0.35, 2) * 0.1;   // the cave floor
     return y;
   }
+  // the mountain's surface before the cave is cut under it (the cave's roof is built from this)
+  lidHeight(x, z, nr, ph, h) {
+    const n = this.noise, t = nr.t;
+    const half = this.trackHalf(t), w = Math.max(0, nr.d - half);
+    let rise = w * 0.42 + Math.pow(w, 1.45) * 0.045;
+    rise += (n.ridge(x * 0.045, z * 0.045, 4) - 0.45) * 10 * smooth(clamp(w / 8, 0, 1));    // spurs and gullies
+    rise += n.fbm(x * 0.012, z * 0.012, 3) * 18 * smooth(clamp((w - 6) / 30, 0, 1));         // the big folds of the mountain
+    rise += Math.max(0, n.ridge(x * 0.09 + 3, z * 0.09, 3) - 0.62) * 14 * smooth(clamp((w - 3) / 6, 0, 1));   // outcrops
+    let y = ph + rise + h * 0.1 * smooth(clamp((w - 12) / 20, 0, 1));
+    y += n.fbm(x * 0.3, z * 0.3, 2) * 0.14 * (1 - smooth(clamp(w, 0, 1)));                 // the track: rough, gritty
+    // the shoulder of rock the cave runs under: it rises steeply right from the entrance
+    const C = this.cave;
+    if (C) {
+      const k = smooth(clamp((t - C.t0 + C.e) / 0.024, 0, 1)) * smooth(clamp((C.t1 + C.e - t) / 0.024, 0, 1));
+      y += k * (16 + n.fbm(x * 0.05, z * 0.05, 3) * 7) * (1 - smooth(clamp((nr.d - 18) / 30, 0, 1)));
+    }
+    return y;
+  }
+  inCaveZone(x, z, pad = 2) { const C = this.cave; if (!C) return false; const nr = this.path.nearest(x, z); return nr.t > C.t0 - C.e - 0.01 && nr.t < C.t1 + C.e + 0.01 && nr.d < C.W + pad; }
   // ---------------------------------------------------------------- settlement
   // Farms and the village are laid out on purpose: houses front the road at a set-back, turned to face it, with
   // yards behind; a farmstead is a house and a barn round a yard beside a fenced field; each building stands on
@@ -249,7 +248,7 @@ export class World {
     if (T.kind === 'mountain') {
       // the First Company's last camp: a shelf cut back into the gorge wall beside the track
       this.makePathHeights();
-      const t = 0.74, p = this.path.at(t), q = this.path.at(t + 0.004); let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
+      const t = this.cave ? this.cave.t0 - 0.04 : 0.74, p = this.path.at(t), q = this.path.at(t + 0.004); let nx = -(q.z - p.z), nz = q.x - p.x; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
       const x = p.x + nx * 8.5, z = p.z + nz * 8.5; const yaw = Math.atan2(-nx, -nz);
       const camp = { kind: 'camp', x, z, yaw, w: 11, d: 8, x0: -6, x1: 6, z0: -4.5, z1: 5.5, rad: 9 };
       camp.padH = this.pathH[Math.round(t * 400)]; this.lots.push(camp); this.camp = camp;
@@ -667,7 +666,7 @@ export class World {
       // stay in the ravine
       const nr = this.path.nearest(p.x, p.z);
       // along the ledge, the outer edge is the edge of the world
-      let lim = 13; const L = this.ledge;
+      let lim = 13; const L = this.ledge; const CV = this.cave; if (CV && nr.t > CV.t0 - CV.e && nr.t < CV.t1 + CV.e) lim = CV.R - 0.9;
       if (L && nr.t > L.t0 && nr.t < L.t1) { const a = this.path.at(nr.t), b = this.path.at(Math.min(1, nr.t + 0.004)); const side = Math.sign((p.x - a.x) * -(b.z - a.z) + (p.z - a.z) * (b.x - a.x)); if (side === L.side) lim = 3.0; }
       if (nr.d > lim) { const q = this.path.at(nr.t); const k = lim / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
       // the crevasse: only the bridge crosses it
@@ -680,6 +679,7 @@ export class World {
 
   okSpot(x, z, minPath = 5, minAltar = 14) {
     if (!this.inBounds(x, z)) return false;
+    if (this.inCaveZone(x, z, 6)) return false;
     if (this.ch.terrain.kind !== 'peak' && this.path.nearest(x, z).d < minPath) return false;
     for (const a of this.altarT) if (Math.hypot(x - a.x, z - a.z) < minAltar) return false;
     if (this.inLot(x, z, 1.5)) return false;
@@ -1199,62 +1199,26 @@ export class World {
     const ledgeSide = (t) => this.ledge && t > this.ledge.t0 && t < this.ledge.t1 ? this.ledge.side : 0;
     const nearCrev = (x, z) => { const C = this.crevasse; return C && Math.abs((x - C.x) * C.nx + (z - C.z) * C.nz) < 5 && Math.abs((x - C.x) * C.nz - (z - C.z) * C.nx) < 18; };
     const nearAltar = (x, z, m) => this.altarT.some((a) => Math.hypot(x - a.x, z - a.z) < m);
-    // boulders fallen to the foot of the walls, and fans of scree below the gullies
-    for (let k = 0; k < 140; k++) {
-      const t = r.range(0.02, 0.98), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
-      const d = half(t) + r.range(-0.3, 1.0), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
-      if (!this.inBounds(x, z) || nearCrev(x, z) || nearAltar(x, z, 9) || this.inLot(x, z, 1)) continue;
-      const s = r.range(0.5, 2.0); put({ x, y: this.heightAt(x, z) - s * 0.35, z, s, sy: s * r.range(0.6, 1.1), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) });
+    // boulders lying where they came to rest (on ground flat enough to hold them, half sunk in it), and fans of
+    // scree spread below the gullies; nothing perched on a slope or sticking out of a face
+    const rest = (x, z) => this.inBounds(x, z) && !this.inCaveZone(x, z, 3) && !nearAltar(x, z, 9) && !this.inLot(x, z, 1) && this.normalAt(x, z).y > 0.8;
+    for (let k = 0; k < 160; k++) {
+      const t = r.range(0.02, 0.98), F = frame(t), side = r.sign();
+      const d = half(t) + r.range(0.5, 14), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
+      if (!rest(x, z)) continue;
+      const s = r.range(0.4, 1.7) * (d > half(t) + 6 ? 1.4 : 1); put({ x, y: this.heightAt(x, z) - s * 0.45, z, s, sy: s * r.range(0.55, 0.9), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) });
       if (s > 1.1 && d < half(t) + 1.5) this.addCollider(x, z, s * 0.75);
     }
-    for (let fan = 0; fan < 26; fan++) {
-      const t = r.range(0.03, 0.97), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
-      const cx = F.p.x + F.nx * side * (half(t) + 5), cz = F.p.z + F.nz * side * (half(t) + 5);
-      for (let k = 0; k < 22; k++) {
-        const a = r() * TAU, d2 = Math.sqrt(r()) * 6, x = cx + Math.cos(a) * d2, z = cz + Math.sin(a) * d2;
-        if (!this.inBounds(x, z) || nearCrev(x, z) || this.path.nearest(x, z).d < half(t) - 0.5 || this.normalAt(x, z).y < 0.55) continue;
-        const s = r.range(0.12, 0.45); put({ x, y: this.heightAt(x, z) - s * 0.25, z, s, sy: s * 0.6, ry: r() * TAU, rx: r() * 2, rz: r() * 2 });
+    for (let fan = 0; fan < 30; fan++) {
+      const t = r.range(0.03, 0.97), F = frame(t), side = r.sign();
+      const cx = F.p.x + F.nx * side * (half(t) + 4 + r() * 6), cz = F.p.z + F.nz * side * (half(t) + 4 + r() * 6);
+      for (let k = 0; k < 26; k++) {
+        const a = r() * TAU, d2 = Math.sqrt(r()) * 5, x = cx + Math.cos(a) * d2, z = cz + Math.sin(a) * d2;
+        if (!this.inBounds(x, z) || this.inCaveZone(x, z, 2) || this.path.nearest(x, z).d < half(t) - 0.5 || this.normalAt(x, z).y < 0.6) continue;
+        const s = r.range(0.1, 0.38); put({ x, y: this.heightAt(x, z) - s * 0.3, z, s, sy: s * 0.6, ry: r() * TAU, rx: r() * 2, rz: r() * 2 });
       }
-    }
-    // overhangs: great slabs of the harder beds jutting from the walls over the track
-    for (let k = 0; k < 18; k++) {
-      const t = r.range(0.03, 0.97), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
-      const d = half(t) + r.range(5, 7), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d; if (!this.inBounds(x, z)) continue;
-      const y = this.heightAt(x, z); if (y - F.y < 6.5) continue;
-      const s = r.range(2.2, 4); const yaw = Math.atan2(-F.nx * side, -F.nz * side);
-      put({ x, y: y - s * 0.3, z, s: s * 1.6, sy: s * 0.42, ry: yaw, rx: -0.12 + r.range(-0.08, 0.08), rz: r.range(-0.1, 0.1) });
-    }
-    // crags and pinnacles up on the broken slopes above
-    for (let k = 0; k < 70; k++) {
-      const t = r.range(0, 1), F = frame(t), side = r.sign(), d = half(t) + r.range(14, 40), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
-      if (!this.inBounds(x, z) || this.path.nearest(x, z).d < 12) continue;
-      const s = r.range(2.5, 6.5); put({ x, y: this.heightAt(x, z) - s * 0.2, z, s, sy: s * r.range(1.1, 2.4), ry: r() * TAU, rx: r.range(-0.15, 0.15), rz: r.range(-0.15, 0.15) });
     }
     geos.forEach((g, i) => this.instanced(g, rockM, lists[i]));
-
-    // ---- the icefall: a frozen waterfall hanging down the gorge wall into a frozen pool
-    {
-      const t = 0.45, F = frame(t), side = -1, w = 7, H = 26, NX = 16, NY = 34;
-      const pos = [], idx = [];
-      for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
-        const u = i / NX - 0.5, v = j / NY, targetY = F.y + v * H;
-        const bx = F.p.x + F.tx * u * w * (1 - v * 0.35), bz = F.p.z + F.tz * u * w * (1 - v * 0.35);
-        let d = half(t); for (let s2 = 0; s2 < 80 && this.heightAt(bx + F.nx * side * d, bz + F.nz * side * d) < targetY; s2++) d += 0.25;
-        const bulge = 0.35 + 0.45 * Math.abs(Math.sin(u * 9.3 + v * 2)) + 0.3 * Math.sin(v * 31 + u * 5) * (1 - v) + (j === 0 ? -0.2 : 0);
-        const drip = j % 6 === 0 ? Math.max(0, Math.sin(i * 2.7) ) * 0.6 : 0;
-        d -= bulge * (1 - Math.abs(u) * 1.6);
-        pos.push(bx + F.nx * side * d, targetY - drip, bz + F.nz * side * d);
-      }
-      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) { const a = j * (NX + 1) + i, b = a + NX + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
-      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-      const ice = new THREE.MeshStandardMaterial({ color: 0xa8c8dc, roughness: 0.12, metalness: 0.0, emissive: 0x0c1c28, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
-      const m = new THREE.Mesh(g, ice); m.castShadow = true; this.group.add(m);
-      const px = F.p.x + F.nx * side * (half(t) - 0.6), pz = F.p.z + F.nz * side * (half(t) - 0.6);
-      const pool = new THREE.Mesh(new THREE.CircleGeometry(1, 28).rotateX(-PI / 2), ice); pool.scale.set(4, 1, 2.2); pool.position.set(px, this.heightAt(px, pz) + 0.06, pz); pool.rotation.y = Math.atan2(F.tx, F.tz); this.group.add(pool);
-      // icicles hanging from the slabs either side
-      const ic = []; for (let k = 0; k < 40; k++) { const u = r.range(-0.6, 0.6), x = F.p.x + F.tx * u * 12 + F.nx * side * (half(t) + 1.2), z = F.p.z + F.tz * u * 12 + F.nz * side * (half(t) + 1.2); const y = F.y + r.range(3, 7); const L = r.range(0.4, 1.6); ic.push(xf(new THREE.ConeGeometry(0.06 + L * 0.04, L, 5), [x, y, z], [PI, 0, 0])); }
-      this.group.add(new THREE.Mesh(merge(ic), ice));
-    }
 
     // ---- the rope bridge over the crevasse
     if (this.crevasse) {
@@ -1349,7 +1313,7 @@ export class World {
     // ---- mist lying in the gorge, drifting
     const tex = cloudTexture(); this.mist = [];
     for (let k = 0; k < 46; k++) {
-      const t = r.range(0, 1), F = frame(t), d = r.range(-10, 10), x = F.p.x + F.nx * d, z = F.p.z + F.nz * d; if (!this.inBounds(x, z)) continue;
+      const t = r.range(0, 1), F = frame(t), d = r.range(-10, 10), x = F.p.x + F.nx * d, z = F.p.z + F.nz * d; if (!this.inBounds(x, z) || this.inCaveZone(x, z, 12)) continue;
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: 0xb8c0cc, transparent: true, opacity: 0.16 + r() * 0.1, depthWrite: false }));
       const y = F.y + r.range(1.5, 7); sp.position.set(x, y, z); sp.scale.set(r.range(14, 26), r.range(5, 9), 1); this.group.add(sp); this.mist.push({ s: sp, x, y, ph: r() * 10 });
     }
@@ -1393,16 +1357,16 @@ export class World {
     const kind = this.ch.terrain.kind; if (kind === 'peak') return;
     const g1 = new THREE.PlaneGeometry(1.0, 0.7); g1.translate(0, 0.33, 0); const g2 = g1.clone(); g2.rotateY(PI / 2);
     const geo = merge([g1, g2]);
-    const deadMat = new THREE.MeshStandardMaterial({ map: grassTexture(false), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1, color: 0xb0a090 });
+    const deadMat = new THREE.MeshStandardMaterial({ map: grassTexture(false), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1, color: kind === 'mountain' ? 0xd0c098 : 0xb0a090 });
     const aliveMat = new THREE.MeshStandardMaterial({ map: grassTexture(true), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.9 });
     this.swayMaterial(deadMat, 0.18); this.swayMaterial(aliveMat, 0.22);
     const r = rng(this.ch.seed + 77);
     const dead = [];
-    const nDead = Math.floor((kind === 'mountain' ? 3000 : 9000) * this.q.grass);
+    const nDead = Math.floor((kind === 'mountain' ? 1400 : 9000) * this.q.grass);
     for (let k = 0; k < nDead * 3 && dead.length < nDead; k++) {
       const x = r.range(-HALF + 20, HALF - 20), z = r.range(-HALF + 20, HALF - 20);
       if (kind === 'fen' && this.heightAt(x, z) < 0.05) continue;
-      if (this.normalAt(x, z).y < 0.82) continue;
+      if (this.normalAt(x, z).y < 0.82 || this.inCaveZone(x, z, 1)) continue;
       if (this.lifeAt(x, z) > 0.5) continue;
       dead.push({ x, y: this.heightAt(x, z) - 0.05, z, ry: r() * TAU, s: r.range(0.7, 1.3) });
     }
@@ -1420,7 +1384,7 @@ export class World {
       }
     }
     // the living country the knights ride out from
-    if (kind !== 'peak') {
+    if (kind !== 'peak' && kind !== 'mountain') {
       const n0 = list.length, want = Math.floor(5000 * this.q.grass);
       for (let k = 0; k < want * 2 && list.length - n0 < want; k++) {
         const x = r.range(-HALF + 6, HALF - 6), z = r.range(-HALF + 4, -95);
@@ -1539,7 +1503,7 @@ export class World {
     for (let k = 0; k < 20; k++) {
       const ang = r() * TAU, d = 26 + r() * 16;
       const x = altar.x + Math.cos(ang) * d, z = altar.z + Math.sin(ang) * d;
-      if (this.ch.terrain.kind === 'mountain') { const n = this.path.nearest(x, z); if (n.d > 11) continue; }
+      if (this.ch.terrain.kind === 'mountain') { const n = this.path.nearest(x, z); if (n.d > 11 || this.inCaveZone(x, z, 3)) continue; }
       if (this.ch.terrain.kind === 'peak') { if (Math.hypot(x, z) > 32) continue; }
       if (!this.inBounds(x, z)) continue;
       return { x, y: this.heightAt(x, z), z };

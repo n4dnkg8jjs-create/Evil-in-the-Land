@@ -6,6 +6,7 @@ import { World } from './world.js';
 import { Horde, TYPES, ST } from './demons.js';
 import { Watcher, Crevices, Hound, Serpent, Cryptid, Dragon, phantomDevil } from './devil.js';
 import { robeWind } from './horror.js';
+import { Cave } from './cave.js';
 import { FX } from './fx.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
@@ -76,6 +77,7 @@ export class Game {
     this.story.build(this.world, n); this.dread.clear();
     this.layOutFallen(ch);
     this.shop.build(this.world); this.terror.reset();
+    this.cave?.dispose(); this.cave = this.world.cave ? new Cave(this) : null;
     if (this.world.vista) this.world.vista.onThunder = (str, delay) => this.audio.thunder(str, delay);
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
@@ -226,7 +228,7 @@ export class Game {
     if (this.watcher) this.watcher.animate(dt, this.time, camPos, this.knightList);
     if (this.crevices) this.crevices.update(dt, this.time, this.knightList, this.isHost, (c, k) => this.creviceGrab(c, k));
     if (this.world) this.world.update(dt, camPos);
-    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); this.terror.update(dt, this.time); }
+    if (this.world) { this.story.update(dt, this.time); this.dread.update(dt, this.time); this.shop.update(dt); this.terror.update(dt, this.time); this.cave?.update(dt, this.time); }
     if (this.world) this.checkDevilReveal();
     // the sky answers the land beneath you: blue over living country, ember-red in the blight
     if (this.world) {
@@ -329,6 +331,7 @@ export class Game {
     const want = c.look.clone().addScaledVector(fwd, -c.dist);
     const gy = this.world ? this.world.heightAt(want.x, want.z) + 0.5 : 0;
     if (want.y < gy) want.y = gy;
+    this.cave?.clampCamera(want, c.look);
     const cam = this.engine.camera;
     cam.position.copy(want);
     cam.up.set(0, 1, 0);
@@ -909,6 +912,7 @@ export class Game {
     }
     mix.fogDensity = base.fogDensity * (1 - f * 0.4); mix.cover = base.cover * (1 - f * 0.4);
     this.engine.setAtmosphere(mix, env); this.fx.setFog(this.scene.fog);
+    if (this.cave) { this.cave.base = null; this.cave.applyDark(this.cave.inCam || 0); }   // inside the mountain the sky's light stays out
   }
   // The Peak's first shot: a dragon (a stand-in with no game state) passes across the storm above, high and dark,
   // the lightning showing him in flashes. Returns the per-frame tick and the cleanup.
@@ -1074,6 +1078,7 @@ export class Game {
       const dn = this.downedNear(me);
       if (dn) pr = `<kbd>E</kbd>Hold to raise ${esc(dn.name)}`;
       else if (this.altarFor(me) && !me.praying) pr = '<kbd>E</kbd>Hold to kneel and pray';
+      else if (this.cave?.prompt()) pr = this.cave.prompt();
       else if (this.shop.prompt()) pr = this.shop.prompt();
     }
     ui.prompt(pr);
@@ -1094,7 +1099,7 @@ export class Game {
     this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
     if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
-    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); for (const k of this.fallenKnights || []) k.dispose();
+    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; for (const k of this.fallenKnights || []) k.dispose();
     for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'left']) this.net?.off(k);
   }
 }
