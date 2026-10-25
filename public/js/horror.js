@@ -118,12 +118,12 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         // ash-grey where the skin is stretched over bone, near black in the folds
         float ash = smoothstep(0.35, 0.9, hgt);
         diffuseColor.rgb = mix(diffuseColor.rgb * 0.55, diffuseColor.rgb * 2.4 + vec3(0.03, 0.025, 0.02), ash);
-        // deep black sockets round the burning eyes, and black blood run from them down the face in streaks
+        // deep black sockets round the eyes, and black blood run from them down the face in streaks
         float dl = length(vDPos - uEyeL), dr2 = length(vDPos - uEyeR);
         diffuseColor.rgb *= mix(0.12, 1.0, smoothstep(0.03, 0.075, min(dl, dr2)));
         // the lids raw and red round the staring eyes, wet with it
         float sockRing = smoothstep(0.026, 0.032, min(dl, dr2)) * (1.0 - smoothstep(0.036, 0.05, min(dl, dr2)));
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.14, 0.008, 0.008), sockRing * 0.55);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.025, 0.022, 0.024), sockRing * 0.55);   // the lids dark and wet (no red)
         float bleed = 0.0;
         for (int e = 0; e < 2; e++) {
           vec3 E = e == 0 ? uEyeL : uEyeR; vec3 q = vDPos - E;
@@ -131,7 +131,7 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
           float runLen = 0.16 + 0.12 * dh(E * 3.1);
           bleed = max(bleed, smoothstep(0.012, 0.0, abs(q.x + wob)) * step(q.y, 0.0) * smoothstep(-runLen, -runLen * 0.5, q.y) * step(-0.06, q.z));
         }
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.004, 0.004), bleed * 0.92);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.02, 0.016, 0.016), bleed * 0.92);
         // teeth: yellowed, broken, each one separate, black gaps between and rotten gums
         float tooth = smoothstep(0.08, 0.3, abs(fract(vDPos.x * 75.0 + dn(vDPos * 40.0) * 0.6) - 0.5) * 2.0);
         vec3 tc = mix(vec3(0.03, 0.01, 0.01), vec3(0.34, 0.27, 0.16) * (0.6 + 0.6 * dn(vDPos * 90.0)), 1.0 - tooth);
@@ -153,7 +153,6 @@ export function demonSkin(rimHex, { skin = 0x141012, glow = 1, dead = false, eye
         totalEmissiveRadiance += uRim * pow(veins, 4.0) * 0.35 * pulse * uGlow * (1.0 - teeth) * ff;
         float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
         totalEmissiveRadiance += uRim * fres * 0.18 * uGlow * ff;
-        totalEmissiveRadiance += vec3(0.7, 0.04, 0.0) * sockRing * 0.35 * uGlow * ff;
         #endif
         totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit * 1.6;
         if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);

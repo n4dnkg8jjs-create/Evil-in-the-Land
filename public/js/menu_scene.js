@@ -91,10 +91,12 @@ export class MenuStage {
   buildHorde() {
     this.demons = []; let id = 9700;
     const types = ['shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'crawler', 'shade', 'shade', 'shade'];
+    // and more on the left, crowding in round that end of the line
+    for (let k = 0; k < 8; k++) types.push(k % 3 ? 'shade' : 'crawler');
     types.forEach((ty, i) => {
       const d = new Demon(ty, id++, this.scene);
-      const row = i % 2, k2 = i >> 1; let lane = (k2 / 9 - 0.5) * (row ? 7.4 : 5.6) + (Math.random() - 0.5) * 0.4; if (Math.abs(lane) < (row ? 0.6 : 0.8)) lane = Math.sign(lane || 1) * (0.8 + Math.random() * 0.3);   // the very middle kept clear
-      d.lane = lane; d.dist = (row ? 5.0 : 3.9) + Math.random() * 1.5;        // distance in front of the line, toward the camera
+      const left = i >= 20, row = i % 2, k2 = i >> 1; let lane = left ? -1.6 - (i - 20) * 0.5 + (Math.random() - 0.5) * 0.3 : (k2 / 9 - 0.5) * (row ? 7.4 : 5.6) + (Math.random() - 0.5) * 0.4; if (Math.abs(lane) < (row ? 0.6 : 0.8)) lane = Math.sign(lane || 1) * (0.8 + Math.random() * 0.3);   // the very middle kept clear
+      d.lane = lane; d.dist = (left ? 3.6 + (i % 3) * 0.9 : (row ? 5.0 : 3.9)) + Math.random() * 1.5;        // distance in front of the line, toward the camera
       d.yaw = this.face + Math.PI; d.setState(ST_CHASE); d.stateT = 1; d.phase = Math.random();
       d.vel.copy(this.toM).multiplyScalar(d.def.speed); d.fade = 0;
       this.place(d); this.demons.push(d);
