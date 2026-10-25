@@ -7,7 +7,7 @@ import { CHAPTERS, HEALED } from './chapters.js';
 import { settsTextures, emberWoodTextures, terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture, cloudTexture, plasterTextures, thatchTextures, roofTextures, leadedGlassTextures } from './textures.js';
 import { rng, makeNoise, pathSampler, clamp, lerp, smooth, SpatialHash, TAU } from './util.js';
 import { Vista } from './vista.js';
-import { WX, WATER_U } from './weather.js';
+import { WX, WATER_U, WATER_GLSL } from './weather.js';
 import { makeFlame } from './flame.js';
 import { makeFrozen } from './people.js';
 import { buildFallen } from './battlefield.js';
@@ -829,6 +829,7 @@ export class World {
     const uniforms = {
       tDead: { value: tt.dead }, tDeadN: { value: tt.deadN }, tAlive: { value: tt.alive }, tAliveN: { value: tt.aliveN },
       tRock: { value: tt.rock }, tRockN: { value: tt.rockN }, tSnow: { value: tt.snow }, tMask: { value: this.mask },
+      tSetts: { value: null }, tSettsN: { value: null }, uRoad: { value: 0 },
       uSize: { value: HALF * 2 }, uTile: { value: 0.22 }, uSnowLine: { value: T.kind === 'mountain' ? 85 : 9999 },
       uWater: { value: T.water !== undefined ? 0.0 : -9999 }, uEmber: { value: this.ch.id === 'peak' ? 0.5 : this.ch.id === 'field' ? 1.6 : 0.9 }, uNStr: { value: 1.0 }, uRockAll: { value: T.kind === 'peak' ? 0.35 : 0 }, uFlatSnow: { value: T.kind === 'peak' || T.kind === 'mountain' ? 1 : 0 }, uSnowFrom: { value: T.kind === 'mountain' ? 10 : -1e4 }, uStrata: { value: T.kind === 'mountain' ? 1 : 0 },
       uDeadTint: { value: new THREE.Color(T.kind === 'fen' ? 0x8a8a78 : T.kind === 'mountain' || T.kind === 'peak' ? 0x9a9090 : 0xffffff) },
@@ -838,6 +839,7 @@ export class World {
       uCaveCut: { value: [0, 1, 2, 3, 4, 5].map(() => new THREE.Vector4(0, 0, 0, 0)) },   // the cave's mouths: no ground across their arches
     };
     if (this.caveSys) this.caveSys.portals.forEach((M, k) => { const U = uniforms.uCaveCut.value; U[k * 3].set(M.x, M.z, M.dx, M.dz); U[k * 3 + 1].set(M.y, M.W + 0.16, M.Ht + 0.16, -1.9); U[k * 3 + 2].set(5.0, 0, 0, 1); });
+    if (T.kind === 'vale' || T.kind === 'village') { const st = settsTextures(512); for (const t of [st.map, st.normalMap]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; } uniforms.tSetts.value = st.map; uniforms.tSettsN.value = st.normalMap; uniforms.uRoad.value = 1; }
     this.terrainUniforms = uniforms;
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
     mat.onBeforeCompile = (sh) => {
@@ -846,7 +848,7 @@ export class World {
         .replace('#include <fog_vertex>', '#include <fog_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWNorm = normalize(mat3(modelMatrix) * objectNormal);');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
         varying vec3 vWPos; varying vec3 vWNorm;
-        uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask;
+        uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask, tSetts, tSettsN; uniform float uRoad;
         uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow, uSnowFrom, uStrata; uniform vec3 uDeadTint, uAliveTint;
         uniform float uWet, uRainA, uWTime, uSnowAcc; uniform vec4 uHoles[6]; uniform vec4 uCaveCut[6];
         float wxh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -889,6 +891,19 @@ export class World {
         float bed = vWPos.y * 0.55 + sin(vWPos.x * 0.05 + vWPos.z * 0.04) * 2.2 + rock.a * 1.2;
         rockC *= mix(1.0, 0.72 + 0.5 * smoothstep(0.2, 0.8, abs(fract(bed) - 0.5) * 2.0) + 0.15 * sin(bed * 0.37), uStrata);
         vec3 tcol = mix(ground, rockC, rockMix);
+        // the road: packed mud worn into two wheel ruts, and through the village, setts laid in the mud
+        vec4 rm = uRoad > 0.5 ? texture2D(tMask, muv) : vec4(0.0, 0.0, 0.0, 0.5);
+        float rlat = (rm.a - 0.5) * 16.0;
+        float rut = exp(-pow((abs(rlat) - 0.78) / 0.24, 2.0)) * smoothstep(0.4, 0.9, rm.g);
+        float trk = smoothstep(0.08, 0.75, rm.g + (dead2.a - 0.5) * 0.35) * (1.0 - rockMix * 0.7);
+        vec3 mud = mix(vec3(0.20, 0.16, 0.12), vec3(0.13, 0.10, 0.08), dead.a) * mix(1.0, 0.62, rut);
+        mud = mix(mud, deadCol * 0.8, 0.25 * (1.0 - smoothstep(0.5, 0.95, rm.g)));
+        tcol = mix(tcol, mud, trk);
+        vec2 suv = vWPos.xz / 1.6; vec4 sc = uRoad > 0.5 ? texture2D(tSetts, suv) : vec4(0.0);
+        // setts end raggedly: stones missing at the edges, mud between
+        float pave = smoothstep(0.32, 0.62, rm.b + (wxn(floor(suv * vec2(6.0, 8.0)) * 0.37) - 0.5) * 0.55 * (1.0 - rm.b));
+        tcol = mix(tcol, sc.rgb * 0.85, pave);
+        float road = max(trk, pave);
         float snow = smoothstep(uSnowLine, uSnowLine + 10.0, vWPos.y + rock.a * 5.0) * (1.0 - rockMix * 0.5);
         // on the summit the snow lies on everything flat enough to hold it, thin and wind-scoured, rock showing through
         snow = max(snow, uFlatSnow * smoothstep(0.62, 0.86, vWNorm.y + (rock.a - 0.5) * 0.3 + (dead2.a - 0.5) * 0.15) * smoothstep(uSnowFrom, uSnowFrom + 70.0, vWPos.y + (rock.a - 0.5) * 16.0));
@@ -898,18 +913,19 @@ export class World {
         // rain: the ground darkens and goes glossy, and water stands in its hollows (low ground, flat, by the noise)
         float wetK = uWet * (1.0 - snow);
         float pn = wxn(vWPos.xz * 0.09) * 0.6 + wxn(vWPos.xz * 0.31 + 3.0) * 0.3 + (1.0 - dead2.a) * 0.1;
-        float puddle = smoothstep(0.66 - uWet * 0.14, 0.7 - uWet * 0.14, pn) * smoothstep(0.94, 0.985, vWNorm.y) * smoothstep(0.3, 0.7, uWet) * (1.0 - snow) * (1.0 - rockMix);
+        float puddle = smoothstep(0.66 - uWet * 0.14 - rut * 0.3, 0.7 - uWet * 0.14 - rut * 0.3, pn) * smoothstep(0.94, 0.985, vWNorm.y) * smoothstep(0.3, 0.7, uWet) * (1.0 - snow) * (1.0 - rockMix) * (1.0 - pave * 0.7);
         tcol *= 1.0 - 0.4 * wetK;
         tcol = mix(tcol, tcol * 0.3 + vec3(0.008, 0.01, 0.012), puddle);
         float wet = 1.0 - smoothstep(uWater - 0.2, uWater + 0.7, vWPos.y);
         tcol *= mix(1.0, 0.5, wet);
         diffuseColor.rgb = tcol;
-        float ember = (1.0 - aliveMix) * (1.0 - rockMix) * (1.0 - snow) * (1.0 - uFlatSnow) * smoothstep(0.06, 0.16, (dead.r - dead.g) * 2.0);
+        float ember = (1.0 - road) * (1.0 - aliveMix) * (1.0 - rockMix) * (1.0 - snow) * (1.0 - uFlatSnow) * smoothstep(0.06, 0.16, (dead.r - dead.g) * 2.0);
         `)
         .replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(mix(0.95, 0.82, aliveMix), 0.78, rockMix); roughnessFactor = mix(roughnessFactor, 0.2, wet); roughnessFactor = mix(roughnessFactor, 0.55, snow); roughnessFactor = mix(roughnessFactor, 0.32, wetK * 0.9); roughnessFactor = mix(roughnessFactor, 0.02, puddle);`)
         .replace('#include <normal_fragment_maps>', `
           vec3 nd = texture2D(tDeadN, wuv).xyz * 2.0 - 1.0, na = texture2D(tAliveN, wuv).xyz * 2.0 - 1.0, nr = texture2D(tRockN, vWPos.xz * uTile * 0.5).xyz * 2.0 - 1.0;
           vec3 tnm = normalize(mix(mix(nd, na, aliveMix), nr, rockMix));
+          if (pave > 0.01) tnm = normalize(mix(tnm, texture2D(tSettsN, suv).xyz * 2.0 - 1.0, pave));
           vec3 Nw = normalize(vWNorm); vec3 Tw = normalize(vec3(1.0, 0.0, 0.0) - Nw * Nw.x); vec3 Bw = normalize(cross(Nw, Tw));
           vec3 nw = normalize(Tw * tnm.x * uNStr - Bw * tnm.y * uNStr + Nw * max(tnm.z, 0.2));
           // puddles lie flat as glass, ringed by the rain; wet ground takes the splashes too
@@ -937,6 +953,41 @@ export class World {
       }
       this.mask.needsUpdate = true;
     }
+    this.paintRoad();
+  }
+  // The road, painted into the ground itself so it follows every rise and fold of the terrain and never
+  // flickers or breaks: the mask's G channel is the packed-mud track, B the setts of the village street and square,
+  // A the signed distance across the road (for the wheel ruts). Only where people lived and drove carts.
+  paintRoad() {
+    const T = this.ch.terrain; if (T.kind !== 'vale' && T.kind !== 'village') return;
+    const S = this.maskSize, d = this.maskData, tex = (HALF * 2) / S, P = this.path.poly;
+    const best = new Float32Array(S * S).fill(1e9), lat = new Float32Array(S * S), tt = new Float32Array(S * S), R = 14;
+    for (let k = 0; k < P.length - 1; k++) {
+      const a = P[k], b = P[k + 1], abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz || 1, l = Math.sqrt(l2);
+      const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x) - R) / tex + S / 2)), i1 = Math.min(S - 1, Math.ceil((Math.max(a.x, b.x) + R) / tex + S / 2));
+      const j0 = Math.max(0, Math.floor((Math.min(a.z, b.z) - R) / tex + S / 2)), j1 = Math.min(S - 1, Math.ceil((Math.max(a.z, b.z) + R) / tex + S / 2));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const x = (i + 0.5 - S / 2) * tex, z = (j + 0.5 - S / 2) * tex;   // texel centres (the mask is sampled linearly)
+        const f = clamp(((x - a.x) * abx + (z - a.z) * abz) / l2, 0, 1), px = a.x + abx * f, pz = a.z + abz * f, dd = (x - px) ** 2 + (z - pz) ** 2, q = j * S + i;
+        if (dd < best[q]) { best[q] = dd; lat[q] = ((x - a.x) * -abz + (z - a.z) * abx) / l; tt[q] = (k + f) / (P.length - 1); }
+      }
+    }
+    const pv = this.paving;
+    for (let q = 0; q < S * S; q++) {
+      if (best[q] > R * R) continue;
+      const i = q % S, j = Math.floor(q / S), x = (i + 0.5 - S / 2) * tex, z = (j + 0.5 - S / 2) * tex, dist = Math.sqrt(best[q]);
+      const nz = this.noise.n2(x * 0.21, z * 0.21) - 0.5;
+      const half = 2.3 + this.noise.n2(tt[q] * 90, 4.4) * 0.6;
+      const trk = 1 - smooth(clamp((dist + nz * 1.4 - half + 0.6) / 1.6, 0, 1));
+      let pave = 0;
+      if (pv) {
+        const sv = this.sOf(tt[q]), ends = smooth(clamp((sv - pv.sMin) / 5, 0, 1)) * smooth(clamp((pv.sMax - sv) / 5, 0, 1));
+        const ph = this.pavingHalf(tt[q], lat[q] >= 0 ? 1 : -1);
+        pave = (1 - smooth(clamp((dist + nz * 1.2 - ph + 0.5) / 1.2, 0, 1))) * ends;
+      }
+      const k = q * 4; d[k + 1] = Math.max(d[k + 1], trk * 255); d[k + 2] = Math.max(d[k + 2], pave * 255); d[k + 3] = clamp(lat[q] / 8 * 0.5 + 0.5, 0, 1) * 255;
+    }
+    this.mask.needsUpdate = true;
   }
   // open country beyond the battlefield, out to the horizon
   buildFarTerrain() {
@@ -1235,7 +1286,6 @@ export class World {
     }
     // --- gravestones & wooden crosses
     if (P.graves) {
-      const gs = merge([xf(new THREE.BoxGeometry(0.55, 0.9, 0.14), [0, 0.45, 0]), xf(new THREE.CylinderGeometry(0.275, 0.275, 0.14, 12, 1, false, 0, PI), [0, 0.9, 0], [PI / 2, 0, PI / 2])]);
       const list = [];
       const yard = this.altarT[Math.min(1, this.altarT.length - 1)];
       for (let k = 0; k < P.graves; k++) {
@@ -1253,7 +1303,7 @@ export class World {
       }
       // old headstones: lichened, green with moss on their tops and shoulders, dark with damp at the foot
       const graveMat = this.graveMat || (this.graveMat = buildingMat(stoneTextures(512, false), { key: 'grave', moss: 0.95, damp: 0.6, dampTop: 0.1 }));
-      this.instanced(boxUV(merge([gs]), 0.7), graveMat, list);
+      this.buildGraves(list, r, graveMat);
     }
     if (P.crosses) {
       const cg = merge([xf(new THREE.BoxGeometry(0.1, 1.6, 0.1), [0, 0.7, 0]), xf(new THREE.BoxGeometry(0.7, 0.09, 0.09), [0, 1.1, 0])]);
@@ -1264,7 +1314,7 @@ export class World {
     // --- the farms and the village of Saint Aldric, on their planned lots
     for (const L of this.lots || []) if (L.kind === 'house' || L.kind === 'barn') this.placeHouse(r, woodMat, charMat, brickMat, L.kind === 'barn', L);
     if (P.village) this.placeChurch(r, brickMat, charMat);
-    if (P.village) { this.buildWells(); this.buildStreet(); }
+    if (P.village) this.buildWells();   // (the street is painted into the ground: paintRoad)
     if (P.fires) {
       // fires burning on in the wrecks of the houses, and out in the street and the plots where something caught
       const spots = this.fireSpots.slice(0, P.fires);
@@ -1276,8 +1326,10 @@ export class World {
       }
       for (const f of spots) this.fires.push(f);
       this.buildBurning(spots, this.charSpots, r);
-      this.fireLights = [0, 1, 2].map(() => { const l = new THREE.PointLight(0xff7a30, 0, 18, 2); this.group.add(l); return l; });
-      this.flamePool = [0, 1, 2, 3, 4].map(() => { const f = makeFlame({ height: 1.4, width: 0.9, tongues: 4, sparks: 36 }); f.group.visible = false; this.group.add(f.group); return f; });
+      // and the burning houses burn along their wall tops, where the floor beams and studs still stand on them
+      for (const f of (this.wallFires || []).slice(0, 18)) this.fires.push(f);
+      this.fireLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xff7a30, 0, 20, 2); this.group.add(l); return l; });
+      this.flamePool = Array.from({ length: 10 }, (_, i) => { const f = makeFlame({ height: 1.6, width: 1.0, tongues: 5, sparks: i < 6 ? 40 : 18, smoke: true }); f.group.visible = false; this.group.add(f.group); return f; });
     }
     // --- fen: reeds, stumps, boardwalks
     if (P.reeds) {
@@ -1355,6 +1407,54 @@ export class World {
 
   // the wells of Saint Aldric go down: a stone-lined shaft under each drum, black water far below, and the ground
   // cut away across its mouth (the terrain shader discards inside each well's circle)
+  // Old headstones as a village churchyard has them: round-headed and shouldered slabs, a few stone crosses on
+  // their plinths, one broken off, rough wooden crosses over the poorer graves. Each stone is cut from an outline
+  // with worn arrises, chipped along its edges; many lean or have sunk, and each grave has its low mound of earth.
+  buildGraves(list, r, graveMat) {
+    if (!list.length) return;
+    const outline = (kind) => {
+      const S2 = new THREE.Shape(), w = 0.52, h = 0.86;
+      if (kind === 0) { S2.moveTo(-w / 2, -0.3); S2.lineTo(-w / 2, h - w / 2); S2.absarc(0, h - w / 2, w / 2, PI, 0, true); S2.lineTo(w / 2, -0.3); }
+      else if (kind === 1) {   // shouldered, with an ogee head
+        S2.moveTo(-w / 2, -0.3); S2.lineTo(-w / 2, h * 0.74); S2.quadraticCurveTo(-w / 2, h * 0.86, -w * 0.3, h * 0.86); S2.quadraticCurveTo(-w * 0.06, h * 0.88, 0, h);
+        S2.quadraticCurveTo(w * 0.06, h * 0.88, w * 0.3, h * 0.86); S2.quadraticCurveTo(w / 2, h * 0.86, w / 2, h * 0.74); S2.lineTo(w / 2, -0.3);
+      } else if (kind === 2) {   // a stone cross, its arms a little flared
+        const a = 0.075, b = 0.1, top = 1.05, arm = 0.72;
+        S2.moveTo(-a, -0.3); S2.lineTo(-a, arm - 0.08); S2.lineTo(-0.3, arm - b); S2.lineTo(-0.3, arm + b); S2.lineTo(-a, arm + 0.08); S2.lineTo(-b, top); S2.lineTo(b, top);
+        S2.lineTo(a, arm + 0.08); S2.lineTo(0.3, arm + b); S2.lineTo(0.3, arm - b); S2.lineTo(a, arm - 0.08); S2.lineTo(a, -0.3);
+      } else {   // broken off: a jagged top
+        S2.moveTo(-w / 2, -0.3); S2.lineTo(-w / 2, 0.48); S2.lineTo(-0.12, 0.62); S2.lineTo(-0.04, 0.5); S2.lineTo(0.1, 0.57); S2.lineTo(w / 2, 0.36); S2.lineTo(w / 2, -0.3);
+      }
+      S2.closePath();
+      const g = new THREE.ExtrudeGeometry(S2, { depth: kind === 2 ? 0.16 : 0.13, bevelEnabled: true, bevelThickness: 0.018, bevelSize: 0.018, bevelSegments: 2, curveSegments: 9 });
+      g.translate(0, 0, kind === 2 ? -0.08 : -0.065);
+      // chips and wear: nudge each outline point a little, more toward the top, where the weather takes it
+      const pa = g.attributes.position;
+      for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), y = pa.getY(i), zz = pa.getZ(i), k = Math.sin(x * 91.7 + y * 53.3 + kind * 7.1) * 43758.5; const n = (k - Math.floor(k)) - 0.5; const amt = 0.012 + Math.max(0, y) * 0.012; pa.setXYZ(i, x + n * amt, y + n * amt * 0.6, zz + n * amt * 0.5); }
+      const parts = [g];
+      if (kind === 2) parts.push(xf(new THREE.BoxGeometry(0.46, 0.26, 0.34), [0, -0.08, 0]), xf(new THREE.BoxGeometry(0.36, 0.1, 0.26), [0, 0.09, 0]));   // the cross's plinth
+      const m = merge(parts.map((q) => q.index ? q.toNonIndexed() : q)); m.computeVertexNormals(); return boxUV(m, 0.7);
+    };
+    const geos = [0, 1, 2, 3].map(outline), buckets = [[], [], [], []], wooden = [], mounds = [];
+    for (const it of list) {
+      const u = r(), kind = u < 0.38 ? 0 : u < 0.62 ? 1 : u < 0.74 ? 2 : u < 0.84 ? 3 : 4;
+      const lean = r() < 0.25, sunk = r() < 0.2;
+      const g = { ...it, y: it.y + 0.15 - (sunk ? r.range(0.12, 0.3) : 0.02), rx: lean ? r.range(-0.3, 0.22) : it.rx * 0.5, rz: lean ? r.range(-0.18, 0.18) : it.rz * 0.5 };
+      if (kind === 4) wooden.push({ ...g, s: r.range(0.9, 1.1) }); else buckets[kind].push(g);
+      // the grave itself: a long low mound of earth in front of the stone, some of them sunk into a hollow
+      const C = Math.cos(it.ry), S = Math.sin(it.ry), mx = it.x + S * 0.95, mz = it.z + C * 0.95;
+      mounds.push({ x: mx, y: this.heightAt(mx, mz) - (sunk ? 0.1 : 0.02), z: mz, ry: it.ry, s: 1, sx: r.range(0.42, 0.5), sy: sunk ? 0.08 : r.range(0.12, 0.2), sz: r.range(0.72, 0.82) });
+    }
+    geos.forEach((g, i) => this.instanced(g, graveMat, buckets[i]));
+    // wooden crosses: two split timbers lashed together, grey with age
+    const wc = merge([xf(new THREE.BoxGeometry(0.09, 1.25, 0.07), [0, 0.32, 0], [0, 0, 0.02]), xf(new THREE.BoxGeometry(0.62, 0.075, 0.06), [0, 0.68, 0.06], [0, 0, -0.04]), xf(new THREE.CylinderGeometry(0.05, 0.05, 0.08, 6), [0, 0.68, 0.035], [PI / 2, 0, 0])]);
+    const woodG = this.graveWood || (this.graveWood = buildingMat(woodTextures(256, [92, 86, 78]), { key: 'gravewood', moss: 0.5, damp: 0.5, dampTop: 0.2 }));
+    this.instanced(boxUV(wc, 0.6), woodG, wooden);
+    // earth: dark, damp soil heaped and settled
+    const mg = new THREE.SphereGeometry(1, 14, 7, 0, TAU, 0, PI / 2); lumpy(mg, 0.12, 31);
+    const soil = this.graveSoil || (this.graveSoil = new THREE.MeshStandardMaterial({ color: 0x2b231c, roughness: 0.97, metalness: 0 }));
+    this.instanced(mg, soil, mounds, { shadow: false });
+  }
   buildWells() {
     if (!this.wells.length) return;
     const holes = this.terrainUniforms?.uHoles?.value, geos = [], waters = [];
@@ -1499,15 +1599,51 @@ export class World {
     const wall = (len, cx, cz, rot, front) => {
       const segs = Math.max(3, Math.round(len / 1.15)); const sw = len / segs;
       const door = front ? Math.floor(segs / 2) : -1;
+      // A burnt house's wall comes down in one or two breaches, its courses stepping down into each and back up,
+      // never in isolated square notches: one height profile for the whole wall
+      const prof = [];
+      if (!intact) {
+        const nb = r() < 0.3 ? 0 : r() < 0.7 ? 1 : 2, br = [];
+        for (let b = 0; b < nb; b++) br.push({ c: r.range(0, segs - 1), hw: r.range(1.0, 2.4), d: r.range(1.3, 2.3) });
+        for (let sg = 0; sg < segs; sg++) { let t = r.range(2.3, 2.6); for (const b of br) t = Math.min(t, 2.6 - b.d * smooth(clamp(1 - Math.abs(sg - b.c) / b.hw, 0, 1))); prof.push(Math.max(0.35, t)); }
+      }
+      const P0 = (gx, gy, gz) => { const c = Math.cos(rot), s2 = Math.sin(rot); return [cx + gx * c + gz * s2, gy, cz - gx * s2 + gz * c]; };
+      // the upper storey: timber frame with plaster panels, on a standing house only
+      const upper = (lx, sg, P) => {
+          // jettied out over the street on the long walls of a standing house, its joists' ends showing under the
+          // jetty; studs, a middle rail and a brace in each bay, daub panels between
+          const fy = 2.6, fh = eave - fy, out = Math.sign(cz || cx) || 1, jt = rot === 0 ? 0.42 * out : 0;
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.24, 0.3), P(lx, fy, 0.14 + jt), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, eave, 0.14 + jt), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(0.18, fh, 0.3), P(lx - sw / 2 + 0.09, fy + fh / 2, 0.14 + jt), [0, rot, 0]));
+          timber.push(xf(new THREE.BoxGeometry(sw, 0.14, 0.26), P(lx, fy + fh * 0.5, 0.15 + jt), [0, rot, 0]));
+          const diag = new THREE.BoxGeometry(0.14, Math.hypot(sw, fh) * 0.95, 0.28);
+          timber.push(xf(diag, P(lx, fy + fh / 2, 0.14 + jt), [0, rot, (sg % 2 ? 1 : -1) * Math.atan2(sw, fh)]));
+          plaster.push(xf(new THREE.BoxGeometry(sw + 0.02, fh, 0.2), P(lx, fy + fh / 2, 0.02 + jt), [0, rot, 0]));
+          if (jt) { timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, 0.7), P(lx, fy - 0.2, out * 0.3), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(0.18, 0.5, 0.18), P(lx, fy - 0.42, out * 0.42), [0, rot, out * 0.6])); }
+          // an upper window in alternate bays, leaded, with a sill
+          if (sg % 2 === 0 && sg !== door) {
+            glass.push(xf(new THREE.BoxGeometry(sw * 0.5, fh * 0.42, 0.06), P(lx, fy + fh * 0.48, 0.25 * out + jt), [0, rot, 0]));
+            timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.08, 0.36), P(lx, fy + fh * 0.25, 0.2 * out + jt), [0, rot, 0]));
+            timber.push(xf(new THREE.BoxGeometry(0.05, fh * 0.42, 0.08), P(lx, fy + fh * 0.48, 0.27 * out + jt), [0, rot, 0]));
+          }
+      };
       for (let sg = 0; sg < segs; sg++) {
         const lx = -len / 2 + (sg + 0.5) * sw;
-        const P = (gx, gy, gz) => { const c = Math.cos(rot), s2 = Math.sin(rot); return [cx + gx * c + gz * s2, gy, cz - gx * s2 + gz * c]; };
-        const ruin = !intact && r() < 0.45;
-        const top = ruin ? r.range(0.5, 2.0) : intact ? 2.6 : r.range(2.0, 2.6);
+        const P = P0;
+        const top = intact ? 2.6 : prof[sg];
+        const ruin = !intact && top < 2.1;
         if (ruin) { const [rx0, , rz0] = P(lx, 0, 0); broken.push({ x: rx0, z: rz0, rot, top, sw }); }
+        // a burnt house's front door: where the wall over it still stands, a charred lintel and the opening; where
+        // it has come down, just the gap with the rubble in it
+        if (sg === door && !intact && top < 2.45) {
+          for (const sx of [-1, 1]) walls.push(xf(new THREE.BoxGeometry(0.22, Math.max(0.3, top * 0.8), 0.52), P(lx + sx * (sw / 2 - 0.11), Math.max(0.3, top * 0.8) / 2, 0), [0, rot, 0]));
+          continue;
+        }
         if (sg === door) { // doorway with a heavy lintel
           walls.push(xf(new THREE.BoxGeometry(sw, 0.5, 0.5), P(lx, 2.35, 0), [0, rot, 0]));
           timber.push(xf(new THREE.BoxGeometry(sw + 0.3, 0.22, 0.56), P(lx, 2.1, 0), [0, rot, 0]));
+          if (intact) upper(lx, sg, P);
           if (intact) dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
           if (intact) {
             const out = Math.sign(cz || cx) || 1, dw = sw - 0.25;
@@ -1544,31 +1680,24 @@ export class World {
             const [sx0, , sz0] = P(lx + sx * (sw * 0.31 + Math.cos(ang) * hw / 2), 0, 0.3 + Math.sin(ang) * hw / 2);
             timber.push(xf(new THREE.BoxGeometry(hw, 0.9, 0.04), [sx0, fate < 0.4 ? 1.35 : 1.48, sz0], [0, rot - sx * ang, fate < 0.4 ? sx * 0.35 : 0]));
           }
-        } else {
-          // rough courses: the top of a broken wall is ragged
+        } else if (intact) {
           walls.push(xf(new THREE.BoxGeometry(sw + 0.02, top, 0.52), P(lx, top / 2, 0), [0, rot, 0]));
-          if (ruin) for (let q = 0; q < 2; q++) walls.push(xf(new THREE.BoxGeometry(r.range(0.25, 0.5), r.range(0.15, 0.3), 0.48), P(lx + r.range(-sw / 3, sw / 3), top + 0.1, 0), [r.range(-0.2, 0.2), rot, r.range(-0.3, 0.3)]));
+        } else {
+          // a burnt wall: each half of the bay meets its neighbour's height, so the top steps down into a breach
+          // course by course; loose stones lie on the broken top
+          const hl = (prof[Math.max(0, sg - 1)] + top) / 2, hr = (prof[Math.min(segs - 1, sg + 1)] + top) / 2;
+          for (const [hx, hh] of [[-1, hl * 0.5 + top * 0.5], [1, hr * 0.5 + top * 0.5]]) walls.push(xf(new THREE.BoxGeometry(sw / 2 + 0.02, hh, 0.52), P(lx + hx * sw / 4, hh / 2, 0), [0, rot, 0]));
+          const nst = ruin ? 3 : 1;
+          for (let q = 0; q < nst; q++) { const qx = r.range(-sw / 2.4, sw / 2.4), hh = qx < 0 ? hl * 0.5 + top * 0.5 : hr * 0.5 + top * 0.5, sz = r.range(0.22, 0.42); walls.push(xf(lumpy(icoSmooth(1), 0.3, 700 + sg * 7 + q), P(lx + qx, hh + sz * 0.15, r.range(-0.1, 0.1)), [r() * 3, rot, r() * 3], [sz, sz * 0.6, sz * 0.8])); }
+          // the charred ends of the floor joists and studs that stood on the wall, sticking up out of it
+          if (!ruin && r() < 0.6) { const ht = r.range(0.25, 1.3); timber.push(xf(new THREE.BoxGeometry(0.16, ht, 0.18), P(lx + r.range(-sw / 3, sw / 3), top + ht / 2 - 0.05, 0.05), [r.range(-0.15, 0.15), rot, r.range(-0.25, 0.25)])); }
+          if (r() < 0.35) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(0.6, 1.1)), P(lx, Math.min(hl, hr) - 0.12, 0.25), [r.range(-0.2, 0.2), rot, 0]));   // a joist end through the wall
+          // where a window was, its charred head-beam still spans the burnt wall
+          if (!ruin && sg % 2 === 1 && r() < 0.5) timber.push(xf(new THREE.BoxGeometry(sw * 0.85, 0.16, 0.56), P(lx, Math.min(hl, hr) - 0.35, 0), [0, rot, 0]));
+          // a burning house burns at its wall tops and window heads too
+          if (!ruin && r() < 0.22) { const [wx0, , wz0] = P(lx, 0, 0); const [fx, fz] = toW(wx0, wz0); (this.wallFires || (this.wallFires = [])).push({ x: fx, y: y + Math.min(hl, hr), z: fz, s: r.range(0.45, 0.75), yaw: yaw + rot, wall: true }); }
         }
-        // the upper storey: timber frame with plaster panels, where it survives
-        if ((intact || (!ruin && r() < 0.5)) && top >= 2.5) {
-          // the upper storey: jettied out over the street on the long walls of a standing house, its joists' ends
-          // showing under the jetty; studs, a middle rail and a brace in each bay, daub panels between
-          const fy = 2.6, fh = eave - fy, out = Math.sign(cz || cx) || 1, jt = intact && rot === 0 ? 0.42 * out : 0;
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.24, 0.3), P(lx, fy, 0.14 + jt), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, eave, 0.14 + jt), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(0.18, fh, 0.3), P(lx - sw / 2 + 0.09, fy + fh / 2, 0.14 + jt), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw, 0.14, 0.26), P(lx, fy + fh * 0.5, 0.15 + jt), [0, rot, 0]));
-          const diag = new THREE.BoxGeometry(0.14, Math.hypot(sw, fh) * 0.95, 0.28);
-          timber.push(xf(diag, P(lx, fy + fh / 2, 0.14 + jt), [0, rot, (sg % 2 ? 1 : -1) * Math.atan2(sw, fh)]));
-          plaster.push(xf(new THREE.BoxGeometry(sw, fh, 0.2), P(lx, fy + fh / 2, 0.02 + jt), [0, rot, 0]));
-          if (jt) { timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, 0.7), P(lx, fy - 0.2, out * 0.3), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(0.18, 0.5, 0.18), P(lx, fy - 0.42, out * 0.42), [0, rot, out * 0.6])); }
-          // an upper window in alternate bays, leaded, with a sill
-          if (intact && sg % 2 === 0 && sg !== door) {
-            glass.push(xf(new THREE.BoxGeometry(sw * 0.5, fh * 0.42, 0.06), P(lx, fy + fh * 0.48, 0.25 * out + jt), [0, rot, 0]));
-            timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.08, 0.36), P(lx, fy + fh * 0.25, 0.2 * out + jt), [0, rot, 0]));
-            timber.push(xf(new THREE.BoxGeometry(0.05, fh * 0.42, 0.08), P(lx, fy + fh * 0.48, 0.27 * out + jt), [0, rot, 0]));
-          }
-        }
+        if (intact && top >= 2.5 && sg !== door) upper(lx, sg, P);
         const C2 = Math.cos(yaw), S2 = Math.sin(yaw); const [wx, , wz] = P(lx, 0, 0);
         this.addCollider(x + wx * C2 + wz * S2, z - wx * S2 + wz * C2, 0.6);
       }
@@ -1576,7 +1705,7 @@ export class World {
     wall(w, 0, dpt / 2, 0, true); wall(w, 0, -dpt / 2, 0, false); wall(dpt, w / 2, 0, PI / 2, false); wall(dpt, -w / 2, 0, PI / 2, false);
     // quoins: dressed stones up each corner
     for (const [cx, cz] of [[-w / 2, -dpt / 2], [w / 2, -dpt / 2], [-w / 2, dpt / 2], [w / 2, dpt / 2]]) {
-      const top = intact ? eave : r.range(1.2, 2.8);
+      const top = intact ? eave : r.range(2.6, 3.1);   // the corners stand longest: never lower than the walls they close
       for (let k = 0; k < top / 0.45; k++) walls.push(xf(new THREE.BoxGeometry(0.66 + (k % 2) * 0.12, 0.42, 0.66 - (k % 2) * 0.12), [cx, 0.21 + k * 0.45, cz]));
     }
     // gable ends and roof timbers
@@ -1740,9 +1869,16 @@ export class World {
     // the nave walls, broken in places, with tall pointed windows between the buttresses
     const dark = [];
     for (const s of [-1, 1]) for (let k = 0; k < 10; k++) {
-      if (k === 4 && s > 0) continue;                                   // the breach in the south wall
-      const zc = -L / 2 + 1 + k * 2, broken = r() < 0.22;
-      if (broken) { const h = r.range(2, 4); add(xf(new THREE.BoxGeometry(0.7, h, 2.0), [s * W / 2, h / 2, zc])); continue; }
+      const zc = -L / 2 + 1 + k * 2, breach = k === 4 && s > 0, broken = breach || r() < 0.22;
+      if (broken) {
+        // a broken bay: the masonry steps down from each neighbour into the break, loose blocks on the ragged
+        // top, and the fallen stone heaped on both sides of the wall's foot
+        const h = breach ? r.range(0.5, 0.9) : r.range(2.2, 4);
+        for (const [dz, hh] of [[-0.67, h * 0.35 + Hh * 0.65], [0, h], [0.67, h * 0.35 + Hh * 0.65]]) add(xf(new THREE.BoxGeometry(0.7, hh, 0.68), [s * W / 2, hh / 2, zc + dz]));
+        for (let q = 0; q < 4; q++) { const sz = r.range(0.25, 0.45), dz = r.range(-0.9, 0.9), hh = Math.abs(dz) > 0.33 ? h * 0.35 + Hh * 0.65 : h; add(xf(lumpy(icoSmooth(1), 0.3, 1200 + k * 11 + q + (s > 0 ? 50 : 0)), [s * W / 2 + r.range(-0.15, 0.15), hh + sz * 0.15, zc + dz], [r() * 3, r() * 3, r() * 3], [sz, sz * 0.6, sz * 0.8])); }
+        for (let q = 0; q < (breach ? 16 : 9); q++) { const sz = r.range(0.2, 0.5), side = q % 2 ? 1 : -1, off = side * r.range(0.4, breach ? 2.2 : 1.4); const rx2 = s * (W / 2 + off), rz2 = zc + r.range(-1.2, 1.2), gy2 = off > 0.6 ? Math.min(0, this.heightAt(x + rx2 * C0 + rz2 * S0, z - rx2 * S0 + rz2 * C0) - y) : 0; add(xf(lumpy(icoSmooth(1), 0.32, 1300 + k * 17 + q + (s > 0 ? 70 : 0)), [rx2, gy2 + sz * 0.25, rz2], [r() * 3, r() * 3, r() * 3], [sz, sz * 0.6, sz])); }
+        continue;
+      }
       if (k % 2 === 1) {
         add(xf(new THREE.BoxGeometry(0.7, 2.6, 2.0), [s * W / 2, 1.3, zc]));                          // under the sill
         add(xf(new THREE.BoxGeometry(0.7, Hh - 5.6, 2.0), [s * W / 2, (Hh + 5.6) / 2, zc]));           // over the arch
@@ -1924,8 +2060,9 @@ export class World {
     };
     let nb = 0;
     const placeBody = (x, z, yaw, pose) => {   // a whole frozen man where there are people to build him from, else the old wrapped shape
-      const fz = makeFrozen(pose === 'lie' ? 'lie' : ['sit', 'kneel', 'slump'][nb % 3], nb++);
-      const b = fz ? fz.root : body(pose); b.position.set(x, this.heightAt(x, z) - 0.04, z); b.rotation.y = yaw; this.group.add(b);
+      const fz = makeFrozen(pose === 'lie' ? ['lie', 'prone'][nb % 2] : ['sit', 'prone', 'slump', 'sit'][nb % 4], nb++ * 7 + 3);
+      if (fz) { fz.settle((px, pz) => this.heightAt(px, pz), x, z, yaw); this.group.add(fz.root); return; }
+      const b = body(pose); b.position.set(x, this.heightAt(x, z) - 0.04, z); b.rotation.y = yaw; this.group.add(b);
     };
     for (let k = 0; k < 9; k++) {   // along the way, where they sat down and did not get up
       const t = 0.08 + k * 0.1 + r.range(-0.02, 0.02), F = frame(t), side = r.sign(); if (ledgeSide(t) === side) continue;
@@ -2008,7 +2145,9 @@ export class World {
 
   // ---------------------------------------------------------------- grass
   // somewhere nothing grows up through: a building's floor, the paved street, a well's mouth
-  blocked(x, z) { return !!this.inFootprint(x, z, 0.4) || this.wells.some((w) => Math.hypot(x - w.x, z - w.z) < w.r + 0.6) || (!!this.paving && this.onPaving(x, z)); }
+  // nothing grows on the trodden track: read back from the road the ground was painted with
+  onTrack(x, z) { if (!this.maskData) return false; const S = this.maskSize, i = clamp(Math.floor((x / (HALF * 2) + 0.5) * S), 0, S - 1), j = clamp(Math.floor((z / (HALF * 2) + 0.5) * S), 0, S - 1); return this.maskData[(j * S + i) * 4 + 1] > 150; }
+  blocked(x, z) { return this.onTrack(x, z) || !!this.inFootprint(x, z, 0.4) || this.wells.some((w) => Math.hypot(x - w.x, z - w.z) < w.r + 0.6) || (!!this.paving && this.onPaving(x, z)); }
   buildGrass() {
     const kind = this.ch.terrain.kind; if (kind === 'peak') return;
     const g1 = new THREE.PlaneGeometry(1.0, 0.7); g1.translate(0, 0.33, 0); const g2 = g1.clone(); g2.rotateY(PI / 2);
@@ -2061,23 +2200,16 @@ export class World {
     const tt = terrainTextures(512);
     mat.normalMap = tt.aliveN; mat.normalScale = new THREE.Vector2(0.25, 0.25);
     mat.onBeforeCompile = (sh) => {
-      sh.uniforms.uTime = uT; Object.assign(sh.uniforms, WATER_U);
+      sh.uniforms.uTime = uT; Object.assign(sh.uniforms, WATER_U); sh.uniforms.uRainOn = { value: 1 };
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vW;').replace('#include <fog_vertex>', '#include <fog_vertex>\nvW = (modelMatrix * vec4(position,1.0)).xz;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vW; uniform float uTime; uniform sampler2D uSim; uniform vec4 uSimWin; uniform float uSimTexel;')
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vW; uniform float uTime, uRainOn;' + WATER_GLSL)
         .replace('#include <normal_fragment_maps>', `
-          vec3 n1 = texture2D(normalMap, vW * 0.08 + vec2(uTime * 0.01, uTime * 0.006)).xyz * 2.0 - 1.0;
-          vec3 n2 = texture2D(normalMap, vW * 0.13 - vec2(uTime * 0.008, -uTime * 0.012)).xyz * 2.0 - 1.0;
-          vec3 nn = normalize(vec3((n1.xy + n2.xy) * 0.18, 1.0));
-          // the wave field round the player: wakes, ripples, rain rings
-          if (uSimWin.w > 0.5) {
-            vec2 suv = (vW - uSimWin.xy) / uSimWin.z + 0.5;
-            if (suv.x > 0.0 && suv.y > 0.0 && suv.x < 1.0 && suv.y < 1.0) {
-              float hx = texture2D(uSim, suv + vec2(uSimTexel, 0.0)).r - texture2D(uSim, suv - vec2(uSimTexel, 0.0)).r;
-              float hz = texture2D(uSim, suv + vec2(0.0, uSimTexel)).r - texture2D(uSim, suv - vec2(0.0, uSimTexel)).r;
-              float fade = smoothstep(0.0, 0.1, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
-              nn = normalize(nn + vec3(-hx, -hz, 0.0) * 2.2 * fade);
-            }
-          }
+          // slow wind-ruffle: a long, gentle swell and a finer cat's-paw, both faint (the fen is sheltered, shallow water)
+          vec3 n1 = texture2D(normalMap, vW * 0.11 + vec2(uTime * 0.012, uTime * 0.007)).xyz * 2.0 - 1.0;
+          vec3 n2 = texture2D(normalMap, vW * 0.53 - vec2(uTime * 0.02, -uTime * 0.03)).xyz * 2.0 - 1.0;
+          vec3 nn = normalize(vec3(n1.xy * 0.05 + n2.xy * 0.035, 1.0));
+          // wakes, footsteps and rain rings
+          nn = waterNormal(nn, vW, uRainOn);
           normal = normalize((viewMatrix * vec4(nn.x, nn.z, -nn.y, 0.0)).xyz);`);
     };
     const m = new THREE.Mesh(g, mat); m.position.y = 0.02; m.receiveShadow = true; m.renderOrder = 1;
@@ -2158,7 +2290,7 @@ export class World {
     // village fires: nearest few get lights
     if (this.fires.length && camPos) {
       const near = this.fires.map((f) => [f, (f.x - camPos.x) ** 2 + (f.z - camPos.z) ** 2]).sort((a, b) => a[1] - b[1]);
-      this.fireLights.forEach((l, i) => { const f = near[i]?.[0]; if (!f || near[i][1] > 90 * 90) { l.intensity = 0; return; } l.position.set(f.x, f.y + 1.2, f.z); l.intensity = (6 + Math.sin(this.time * 17 + i * 3) * 1.5 + Math.sin(this.time * 7.3 + i) * 1.5) * f.s; });
+      this.fireLights.forEach((l, i) => { const f = near[i]?.[0]; if (!f || near[i][1] > 90 * 90) { l.intensity = 0; return; } l.position.set(f.x, f.y + 1.1, f.z); const fl = Math.sin(this.time * 17 + i * 3) * 0.5 + Math.sin(this.time * 7.3 + i) * 0.5 + Math.sin(this.time * 31 + i * 1.7) * 0.35; l.intensity = (8 + fl * 2.6) * f.s; });
       // real flames on the nearest few; the rest are glow and sparks at a distance
       if (this.flamePool) this.flamePool.forEach((F, i) => { const f = near[i]?.[0]; const on = !!f && near[i][1] < 70 * 70; F.group.visible = on; if (!on) return; F.group.position.set(f.x, f.y + 0.05, f.z); F.group.scale.setScalar(f.s); F.update(this.time, camPos, 1); });
     }

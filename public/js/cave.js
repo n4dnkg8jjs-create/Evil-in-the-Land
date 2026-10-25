@@ -22,6 +22,7 @@
 // whole plan, drawn exactly on the heightfield the knights walk on. The ground that is drawn over the mountain
 // is whole (world.Hv) except at the two arches, cut out of it (the terrain shader).
 import * as THREE from 'three';
+import { WATER_U, WATER_GLSL } from './weather.js';
 import { phantomDevil, releasePhantom } from './devil.js';
 import { makeFlame } from './flame.js';
 import { makeFrozen } from './people.js';
@@ -225,6 +226,15 @@ export class Cave {
     const S = this.S, W = this.W, U = W.terrainUniforms;
     const nm = U.tRockN.value.clone(); nm.wrapS = nm.wrapT = THREE.RepeatWrapping; nm.repeat.set(3, 3); nm.needsUpdate = true;
     const water = new THREE.MeshStandardMaterial({ color: 0x0a1012, roughness: 0.04, metalness: 0.15, normalMap: nm, normalScale: new THREE.Vector2(0.15, 0.15), transparent: true, opacity: 0.88 });
+    // the pools ring when something wades through them (the same wave field as the fen; no rain down here)
+    water.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, WATER_U); sh.uniforms.uRainOn = { value: 0 };
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vW;').replace('#include <fog_vertex>', '#include <fog_vertex>\nvW = (modelMatrix * vec4(position,1.0)).xz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vW; uniform float uRainOn;' + WATER_GLSL)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          { vec3 wn = waterNormal(vec3(0.0, 0.0, 1.0), vW, uRainOn); normal = normalize(normal + (viewMatrix * vec4(wn.x, 0.0, -wn.y, 0.0)).xyz); }`);
+    };
+    water.customProgramCacheKey = () => 'cave-water-sim';
     const mud = new THREE.MeshStandardMaterial({ color: 0x140d08, roughness: 0.12, metalness: 0.05 });
     this.pools = [];
     for (const P of S.pools) {
@@ -351,12 +361,11 @@ export class Cave {
     }
     // the soldiers, below the first mouth, and the torch
     const F = S.mainAt(S.sA - 5), nx = -F.tz, nz = F.tx, wood = new THREE.MeshStandardMaterial({ color: 0x3a2a1c, roughness: 0.85 });
-    const poses = ['lie', 'sit', 'kneel'];
+    const poses = ['lie', 'sit', 'prone'], gh = (x, z) => W.heightAt(x, z);
     for (let k = 0; k < 3; k++) {
-      const sd = k - 1, x = F.x + nx * (sd * 1.5 + (sd ? 0 : 0.4)) - F.tx * (k * 0.9), z = F.z + nz * (sd * 1.5) - F.tz * (k * 0.9), y = W.heightAt(x, z);
+      const sd = k - 1, x = F.x + nx * (sd * 1.5 + (sd ? 0 : 0.4)) - F.tx * (k * 0.9), z = F.z + nz * (sd * 1.5) - F.tz * (k * 0.9);
       const fz = makeFrozen(poses[k], 11 + k * 5); if (!fz) continue;
-      fz.root.position.set(x, y, z); fz.root.rotation.y = Math.atan2(F.tx, F.tz) + Math.PI + (r() - 0.5) * 1.2; this.group.add(fz.root);
-      const hb = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1.9, 6), wood); hb.position.set(x + (r() - 0.5) * 1.2, y + 0.05, z + (r() - 0.5) * 1.2); hb.rotation.set(Math.PI / 2, r() * 3, 0.1); hb.castShadow = true; this.group.add(hb);
+      fz.settle(gh, x, z, Math.atan2(F.tx, F.tz) + Math.PI + (r() - 0.5) * 1.2); this.group.add(fz.root);
     }
     const tg = this.torchProp = new THREE.Group();
     const haft = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.62, 8), wood); haft.position.y = 0.31; tg.add(haft);
@@ -383,7 +392,7 @@ export class Cave {
     if (mHall) { const a = Math.atan2(mHall.z - Ch0.z, mHall.x - Ch0.x) - 0.55, rr = S.rAt(Ch0, a) * 0.8, x = Ch0.x + Math.cos(a) * rr, z = Ch0.z + Math.sin(a) * rr; spots.push({ pose: 'slump', x, z, yaw: Math.atan2(Ch0.x - x, Ch0.z - z) }); }
     if (mNave) { const toC = Math.atan2(Ch1.x - mNave.x, Ch1.z - mNave.z), x = mNave.x + Math.sin(toC) * 4.2 + Math.cos(toC) * 1.3, z = mNave.z + Math.cos(toC) * 4.2 - Math.sin(toC) * 1.3; spots.push({ pose: 'slump', x, z, yaw: Math.atan2(mNave.x - x, mNave.z - z) }); }
     { const F = S.mainAt(S.sB - 13); spots.push({ pose: 'lie', x: F.x, z: F.z, yaw: Math.atan2(F.tx, F.tz) + Math.PI / 2 }); }
-    this.dead = spots.map((sp, i) => { const fz = makeFrozen(sp.pose, seed); if (!fz) return null; fz.root.position.set(sp.x, W.heightAt(sp.x, sp.z), sp.z); fz.root.rotation.y = sp.yaw; fz.root.visible = i === 0; this.group.add(fz.root); return { root: fz.root, x: sp.x, z: sp.z, y: W.heightAt(sp.x, sp.z) }; }).filter(Boolean);
+    this.dead = spots.map((sp, i) => { const fz = makeFrozen(sp.pose, seed); if (!fz) return null; fz.settle((x, z) => W.heightAt(x, z), sp.x, sp.z, sp.yaw); fz.root.visible = i === 0; this.group.add(fz.root); return { root: fz.root, x: sp.x, z: sp.z, y: W.heightAt(sp.x, sp.z) }; }).filter(Boolean);
     this.deadAt = 0;
     // NON EXIBIS, in blood, come up on the Hall's wall behind you
     const c = document.createElement('canvas'); c.width = 1024; c.height = 256; const x = c.getContext('2d');

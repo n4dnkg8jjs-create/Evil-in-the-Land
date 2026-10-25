@@ -124,6 +124,21 @@ const RENDER = {
     for (let k = 0; k < 3; k++) { const t0 = 0.02 + R() * 0.12; for (const m of [1, 2.7, 4.1]) { const o = ctx.createOscillator(); o.frequency.value = (2400 + R() * 2600) * m * 0.5; const g = gainEnv(ctx, [[0, 0], [t0, 0], [t0 + 0.001, 0.05 / m], [t0 + 0.09, 0.0001, 'e']]); o.connect(g).connect(ctx.destination); o.start(); } }
     return normalize(await ctx.startRendering(), 0.75);
   },
+  // a foot through shallow water: the slosh of it (a band of noise swelling and falling) and a few bubbles
+  async splash() {
+    const dur = 0.6; const ctx = off(dur);
+    const n = src(ctx, noiseBuf(ctx, dur)); const b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.Q.value = 1.1;
+    const f0 = 700 + R() * 500; b.frequency.setValueAtTime(f0 * 0.6, 0); b.frequency.exponentialRampToValueAtTime(f0 * 1.8, 0.06); b.frequency.exponentialRampToValueAtTime(f0 * 0.5, dur);
+    const g = gainEnv(ctx, [[0, 0], [0.012, 0.9], [0.09, 0.45], [dur, 0.0001, 'e']]);
+    n.connect(b).connect(g).connect(ctx.destination); n.start();
+    const lo = src(ctx, noiseBuf(ctx, 0.3, 'brown')); const lp = filt(ctx, 'lowpass', 260); const lg = gainEnv(ctx, [[0, 0], [0.006, 0.8], [0.18, 0.0001, 'e']]);
+    lo.connect(lp).connect(lg).connect(ctx.destination); lo.start();
+    for (let k = 0; k < 4 + Math.floor(R() * 4); k++) {   // bubbles: tiny rising sine chirps
+      const t0 = 0.03 + R() * 0.35, f = 500 + R() * 1100, o = ctx.createOscillator(); o.frequency.setValueAtTime(f, t0); o.frequency.exponentialRampToValueAtTime(f * (1.6 + R() * 0.8), t0 + 0.04);
+      const og = gainEnv(ctx, [[0, 0], [t0, 0], [t0 + 0.003, 0.12 + R() * 0.12], [t0 + 0.05, 0.0001, 'e']]); o.connect(og).connect(ctx.destination); o.start(t0); o.stop(t0 + 0.07);
+    }
+    return normalize(await ctx.startRendering(), 0.7);
+  },
   // inhuman screeching: harsh formant voice with jitter and a breaking pitch
   async screech(low) {
     const dur = low ? 1.5 : 0.9; const ctx = off(dur + 0.1);
@@ -427,10 +442,10 @@ export class AudioEngine {
 
   // render the sound library in the background; until each bank is ready the live synths fill in
   async renderLibrary() {
-    const L = this.lib = { swing: [], heavySwing: [], clang: [], cut: [], blunt: [], pierce: [], squelch: [], squelchDeep: [], bone: [], step: [], screech: [], growl: [], boom: [], scream: [], screamLow: [], chatter: [], thunder: [], thunderNear: [], cluster: [], drone: [], breath: [], scrape: [], bells: {}, choir: {}, strings: {}, spic: {}, brass: {}, drums: {} };
+    const L = this.lib = { swing: [], heavySwing: [], clang: [], cut: [], blunt: [], pierce: [], squelch: [], squelchDeep: [], bone: [], step: [], splash: [], screech: [], growl: [], boom: [], scream: [], screamLow: [], chatter: [], thunder: [], thunderNear: [], cluster: [], drone: [], breath: [], scrape: [], bells: {}, choir: {}, strings: {}, spic: {}, brass: {}, drums: {} };
     const tasks = [];
     const to = (arr, fn, n) => { for (let i = 0; i < n; i++) tasks.push(async () => arr.push(await fn())); };
-    to(L.step, () => RENDER.step(), 10); to(L.swing, () => RENDER.swing(false), 6); to(L.heavySwing, () => RENDER.swing(true), 4);
+    to(L.step, () => RENDER.step(), 10); to(L.splash, () => RENDER.splash(), 6); to(L.swing, () => RENDER.swing(false), 6); to(L.heavySwing, () => RENDER.swing(true), 4);
     to(L.clang, () => RENDER.clang(), 6); to(L.cut, () => RENDER.flesh('cut'), 4); to(L.blunt, () => RENDER.flesh('blunt'), 4); to(L.pierce, () => RENDER.flesh('pierce'), 3);
     to(L.squelch, () => RENDER.squelch(false), 4); to(L.squelchDeep, () => RENDER.squelch(true), 3); to(L.bone, () => RENDER.bone(), 3);
     to(L.screech, () => RENDER.screech(false), 8); to(L.growl, () => RENDER.screech(true), 4); to(L.boom, () => RENDER.boom(), 2);

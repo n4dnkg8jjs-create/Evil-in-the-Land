@@ -20,6 +20,7 @@ export const WX = {
 export const WATER_U = {
   uSim: { value: null }, uSimWin: { value: new THREE.Vector4(0, 0, 64, 0) },   // centre x, z, size, on (w)
   uSimTexel: { value: 1 / 256 },
+  uWRain: WX.uRain, uWWTime: WX.uWTime,
 };
 
 const R = Math.random;
@@ -107,7 +108,8 @@ export function splashes(max) {
         float rate = 2.2 + hh(cell * 0.37) * 1.5, cyc = uTime * rate + hh(cell + 3.1) * 7.0, n = floor(cyc); float t = fract(cyc); vT = t;
         if (hh(cell * 1.7 + n) > uAmt * 0.95 + 0.05) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
         vec2 xz = (cell + vec2(hh(cell + n * 0.71), hh(cell.yx + n * 1.37))) * C;
-        float y = max(hAt(xz), uWaterY + 0.02);
+        float gy = hAt(xz); if (uWaterY > gy) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // on water a drop makes a ring, not a crown
+        float y = gy;
         float s = 0.05 + t * 0.12;
         vec3 toCam = normalize(vec3(cameraPosition.x - xz.x, 0.0, cameraPosition.z - xz.y)); vec3 side = vec3(toCam.z, 0.0, -toCam.x);
         vec3 p = vec3(xz.x, y, xz.y) + side * position.x * s * 1.6 + vec3(0.0, position.y * s * (1.0 - t * 0.4), 0.0);
@@ -129,30 +131,35 @@ export function splashes(max) {
   return { mesh, U };
 }
 
-// ---------------------------------------------------------------- the fen's wave field
-class WaterSim {
-  constructor(renderer, level) {
-    this.renderer = renderer; this.level = level; this.N = 256; this.size = 64; this.ok = true;
+// ---------------------------------------------------------------- water: a wave field round the player
+// A small height field (24 m across, ~9 cm a texel; 19 cm on low quality) that follows the player in whole
+// texels. It is stepped at a fixed 60 Hz with a slow, well-damped wave equation, so a ring from a footstep runs
+// out at about a metre a second and has gone in a second or so; a body moving faster than that pulls a V behind it.
+// Everything that wades presses into it; the water's shaders read its slope for their normals.
+const SIM_HZ = 60;
+export class WaterSim {
+  constructor(renderer, low) {
+    this.renderer = renderer; this.N = low ? 128 : 256; this.size = 24; this.ok = true; this.acc = 0;
+    const texel = this.size / this.N, speed = 1.1;                     // ring speed, m/s
+    const c = Math.min(0.6, speed / (texel * SIM_HZ));                 // texels per step
     const opts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false };
     this.rt = [new THREE.WebGLRenderTarget(this.N, this.N, opts), new THREE.WebGLRenderTarget(this.N, this.N, opts)]; this.i = 0;
-    this.drops = Array.from({ length: 16 }, () => new THREE.Vector4(0, 0, 0, 0));
-    this.U = { uPrev: { value: null }, uShift: { value: new THREE.Vector2() }, uTexel: { value: 1 / this.N }, uDrops: { value: this.drops }, uRain: { value: 0 }, uTime: { value: 0 } };
+    this.drops = Array.from({ length: 32 }, () => new THREE.Vector4(0, 0, 0, 0));
+    this.U = { uPrev: { value: null }, uShift: { value: new THREE.Vector2() }, uTexel: { value: 1 / this.N }, uDrops: { value: this.drops }, uC2: { value: c * c }, uDamp: { value: 0.98 } };
     this.mat = new THREE.ShaderMaterial({
       uniforms: this.U,
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: `
-        uniform sampler2D uPrev; uniform vec2 uShift; uniform float uTexel, uRain, uTime; uniform vec4 uDrops[16]; varying vec2 vUv;
-        float hh(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-        float H(vec2 uv){ return (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) ? 0.0 : texture2D(uPrev, uv).r; }
+        uniform sampler2D uPrev; uniform vec2 uShift; uniform float uTexel, uC2, uDamp; uniform vec4 uDrops[32]; varying vec2 vUv;
+        vec2 S(vec2 uv){ return (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) ? vec2(0.0) : texture2D(uPrev, uv).rg; }
         void main(){
-          vec2 uv = vUv + uShift;
-          float c = H(uv), prev = (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) ? 0.0 : texture2D(uPrev, uv).g;
-          float n = H(uv + vec2(uTexel, 0.0)) + H(uv - vec2(uTexel, 0.0)) + H(uv + vec2(0.0, uTexel)) + H(uv - vec2(0.0, uTexel));
-          float h = (n * 0.5 - prev) * 0.986;
-          for (int i = 0; i < 16; i++) { vec4 d = uDrops[i]; if (d.w == 0.0) continue; float r = length(vUv - d.xy) / max(d.z, 1e-4); h += d.w * exp(-r * r); }
-          if (uRain > 0.0 && hh(floor(vUv / uTexel) + fract(uTime * 7.31) * 913.0) > 1.0 - uRain * 0.0012) h -= 0.25;
-          float edge = smoothstep(0.0, 0.05, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y)));
-          gl_FragColor = vec4(h * edge, c, 0.0, 1.0);
+          vec2 uv = vUv + uShift; vec2 cp = S(uv); float c = cp.x, prev = cp.y;
+          float n = S(uv + vec2(uTexel, 0.0)).x + S(uv - vec2(uTexel, 0.0)).x + S(uv + vec2(0.0, uTexel)).x + S(uv - vec2(0.0, uTexel)).x;
+          float h = (2.0 * c - prev + uC2 * (n - 4.0 * c)) * uDamp;
+          h = mix(h, n * 0.25, 0.02);                                      // a touch of viscosity: no grid shimmer
+          for (int i = 0; i < 32; i++) { vec4 d = uDrops[i]; if (d.w == 0.0) continue; float r = length(vUv - d.xy) / d.z; h -= d.w * exp(-r * r); }
+          float edge = smoothstep(0.0, 0.08, min(min(vUv.x, vUv.y), min(1.0 - vUv.x, 1.0 - vUv.y)));
+          gl_FragColor = vec4(clamp(h * edge, -1.0, 1.0), c, 0.0, 1.0);
         }`,
       depthTest: false, depthWrite: false,
     });
@@ -161,30 +168,75 @@ class WaterSim {
     this.cx = 0; this.cz = 0; this.nd = 0;
     WATER_U.uSimTexel.value = 1 / this.N;
   }
+  // press the water down at (x, z): radius in metres, strength ~0.02 (a wading leg, each step) .. 0.3 (a fall)
   drop(x, z, radius, strength) {
-    if (this.nd >= 16) return;
+    if (this.nd >= 32) return;
     const u = (x - this.cx) / this.size + 0.5, v = (z - this.cz) / this.size + 0.5;
-    if (u < 0 || v < 0 || u > 1 || v > 1) return;
-    this.drops[this.nd++].set(u, v, radius / this.size, strength);
+    if (u < 0.02 || v < 0.02 || u > 0.98 || v > 0.98) return;
+    this.drops[this.nd++].set(u, v, Math.max(radius, 1.5 * this.size / this.N) / this.size, strength);
   }
-  step(dt, center, rain, time) {
-    // follow the player, a whole texel at a time (the field is shifted under the window as it moves)
+  step(dt, center) {
     const t = this.size / this.N;
     const nx = Math.round(center.x / t) * t, nz = Math.round(center.z / t) * t;
-    const sx = (nx - this.cx) / this.size, sz = (nz - this.cz) / this.size; this.cx = nx; this.cz = nz;
+    let sx = (nx - this.cx) / this.size, sz = (nz - this.cz) / this.size; this.cx = nx; this.cz = nz;
+    if (Math.abs(sx) > 0.5 || Math.abs(sz) > 0.5) sx = sz = 0;            // teleported: the old field is meaningless anyway
+    this.acc = Math.min(this.acc + dt, 4 / SIM_HZ);
+    let steps = Math.floor(this.acc * SIM_HZ); this.acc -= steps / SIM_HZ;
+    if (!steps && (sx || sz)) steps = 1;                                   // keep the field under the window when it moves
     const r = this.renderer, prevT = r.getRenderTarget();
-    for (let k = 0; k < 2; k++) {
+    for (let k = 0; k < steps; k++) {
       this.U.uPrev.value = this.rt[this.i].texture; this.U.uShift.value.set(k ? 0 : sx, k ? 0 : sz);
-      this.U.uRain.value = rain; this.U.uTime.value = time + k * 0.013;
       if (k === 1) for (const d of this.drops) d.w = 0;
       r.setRenderTarget(this.rt[1 - this.i]); r.render(this.scene, this.cam); this.i = 1 - this.i;
     }
     r.setRenderTarget(prevT);
-    for (const d of this.drops) d.w = 0; this.nd = 0;
+    if (steps) { for (const d of this.drops) d.w = 0; this.nd = 0; }
     WATER_U.uSim.value = this.rt[this.i].texture; WATER_U.uSimWin.value.set(this.cx, this.cz, this.size, 1);
   }
   dispose() { for (const t of this.rt) t.dispose(); this.mat.dispose(); WATER_U.uSimWin.value.w = 0; WATER_U.uSim.value = null; }
 }
+
+// What every water surface's shader shares (the fen, the cave's pools): declarations, rain rings, and the normal.
+// Use: put WATER_GLSL after #include <common>; then `nn = waterNormal(nn, vW, uRainOn);` with nn a tangent-space
+// normal (z up) and vW the world xz. Needs WATER_U in the uniforms and a float uRainOn (0 under a roof).
+export const WATER_GLSL = `
+  uniform sampler2D uSim; uniform vec4 uSimWin; uniform float uSimTexel, uWRain, uWWTime;
+  float wrh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  // rain rings: each cell (p in cells) gets a drop now and then; a few small rings run out from it and die fast
+  vec2 wRings(vec2 p, float t, float amt){
+    vec2 g = vec2(0.0); vec2 c0 = floor(p - 0.5);
+    for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+      vec2 c = c0 + vec2(float(i), float(j)); float r0 = wrh(c);
+      float ph = t * (1.1 + r0 * 0.9) + r0 * 7.0, n = floor(ph), f = fract(ph);
+      if (wrh(c + n * 0.37) > amt) continue;
+      vec2 ctr = c + 0.15 + 0.7 * vec2(wrh(c + n * 1.7), wrh(c + n * 3.1 + 5.0));
+      vec2 d = p - ctr; float L = length(d) + 1e-4, R = sqrt(f) * 0.48;
+      float q = (L - R) * 9.0; float w = sin((L - R) * 30.0) * exp(-q * q) * (1.0 - f) * (1.0 - f);
+      g += d / L * w;
+    }
+    return g;
+  }
+  vec3 waterNormal(vec3 nn, vec2 w, float rainOn){
+    if (uSimWin.w > 0.5) {
+      vec2 suv = (w - uSimWin.xy) / uSimWin.z + 0.5;
+      if (suv.x > 0.0 && suv.y > 0.0 && suv.x < 1.0 && suv.y < 1.0) {
+        float e = uSimTexel;
+        float hx = texture2D(uSim, suv + vec2(e, 0.0)).r - texture2D(uSim, suv - vec2(e, 0.0)).r;
+        float hz = texture2D(uSim, suv + vec2(0.0, e)).r - texture2D(uSim, suv - vec2(0.0, e)).r;
+        float fade = smoothstep(0.0, 0.12, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
+        vec2 sg = vec2(-hx, hz) * 7.0 * fade;    // tangent y is world -z
+        nn.xy += sg / (1.0 + length(sg) * 1.6);  // soft limit: the water never tips past ~30 degrees
+      }
+    }
+    float ra = uWRain * rainOn;
+    if (ra > 0.01) {                                                     // two sizes of cell, 40 and 28 cm (rings out to ~18 cm)
+      vec2 p1 = w * 2.5, p2 = w * 3.6 + 3.3;
+      float far = 1.0 - smoothstep(0.08, 0.3, length(fwidth(p1)));      // past where a ring is a pixel, let them go (no glitter)
+      vec2 g = wRings(p1, uWWTime, ra * 0.95) + wRings(p2, uWWTime * 1.13 + 2.0, ra * 0.8) * 0.7;
+      nn.xy += vec2(-g.x, g.y) * 0.16 * far;
+    }
+    return normalize(nn);
+  }`;
 
 // ---------------------------------------------------------------- the wet look for everything else
 const WET_MATS = new WeakSet();
@@ -225,8 +277,10 @@ export class Weather {
     // everything in the land goes wet with it (the terrain and water have their own)
     W.group.traverse((o) => { if (o.isMesh && o !== W.terrain && o !== W.water && o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(wetten); });
     // the fen: a wave field under the water
-    if (W.water && ch.terrain.water !== undefined) { try { this.sim = new WaterSim(game.engine.renderer, W.waterLevel); } catch (e) { this.sim = null; } }
-    this.last = new Map();
+    this.pools = (game.cave?.pools || []).filter((P) => !P.mud);
+    this.hasWater = !!(W.water && ch.terrain.water !== undefined) || this.pools.length > 0;
+    if (this.hasWater) { try { this.sim = new WaterSim(game.engine.renderer, game.engine.q?.post === false); } catch (e) { this.sim = null; } }
+    this.last = new Map(); this.walked = new Map();
   }
   // choose the next weather: how long it holds, and what it is
   pick(first) {
@@ -274,20 +328,52 @@ export class Weather {
     this.sound(isSnow ? 0 : rain, dt);
     if (!isSnow && this.cur.rain > 0.8 && R() < dt / 40) g.audio.thunder?.(0.5 + R() * 0.4, 1 + R() * 4);
     // the fen
-    if (this.sim) this.water(dt, time);
+    if (this.hasWater) this.water(dt, time);
+  }
+  // how deep the water is over the ground at (x, z); below zero when dry
+  waterDepth(x, z) {
+    const W = this.W; let d = -1;
+    if (W.water && W.waterLevel > -100) d = W.waterLevel - W.heightAt(x, z);
+    for (const P of this.pools || []) if ((x - P.x) ** 2 + (z - P.z) ** 2 < P.r * P.r) d = Math.max(d, P.y - W.heightAt(x, z));
+    return d;
+  }
+  surfaceY(x, z) { const d = this.waterDepth(x, z); return d > 0 ? this.W.heightAt(x, z) + d : null; }
+  // a foot coming down in water: a ring, a few drops thrown up, the slosh of it
+  footSplash(pos, depth, run = 0, gain = 1) {
+    const y = this.W.heightAt(pos.x, pos.z) + depth;
+    if (this.sim) this.sim.drop(pos.x + (R() - 0.5) * 0.25, pos.z + (R() - 0.5) * 0.25, 0.14, 0.05 + run * 0.05);
+    const fx = this.g.fx, n = Math.round(2 + run * 6);
+    for (let i = 0; i < n; i++) { const a = R() * 6.28, s = 0.4 + R() * (0.8 + run * 1.6);
+      fx.smoke.emit({ x: pos.x, y: y + 0.03, z: pos.z, vx: Math.cos(a) * s, vy: 1.2 + R() * (1.2 + run * 2), vz: Math.sin(a) * s, color: [0.42, 0.46, 0.48], a: 0.7, size: 0.025 + R() * 0.03, life: 0.5 + R() * 0.3, drag: 0.6, grav: -10, cell: 2, spin: 4, fadeIn: 0.01 }); }
+    const A = this.g.audio; if (!A.play?.('splash', pos, (0.35 + run * 0.3) * gain * Math.min(1.4, 0.6 + depth * 1.5), 0.08, 0.9 + R() * 0.2)) A.footstep?.(pos, true, 0.6);
   }
   water(dt, time) {
-    const g = this.g, W = this.W, L = W.waterLevel, me = g.me;
+    const g = this.g;
     const bodies = [...g.knightList, ...g.horde.list.filter((d) => d.alive)];
+    if (g.boss?.pos) bodies.push(g.boss);
     for (const b of bodies) {
-      const depth = L - W.heightAt(b.pos.x, b.pos.z); if (depth < 0.05) { this.last.set(b, b.pos.clone()); continue; }
-      const lp = this.last.get(b); const v = lp ? Math.hypot(b.pos.x - lp.x, b.pos.z - lp.z) / Math.max(dt, 1e-3) : 0;
+      const depth = this.waterDepth(b.pos.x, b.pos.z), lp = this.last.get(b);
+      if (depth < 0.04) { if (lp) lp.copy(b.pos); else this.last.set(b, b.pos.clone()); continue; }
+      const dx = lp ? b.pos.x - lp.x : 0, dz = lp ? b.pos.z - lp.z : 0, step = Math.hypot(dx, dz), v = step / Math.max(dt, 1e-3);
+      const isKnight = g.knightList.includes(b), big = b === g.boss ? 3 : 1;
       // the water drags at your legs
-      if (lp && depth > 0.2 && g.knightList.includes(b) && !b.downed) { const k = Math.min(0.4, depth * 0.55); b.pos.x -= (b.pos.x - lp.x) * k; b.pos.z -= (b.pos.z - lp.z) * k; }
-      if (v > 0.3) { this.sim.drop(b.pos.x, b.pos.z, 0.45, Math.min(0.6, v * 0.08)); if (R() < dt * v * 0.8) g.fx.dust?.(b.pos.clone().setY(L + 0.05), 2, [0.3, 0.33, 0.32]); }
-      this.last.set(b, b.pos.clone());
+      if (lp && depth > 0.2 && isKnight && !b.downed) { const k = Math.min(0.4, depth * 0.55); b.pos.x -= dx * k; b.pos.z -= dz * k; }
+      if (this.sim && v > 0.15 && v < 30) {
+        // the legs push the water aside as they go: a small, steady press that the wave field turns into a V
+        const r = (0.12 + Math.min(depth, 0.6) * 0.15) * big;
+        this.sim.drop(b.pos.x, b.pos.z, r, Math.min(0.016, v * 0.004) * big);
+        // and a foot comes down every stride (knights get theirs from their own footstep events)
+        if (!isKnight) { const w = (this.walked.get(b) || 0) + step; if (w > 0.75 * big) { this.walked.set(b, 0); this.sim.drop(b.pos.x, b.pos.z, 0.14 * big, 0.06 * big); } else this.walked.set(b, w); }
+        // spray from the shins when running through it
+        if (v > 2.6 && R() < dt * v * 3) {
+          const y = this.W.heightAt(b.pos.x, b.pos.z) + depth, f = 1 / (v || 1);
+          for (let i = 0; i < 3; i++) g.fx.smoke.emit({ x: b.pos.x + dx * f * 0.3, y: y + 0.05, z: b.pos.z + dz * f * 0.3, vx: dx * f * 1.5 + (R() - 0.5) * 1.6, vy: 1 + R() * 1.8, vz: dz * f * 1.5 + (R() - 0.5) * 1.6, color: [0.42, 0.46, 0.48], a: 0.6, size: 0.02 + R() * 0.03, life: 0.45 + R() * 0.3, drag: 0.5, grav: -10, cell: 2, spin: 4, fadeIn: 0.01 });
+        }
+      }
+      if (lp) lp.copy(b.pos); else this.last.set(b, b.pos.clone());
     }
-    this.sim.step(dt, me.pos, WX.uRain.value, time);
+    for (const b of this.last.keys()) if (!b.alive && !g.knightList.includes(b) && b !== g.boss) { this.last.delete(b); this.walked.delete(b); }
+    if (this.sim) this.sim.step(dt, g.cam?.look && g.cinema?.active ? g.cam.look : g.me.pos);
   }
   sound(amt, dt) {
     const A = this.g.audio, ctx = A.ctx; if (!ctx || !A.amb) return;

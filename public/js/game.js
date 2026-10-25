@@ -850,7 +850,9 @@ export class Game {
     const ev = k.events; if (!ev.length) return;
     const p = k.chestPos;
     for (const e of ev) switch (e.type) {
-      case 'step': this.audio.footstep(k.pos, true, 0.8 + e.run * 0.6); if (e.run > 0.5 && R() < 0.5) this.fx.dust(k.pos, 2); break;
+      case 'step': { const wd = this.weather?.hasWater ? this.weather.waterDepth(k.pos.x, k.pos.z) : -1;
+        if (wd > 0.04) { this.weather.footSplash(k.pos, wd, e.run); break; }
+        this.audio.footstep(k.pos, true, 0.8 + e.run * 0.6); if (e.run > 0.5 && R() < 0.5) this.fx.dust(k.pos, 2); break; }
       case 'sfx':
         if (e.k === 'swing') this.audio.swing(false, p, 1 + R() * 0.15);
         else if (e.k === 'heavySwing') this.audio.swing(true, p, 0.8 + R() * 0.1);

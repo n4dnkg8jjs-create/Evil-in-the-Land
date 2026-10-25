@@ -829,60 +829,212 @@ export function makePerson(kind, quality) {
 
 
 // ---------------------------------------------------------------- the frozen dead
-// One of the Emperor's men, frozen where he stopped: a whole body (MakeHuman, like the living), grey-blue and
-// rimed with ice, in a stiff frozen doublet and cloak and a morion helmet, posed as he died: sitting hunched with
-// his arms round his knees, curled on his side, kneeling with his head bowed, or slumped back against the rock.
-function frostMat(color, rough = 0.85, metal = 0) {
+// The Emperor's men who went up before you, dead where they stopped: whole MakeHuman bodies, grey-blue and rimed,
+// dressed as Landsknechts and pikemen of the 1520s: a quilted gambeson or a doublet with slashed, puffed sleeves,
+// puffed and slashed upper hose, a breastplate on some; a kettle hat or a cabasset, or bareheaded with the helmet
+// fallen beside him. Posed as men really lie dead (curled on the side, face down with an arm caught under him,
+// hunched sitting, slumped back against the rock), dirt and old blood in the cloth, and settled onto the ground
+// under them (tilted to the slope, the lowest flesh resting on it) with what they dropped lying round them.
+function frostMat(color, rough = 0.85, metal = 0, grime = 1) {
   const m = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
+    sh.uniforms.uGrime = { value: grime };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vFN; varying vec3 vFP;').replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvFN = normalize(mat3(modelMatrix) * objectNormal);').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vFN; varying vec3 vFP;\nfloat fh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }')
-      .replace('#include <map_fragment>', '#include <map_fragment>\nfloat rime = smoothstep(0.2, 0.75, normalize(vFN).y + (fh(floor(vFP * 18.0)) - 0.5) * 0.35);\ndiffuseColor.rgb = mix(diffuseColor.rgb * 0.8, vec3(0.86, 0.9, 0.95), rime * 0.85) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.5;')
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vFN; varying vec3 vFP; uniform float uGrime;
+float fh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }
+float vn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(fh(i), fh(i + vec3(1,0,0)), f.x), mix(fh(i + vec3(0,1,0)), fh(i + vec3(1,1,0)), f.x), f.y), mix(mix(fh(i + vec3(0,0,1)), fh(i + vec3(1,0,1)), f.x), mix(fh(i + vec3(0,1,1)), fh(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+float n1 = vn(vFP * 7.0) * 0.6 + vn(vFP * 23.0) * 0.4;
+// dirt worked into the cloth, darker low down, and old blood dried near-black in blotches
+diffuseColor.rgb *= mix(1.0, 0.55 + n1 * 0.35, uGrime);
+float bl = smoothstep(0.66, 0.74, vn(vFP * 3.1 + 7.3)) * uGrime;
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.13, 0.025, 0.02), bl * 0.85);
+float rime = smoothstep(0.25, 0.8, normalize(vFN).y + (fh(floor(vFP * 18.0)) - 0.5) * 0.35 + (n1 - 0.5) * 0.4);
+diffuseColor.rgb = mix(diffuseColor.rgb * 0.85, vec3(0.86, 0.9, 0.95), rime * 0.8) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.5;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, rime);');
   };
-  m.customProgramCacheKey = () => 'frost' + metal;
+  m.customProgramCacheKey = () => 'frost2' + metal + grime;
   return m;
 }
+// a garment round a bone, cut into panels with gaps (the slashes); the lining puffs out between them
+function slashed(J, bone, profile, outer, inner, panels, shape = () => {}) {
+  const g = new THREE.Group(), seg = Math.max(2, Math.round(28 / panels));
+  for (let k = 0; k < panels; k++) {
+    const ph = (k / panels) * Math.PI * 2, geo = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r * 1.04, y)), seg, ph, (Math.PI * 2 / panels) * 0.62);
+    const p = geo.attributes.position, v = new THREE.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); shape(v); p.setXYZ(i, v.x, v.y, v.z); } geo.computeVertexNormals();
+    g.add(new THREE.Mesh(geo, outer));
+  }
+  // the lining: puffed fuller between the slashes
+  g.add(new THREE.Mesh(lathe(profile.map(([r, y], i) => [r * (i && i < profile.length - 1 ? 0.99 : 0.9), y]), 24, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.max(0, Math.sin(a * panels)) * 0.05); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; shape(v); }), inner));
+  J[bone].add(g); return g;
+}
+const HOSE = [0x3e3a32, 0x4a2a22, 0x2e3236, 0x564634, 0x3a3328];
+const DOUBLET = [[0x6a2a20, 0xb8a888], [0x8a6a32, 0x5a1a14], [0x34404a, 0x9a8a70], [0x5a4a38, 0x6a2a20], [0x7a7462, 0x3a2a20]];
+function kettleHat(iron) {   // the Eisenhut: a round skull with a broad brim sloping down all round
+  const g = lathe([[0, 0.135], [0.06, 0.13], [0.105, 0.095], [0.122, 0.04], [0.125, 0.0], [0.135, -0.008], [0.2, -0.04], [0.215, -0.05], [0.212, -0.056]], 24, () => {});
+  return new THREE.Mesh(g, iron);
+}
+function cabasset(iron) {   // tall almond-shaped skull with a little stalk on top and a narrow flat brim
+  const g = lathe([[0, 0.24], [0.012, 0.235], [0.02, 0.22], [0.06, 0.19], [0.1, 0.12], [0.118, 0.05], [0.12, 0.0], [0.13, -0.005], [0.165, -0.012], [0.168, -0.02]], 22, (v) => { v.z *= 1.18; });
+  return new THREE.Mesh(g, iron);
+}
 export function makeFrozen(pose = 'sit', seed = 0) {
+  if (pose === 'kneel') pose = 'prone';   // no one dies kneeling neatly
   const kind = seed % 2 ? 'sutler' : 'priest', P = PEOPLE?.[kind];
   if (!P) return null;
+  let rs = (seed * 9301 + 49297) % 233280; const rnd = () => { rs = (rs * 9301 + 49297) % 233280; return rs / 233280; };
+  const pick = (a) => a[Math.floor(rnd() * a.length) % a.length], jit = (d) => (rnd() - 0.5) * 2 * d;
   const rig = new Rig(1), J = rig.j;
-  const body = personMesh(rig, P, { skin: 0x9aa0a6, hair: 0x2a2420, cloth: 0x4a1a14, eyes: P.eyes, frozen: 1 });
-  const doublet = frostMat(seed % 3 === 0 ? 0x5a1a14 : seed % 3 === 1 ? 0x2a2a30 : 0x4a3a20), iron = frostMat(0x4a4642, 0.55, 0.7);
-  // the doublet, puffed sleeves, a cloak frozen stiff about the shoulders
-  J.chest.add(new THREE.Mesh(lathe([[0.08, 0.2], [0.18, 0.165], [0.22, 0.07], [0.205, -0.12], [0.19, -0.3], [0.2, -0.44]], 28, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.sin(a * 10) * 0.02); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.012; }), doublet));
-  for (const k of ['R', 'L']) { J['uArm' + k].add(new THREE.Mesh(lathe([[0.075, 0.03], [0.095, -0.12], [0.08, -0.3]], 14, () => {}), doublet)); J['fArm' + k].add(new THREE.Mesh(lathe([[0.07, 0.02], [0.065, -0.2]], 12, () => {}), doublet)); }
-  for (const k of ['R', 'L']) J['thigh' + k].add(new THREE.Mesh(lathe([[0.1, 0.05], [0.11, -0.2], [0.085, -0.42]], 14, () => {}), doublet));
-  const cloak = new THREE.Mesh(lathe([[0.12, 0.2], [0.24, 0.12], [0.32, -0.25], [0.36, -0.7]], 24, (v, a) => { if (Math.cos(a) > 0.55) { v.x *= 0.2; v.z *= 0.2; } const r = Math.hypot(v.x, v.z) * (1 + Math.sin(a * 7 + v.y * 4) * 0.05); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.85 - 0.03; }), frostMat(0x2a2622, 0.9));
-  J.chest.add(cloak);
-  // the morion: crest, brim turned up fore and aft
-  const mor = new THREE.Mesh(lathe([[0, 0.14], [0.06, 0.135], [0.1, 0.1], [0.115, 0.04], [0.12, 0.0], [0.2, -0.01], [0.21, 0.01]], 22, (v, a) => { if (Math.hypot(v.x, v.z) > 0.13) v.y += Math.cos(a) ** 2 * 0.06; v.z *= 1.3; }), iron);
-  const crest = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.012, 20, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).rotateY(Math.PI / 2).translate(0, 0.11, 0), iron); mor.add(crest);
-  seatOnCrown(mor, body, rig, 0.06); J.head.add(mor);
-  const e = (j, x, y, z) => J[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
-  const lr = (fn) => { fn('R', -1); fn('L', 1); };
-  if (pose === 'sit') {   // hunched on the ground, knees up, arms round them, head down on them
-    e('spine', 35, 0, 0); e('chest', 25, 0, 0); e('neck', 30, 0, 0); e('head', 25, 0, 0);
-    lr((k, s) => { e('thigh' + k, -115, 0, s * 8); e('shin' + k, 135, 0, 0); e('foot' + k, -20, 0, 0); e('uArm' + k, -60, 0, s * 18); e('fArm' + k, -85, -s * 50, 0); e('hand' + k, 0, 0, 0); });
-    J.hips.position.y = rig.basePos.y - 0.72;
-  } else if (pose === 'kneel') {   // on his knees, head bowed, hands together
-    e('spine', 10, 0, 0); e('chest', 12, 0, 0); e('neck', 30, 0, 0); e('head', 20, 0, 0);
-    lr((k, s) => { e('thigh' + k, -8, 0, s * 6); e('shin' + k, 110, 0, 0); e('foot' + k, 40, 0, 0); e('uArm' + k, -25, 0, s * 6); e('fArm' + k, -95, -s * 35, 0); });
-    J.hips.position.y = rig.basePos.y - 0.42;
-  } else if (pose === 'slump') {   // sat back against the rock, legs out, head fallen sideways
-    e('spine', -12, 0, 0); e('chest', -6, 0, 0); e('neck', 10, 0, 22); e('head', 15, 20, 18);
-    lr((k, s) => { e('thigh' + k, -88, s * 8, s * 10); e('shin' + k, 12, 0, 0); e('foot' + k, -10, 0, 0); e('uArm' + k, 8, 0, s * 12); e('fArm' + k, -25, 0, 0); });
-    J.hips.position.y = rig.basePos.y - 0.86;
-  } else {   // curled on his side
-    rig.root.rotation.z = Math.PI / 2 * 0.98;
-    e('spine', 30, 0, 0); e('chest', 25, 0, 0); e('neck', 25, 0, 0); e('head', 30, 0, 0);
-    lr((k, s) => { e('thigh' + k, -80, 0, s * 4); e('shin' + k, 100, 0, 0); e('uArm' + k, -70, 0, s * 10); e('fArm' + k, -100, -s * 40, 0); });
+  const hose = pick(HOSE);
+  const body = personMesh(rig, P, { skin: 0x9aa0a6, hair: [0x2a2420, 0x4a3420, 0x1c1814, 0x6a5038][seed % 4], cloth: hose, eyes: P.eyes, frozen: 1, dead: 1 });
+  const iron = frostMat(0x4a4540, 0.6, 0.65, 0.6), parts = [];
+  const gambeson = seed % 3 === 1, plate = seed % 3 === 0 || seed % 5 === 0;
+  const [cO, cI] = pick(DOUBLET);
+  if (gambeson) {   // quilted linen, stitched in vertical channels, stained
+    const q = frostMat(pick([0x8a7f66, 0x6e6450, 0x7a6a50]), 0.95);
+    J.chest.add(new THREE.Mesh(lathe([[0.09, 0.21], [0.19, 0.17], [0.225, 0.07], [0.215, -0.12], [0.2, -0.3], [0.215, -0.5]], 36, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.abs(Math.sin(a * 12)) * 0.03); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.012; }), q));
+    for (const k of ['R', 'L']) { J['uArm' + k].add(new THREE.Mesh(lathe([[0.08, 0.03], [0.088, -0.12], [0.078, -0.3]], 18, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.abs(Math.sin(v.y * 40)) * 0.04); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), q)); J['fArm' + k].add(new THREE.Mesh(lathe([[0.068, 0.02], [0.062, -0.2]], 14, () => {}), q)); }
+  } else {          // a doublet; the sleeves puffed and slashed to show the lining
+    const o = frostMat(cO, 0.9), i = frostMat(cI, 0.9);
+    J.chest.add(new THREE.Mesh(lathe([[0.08, 0.2], [0.18, 0.165], [0.215, 0.07], [0.2, -0.12], [0.185, -0.3], [0.2, -0.42]], 28, (v, a) => { const r = Math.hypot(v.x, v.z); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.012; }), o));
+    for (const k of ['R', 'L']) { slashed(J, 'uArm' + k, [[0.07, 0.03], [0.1, -0.06], [0.105, -0.16], [0.085, -0.3]], o, i, 7); slashed(J, 'fArm' + k, [[0.07, 0.02], [0.075, -0.08], [0.062, -0.2]], o, i, 6); }
   }
-  // stand him on the ground: the lowest point of the posed body sits at the root's height
-  const wrap = new THREE.Group(); wrap.add(rig.root); wrap.updateMatrixWorld(true);
-  const v = new THREE.Vector3(); let low = 1e9; const n = body.geometry.attributes.position.count;
-  for (let i = 0; i < n; i += 9) { body.getVertexPosition(i, v); v.applyMatrix4(body.matrixWorld); if (v.y < low) low = v.y; }
-  rig.root.position.y -= low - 0.02;
+  // the upper hose: puffed and slashed to above the knee (the Landsknecht's pluderhose)
+  { const o = frostMat(hose, 0.92), i = frostMat(pick([0x8a2a20, 0xa89878, 0x5a5a62]), 0.9);
+    for (const k of ['R', 'L']) slashed(J, 'thigh' + k, [[0.1, 0.06], [0.125, -0.08], [0.122, -0.26], [0.09, -0.4]], o, i, 6);
+    // and the close nether-hose below, wrinkled at the ankle
+    const lo = frostMat(hose, 0.92); for (const k of ['R', 'L']) J['shin' + k].add(new THREE.Mesh(lathe([[0.066, 0.04], [0.064, -0.06], [0.058, -0.2], [0.042, -0.36], [0.04, -0.42]], 14, () => {}), lo)); }
+  // shoes: plain leather, broad at the toe
+  { const lea = frostMat(0x2a1e16, 0.75, 0, 0.6);
+    for (const k of ['R', 'L']) { const g = new THREE.SphereGeometry(0.06, 14, 10).scale(0.95, 0.75, 2.0).translate(0, -0.055, 0.075); J['foot' + k].add(new THREE.Mesh(g, lea)); } }
+  // a belt
+  J.hips.add(new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.016, 6, 24).rotateX(Math.PI / 2).scale(1, 1, 0.82).translate(0, 0.06, 0.012), frostMat(0x2a2018, 0.7)));
+  // a breastplate over the doublet on some: a rounded peascod front, strapped at the back
+  if (plate) {
+    const bg = new THREE.LatheGeometry([[0.1, 0.16], [0.17, 0.13], [0.215, 0.04], [0.22, -0.1], [0.21, -0.24], [0.225, -0.3]].map(([r, y]) => new THREE.Vector2(r, y)), 26, -Math.PI * 0.55, Math.PI * 1.1);
+    { const p = bg.attributes.position, v = new THREE.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); const r = Math.hypot(v.x, v.z), a = Math.atan2(v.x, v.z), c = Math.cos(a); v.x = Math.sin(a) * r * 1.03; v.z = c * r * 0.84 + 0.03 + Math.max(0, c) * Math.max(0, -v.y - 0.08) * 0.12; p.setXYZ(i, v.x, v.y, v.z); } bg.computeVertexNormals(); }
+    J.chest.add(new THREE.Mesh(bg, iron));
+  }
+  // head: kettle hat, cabasset, or bare
+  const lying = pose === 'prone' || pose === 'lie';
+  const hatKind = seed % 4 === 2 ? 0 : seed % 4 === 1 || seed % 4 === 3 ? 2 : 1;
+  const hat = lying || !hatKind ? null : hatKind === 2 ? cabasset(iron) : kettleHat(iron);
+  if (hat) { seatOnCrown(hat, body, rig, 0.075); hat.rotation.x += jit(0.12); hat.rotation.z += jit(0.1); J.head.add(hat); }
+  const e = (j, x, y, z) => J[j].rotation.set((x + jit(4)) * D2R, (y + jit(4)) * D2R, (z + jit(4)) * D2R, 'YXZ');
+  const lr = (fn) => { fn('R', -1); fn('L', 1); };
+  if (pose === 'sit') {   // hunched on the ground, knees drawn up, arms round them, head down on them
+    e('spine', 32, 0, jit(8)); e('chest', 22, 0, 0); e('neck', 28, 0, jit(10)); e('head', 22, jit(15), jit(10));
+    lr((k, s) => { e('thigh' + k, -112, 0, s * 10); e('shin' + k, 130, 0, 0); e('foot' + k, -15, 0, s * 8); e('uArm' + k, -58, 0, s * 20); e('fArm' + k, -82, -s * 48, 0); e('hand' + k, 15, 0, s * 10); });
+  } else if (pose === 'slump') {   // sat against the rock where he stopped, legs out unevenly, head fallen onto his shoulder
+    const lean = jit(1) > 0 ? 1 : -1;
+    e('spine', -4, 0, lean * 4); e('chest', 6, 0, lean * 3); e('neck', 22, 0, lean * 26); e('head', 18, lean * 10, lean * 22);
+    lr((k, s) => { const bent = (s === lean); e('thigh' + k, bent ? -110 : -84, s * 10, s * 14); e('shin' + k, bent ? 70 : 10, 0, 0); e('foot' + k, -20, 0, s * 20); e('uArm' + k, 6, 0, s * 10); e('fArm' + k, -18, 0, 0); e('hand' + k, 10, 0, s * 20); });
+  } else if (pose === 'prone') {   // face down where he fell forward, one arm under him, the other flung out past his head; his cheek on the ground
+    rig.root.rotation.x = Math.PI / 2;
+    const s0 = rnd() < 0.5 ? 1 : -1;
+    e('spine', -4, 0, s0 * 5); e('chest', -4, 0, 0); e('neck', 12, s0 * 35, -s0 * 10); e('head', 6, s0 * 45, -s0 * 12);
+    lr((k, s) => {
+      if (s === s0) { e('uArm' + k, -125, 0, s * 40); e('fArm' + k, -20, 0, 0); e('hand' + k, 0, 0, s * 10); }   // flung up beside the head
+      else { e('uArm' + k, 6, 0, s * 4); e('fArm' + k, -8, 0, 0); e('hand' + k, 0, 0, 0); }   // down his side, the hand under his hip
+      e('thigh' + k, s === s0 ? -18 : 0, 0, s * (s === s0 ? 34 : 6)); e('shin' + k, s === s0 ? 40 : 4, 0, 0); e('foot' + k, 30, s * 30, 0);
+    });
+  } else {   // curled on his side as men lie when the cold takes them
+    rig.root.rotation.z = Math.PI / 2 * 0.98;
+    e('spine', 26, 0, 0); e('chest', 20, 0, 0); e('neck', 22, 0, -8); e('head', 26, 0, -10);
+    lr((k, s) => { e('thigh' + k, s < 0 ? -78 : -64, 0, s * 4); e('shin' + k, s < 0 ? 96 : 80, 0, 0); e('foot' + k, 15, 0, 0); e('uArm' + k, s < 0 ? -55 : -80, 0, s * 8); e('fArm' + k, -95, -s * 35, 0); e('hand' + k, 20, 0, 0); });
+  }
+  const wrap = new THREE.Group(); wrap.add(rig.root);
   wrap.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { root: wrap, rig, head: J.head };
+  // what he dropped: his helmet if it is not on him, a pike broken in two, his sword-belt's purse; and a dark pool on some
+  const gear = [];
+  const wood = frostMat(0x4a3826, 0.85, 0, 0.5);
+  if (!hat && (hatKind || rnd() < 0.5)) gear.push({ obj: hatKind === 2 ? cabasset(iron) : kettleHat(iron), at: [jit(0.7) + 0.6, jit(0.5) - 0.2], lift: 0.04, tilt: [jit(0.5) + Math.PI * (rnd() < 0.4 ? 1 : 0), 0, jit(0.4) + 0.35] });
+  if (rnd() < 0.7) {
+    const L1 = 1.1 + rnd() * 0.8, L2 = 0.8 + rnd() * 0.6, sh = (L) => new THREE.CylinderGeometry(0.017, 0.019, L, 6).rotateZ(Math.PI / 2);
+    const a = new THREE.Mesh(sh(L1), wood), tip = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.22, 4).rotateZ(-Math.PI / 2).translate(L1 / 2 + 0.1, 0, 0), iron); a.add(tip);
+    gear.push({ obj: a, at: [jit(0.5) - 0.9, jit(1.0)], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
+    gear.push({ obj: new THREE.Mesh(sh(L2), wood), at: [jit(0.6) + 0.5, jit(1.2) + 0.6], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
+  }
+  if (seed % 3 !== 1) {
+    const pg = new THREE.CircleGeometry(0.5, 40), pp = pg.attributes.position, ph = [rnd() * 6, rnd() * 6, rnd() * 6]; for (let i = 1; i < pp.count; i++) { const a = Math.atan2(pp.getY(i), pp.getX(i)), f = 0.8 + 0.18 * Math.sin(a * 2 + ph[0]) + 0.1 * Math.sin(a * 3 + ph[1]) + 0.05 * Math.sin(a * 7 + ph[2]); pp.setXY(i, pp.getX(i) * f * 1.25, pp.getY(i) * f); }
+    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x220405, roughness: 0.35, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.92 }));
+    pool.receiveShadow = true; gear.push({ obj: pool, at: [jit(0.15), 0.1], lift: 0.012, tilt: [0, jit(Math.PI), 0], flat: true });
+  }
+  // lay him on the ground at x,z facing yaw. The body comes to rest as a dead weight would: dropped until it touches,
+  // then turned about what it touches until the parts that bear his weight are all down; then each limb that
+  // should lie on the ground is let down onto it (or lifted out of it) at its shoulder, hip or neck.
+  const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _qy = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
+  const SI = body.geometry.attributes.skinIndex, SW = body.geometry.attributes.skinWeight, PC = body.geometry.attributes.position.count, byBone = {};
+  for (let i = 0; i < PC; i++) if (SW.getX(i) > 0.6) (byBone[JOINTS[SI.getX(i)]] ||= []).push(i);
+  const all = []; for (let i = 0; i < PC; i += 4) all.push(i);
+  // the lowest point (relative to the ground) among some vertices
+  const lowOf = (ground, ids, out) => { let best = 1e9; for (const i of ids) { body.getVertexPosition(i, _v); _v.applyMatrix4(body.matrixWorld); const d = _v.y - ground(_v.x, _v.z); if (d < best) { best = d; out?.copy(_v); } } return best; };
+  const CONTACT = { sit: { rest: ['hips', 'footR', 'footL'], limb: [] }, slump: { rest: ['hips', 'footR', 'footL'], limb: ['handR', 'handL'] },
+    prone: { rest: ['chest', 'hips', 'thighR', 'thighL'], limb: ['head', 'handR', 'handL', 'footR', 'footL', 'shinR', 'shinL', 'fArmR', 'fArmL'] },
+    lie: { rest: ['chest', 'hips', 'thighR', 'thighL', 'shinR', 'shinL'], limb: ['head', 'handR', 'handL', 'fArmR', 'fArmL'] } }[pose];
+  const LIMB = { handR: 'uArmR', handL: 'uArmL', fArmR: 'uArmR', fArmL: 'uArmL', footR: 'thighR', footL: 'thighL', shinR: 'thighR', shinL: 'thighL', head: 'neck' };
+  const settle = (ground, x, z, yaw, sink = 0.012) => {
+    wrap.position.set(x, 0, z); _qy.setFromAxisAngle(UP, yaw); wrap.quaternion.copy(_qy);
+    const restIds = CONTACT.rest.flatMap((n) => byBone[n] || []).concat(['spine', 'chest', 'hips'].flatMap((n) => (byBone[n] || []).filter((_, k) => k % 2 === 0)));
+    const drop = (ids = restIds) => { wrap.updateMatrixWorld(true); wrap.position.y -= lowOf(ground, ids) + sink; wrap.updateMatrixWorld(true); };
+    drop();
+    // rigid rest: turn about the lowest bearing point to bring the highest one down, a few times over
+    const piv = new THREE.Vector3(), far = new THREE.Vector3(), q = new THREE.Quaternion(), ax = new THREE.Vector3();
+    for (let it = 0; it < 14; it++) {
+      let lo = 1e9, hi = -1e9; for (const b of CONTACT.rest) { const d = lowOf(ground, byBone[b] || [], _w); if (d < lo) { lo = d; piv.copy(_w); } if (d > hi) { hi = d; far.copy(_w); } }
+      if (hi - lo < 0.01) break;
+      const arm = far.clone().sub(piv); arm.y = 0; const L = arm.length(); if (L < 0.05) break;
+      ax.crossVectors(arm, UP).normalize(); const ang = -Math.min(0.25, Math.atan2(hi - lo, L) * 0.9);
+      q.setFromAxisAngle(ax, ang);
+      // never tip him past lying flat on the slope
+      const nq = q.clone().multiply(wrap.quaternion); if (UP.clone().applyQuaternion(nq.clone().multiply(_qy.clone().invert())).y < Math.cos(0.85)) break;
+      wrap.position.sub(piv).applyQuaternion(q).add(piv); wrap.quaternion.premultiply(q); drop();
+    }
+    // the limbs onto the ground: a little at a time about the joint's own axes, whichever way brings the part to rest
+    const DESC = { uArmR: ['uArmR', 'fArmR', 'handR'], uArmL: ['uArmL', 'fArmL', 'handL'], thighR: ['thighR', 'shinR', 'footR'], thighL: ['thighL', 'shinL', 'footL'], neck: ['neck', 'head'], head: ['head'] };
+    const touch = new Set(CONTACT.limb), todo = [...CONTACT.limb, ...['handR', 'handL', 'footR', 'footL', 'head'].filter((b) => !touch.has(b))];
+    for (const b of todo) {
+      for (const jn of b === 'head' ? ['neck', 'head'] : [LIMB[b]]) {
+      const j = J[jn], ids = byBone[b], must = touch.has(b); if (!ids) continue;
+      const chain = DESC[jn].flatMap((n) => (byBone[n] || []).filter((_, k) => k % 3 === 0)), r0 = j.rotation.clone();
+      // how far from resting: the part's own distance from the ground, and anything of the limb pushed into it
+      const cost = () => { wrap.updateMatrixWorld(true); const d = lowOf(ground, ids), c = lowOf(ground, chain); return (must ? Math.max(0, d - 0.005) : 0) + Math.max(0, -0.02 - d) + Math.max(0, -0.025 - c) * 3; };
+      for (let it = 0; it < 16; it++) {
+        const c0 = cost(); if (c0 < 0.012) break;
+        let best = null, bc = c0 - 0.002;
+        for (const [axis, sgn] of [['x', 1], ['x', -1], ['z', 1], ['z', -1]]) {
+          if (Math.abs(j.rotation[axis] + sgn * 0.05 - r0[axis]) > 0.6) continue;
+          j.rotation[axis] += sgn * 0.05; const c = cost(); j.rotation[axis] -= sgn * 0.05;
+          if (c < bc) { bc = c; best = [axis, sgn]; }
+        }
+        if (!best) break; j.rotation[best[0]] += best[1] * 0.05;
+      }
+      }
+    }
+    drop(all);
+    // what he dropped, each on the ground where it fell
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), inv = wrap.quaternion.clone().invert();
+    for (const G of gear) {
+      if (G.obj.parent !== wrap) wrap.add(G.obj);
+      const wx = x + G.at[0] * cy + G.at[1] * sy, wz = z - G.at[0] * sy + G.at[1] * cy, wy = ground(wx, wz);
+      const gx = (ground(wx + 0.3, wz) - ground(wx - 0.3, wz)) / 0.6, gz = (ground(wx, wz + 0.3) - ground(wx, wz - 0.3)) / 0.6;
+      const qN = new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(-gx, 1, -gz).normalize());
+      const qw = qN.multiply(new THREE.Quaternion().setFromAxisAngle(UP, yaw)).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...G.tilt)));
+      G.obj.quaternion.copy(inv).multiply(qw);
+      G.obj.position.copy(wrap.worldToLocal(new THREE.Vector3(wx, wy + G.lift, wz)));
+      G.obj.castShadow = !G.flat; G.obj.receiveShadow = true;
+    }
+    wrap.updateMatrixWorld(true);
+    return wrap;
+  };
+  // for a check: how far the lowest of him is above (+) or below (-) the ground, overall and at each part that should bear on it
+  const gaps = (ground) => {
+    wrap.updateMatrixWorld(true); const per = {}; for (const b of [...CONTACT.rest, ...CONTACT.limb]) per[b] = lowOf(ground, byBone[b] || []);
+    return { low: lowOf(ground, all), per };
+  };
+  // he settles on flat ground until placed
+  settle(() => 0, 0, 0, 0);
+  return { root: wrap, rig, head: J.head, settle, gaps, pose };
 }
