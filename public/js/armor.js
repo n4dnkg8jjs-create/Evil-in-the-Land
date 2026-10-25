@@ -502,14 +502,14 @@ function buildHelm(S, style, add, opts) {
     // Built from its sections: y from the crown (v = 0) to the edge (v = 1); at each height an egg-shaped section
     // (half-width a, forward reach zf, backward reach zb).
     const Y_BROW = 0.1, SL0 = 0.082, SL1 = 0.097, SW = 0.95, VD = 0.55;
-    const yEdge = (th) => { const c = Math.cos(th); return c > 0 ? lerp(0.03, 0.036, c) : lerp(0.03, 0.05, -c); };
+    const yEdge = (th) => { const c = Math.cos(th); return c > 0 ? lerp(-0.006, -0.024, c) : lerp(-0.006, 0.03, -c); };   // down to the mouth all round; the tail a little higher
     const section = (th, v) => {
       if (v < VD) {   // the skull: low and round, a little flattened on top
         const ph = (v / VD) * PI / 2, s = Math.sin(ph);
-        return { y: Y_BROW + Math.cos(ph) * 0.118, a: 0.111 * s, zf: 0.128 * s, zb: 0.132 * s };
+        return { y: Y_BROW + Math.cos(ph) * 0.13, a: 0.122 * s, zf: 0.138 * s, zb: 0.142 * s };
       }
       const t = (v - VD) / (1 - VD);   // brow to edge: the front nearly straight, then the flare
-      return { y: lerp(Y_BROW, yEdge(th), t), a: 0.111 + 0.03 * Math.pow(t, 1.7), zf: 0.128 + 0.03 * Math.pow(t, 2.2), zb: 0.132 + 0.14 * Math.pow(t, 1.6) };
+      return { y: lerp(Y_BROW, yEdge(th), t), a: 0.122 + 0.045 * Math.pow(t, 1.8), zf: 0.138 + 0.04 * Math.pow(t, 2.4), zb: 0.142 + 0.16 * Math.pow(t, 1.7) };
     };
     const salletAt = (th, v, inset = 0) => {
       const S2 = section(th, v), c = Math.cos(th);
@@ -517,26 +517,26 @@ function buildHelm(S, style, add, opts) {
       return [Math.sin(th) * S2.a * r, S2.y - inset * 0.5 + 0.006 * Math.exp(-((Math.sin(th) * S2.a / 0.012) ** 2)) * (v < VD ? 1 - v / VD : 0), (c > 0 ? S2.zf : S2.zb) * c * r + 0.012];
     };
     const slit = (th, v) => { const y = section(th, v).y; return Math.cos(th) > Math.cos(SW) && y > SL0 && y < SL1; };
-    const NU = 72, NV = 34, sk = (u, v) => salletAt(lerp(-PI, PI, u), v), skip = (u, v) => slit(lerp(-PI, PI, u), v);
+    const NU = 72, NV = 40, sk = (u, v) => salletAt(lerp(-PI, PI, u), v), skip = (u, v) => slit(lerp(-PI, PI, u), v);
     add('head', 'plate', surf(sk, NU, NV, skip));
     // the inside, lined: seen under the brim and the tail, and round the sight
     add('head', 'leather', surf((u, v) => salletAt(lerp(PI, -PI, u), v, 0.004), NU, NV, (u, v) => slit(lerp(PI, -PI, u), v)));
     // the brass-bound edge, and the sight's lips
     add('head', 'brass', edge((u) => salletAt(lerp(-PI, PI, u), 0.995), 'v0', 0.0034, 72));
-    const vOfY = (y) => VD + (1 - VD) * (Y_BROW - y) / (Y_BROW - 0.033);
+    const vOfY = (y) => VD + (1 - VD) * (Y_BROW - y) / (Y_BROW - yEdge(0));
     add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), vOfY(SL1) - 0.004), 'v0', 0.0026, 24));
     add('head', 'trim', edge((u) => salletAt(lerp(-SW, SW, u), vOfY(SL0) + 0.004), 'v0', 0.0026, 24));
     // rivets for the lining band, round the skull above the brim
     add('head', 'brass', mergeGeometries([-2.2, -1.3, 1.3, 2.2, PI].map((th) => rivetOut(salletAt(th, VD + 0.06), [Math.sin(th), 0, Math.cos(th)], 0.0042))));
-    // bevor: chin/throat defence strapped to the breastplate (chest joint)
-    // shaped to the chin: broad over the collar, swelling round the jaw with a ridge down the front, narrowing at the top
-    // to tuck under the sallet's lip
-    const bv = shell({ a0: -1.85, a1: 1.85, y0: 0.215, y1: 0.37, rx: (v) => lerp(0.112, 0.09, Math.pow(v, 1.2)), rz: (v) => lerp(0.1, 0.11, v) + 0.016 * Math.sin(v * PI * 0.95), cz: 0.03, nu: 30, nv: 10, extra: (th, v) => 0.012 * Math.exp(-((th / 0.4) ** 2)) * Math.sin(Math.min(1, v * 1.1) * PI * 0.9) });
-    add('chest', 'plate', bv.geo, { joint: 'neck', k: 0.35, pivot: [0, 0.2, 0] });
-    add('chest', 'brass', edge(bv.fn, 'v1', 0.0045, 26), { joint: 'neck', k: 0.35, pivot: [0, 0.2, 0] });
-    // a mail collar (a standard) round the neck under the bevor and the sallet's tail: the back of the neck is never bare
-    const st = shell({ a0: 0, a1: PI * 2, y0: 0.17, y1: 0.36, rx: (v) => lerp(0.112, 0.07, Math.pow(v, 0.7)), rz: (v) => lerp(0.108, 0.072, Math.pow(v, 0.7)), cz: 0.0, nu: 28, nv: 6 });
-    add('chest', 'mail', st.geo, { joint: 'neck', k: 0.6, pivot: [0, 0.2, 0] });
+    // the bottom half is only a neck guard: plate all the way round the throat and the back of the neck (no mail),
+    // in two lames, the upper one shaped forward round the chin and rising inside the sallet's edge
+    const NF = { joint: 'neck', k: 0.45, pivot: [0, 0.2, 0] };
+    const chin = (th, v) => 0.03 * Math.exp(-((th / 0.6) ** 2)) * Math.sin(v * PI * 0.5);
+    const g1 = shell({ a0: -PI, a1: PI, y0: 0.175, y1: 0.245, rx: (v) => lerp(0.118, 0.098, v), rz: (v) => lerp(0.112, 0.094, v), cz: 0.005, nu: 32, nv: 4 });
+    const g2 = shell({ a0: -PI, a1: PI, y0: 0.235, y1: 0.318, rx: (v) => lerp(0.095, 0.086, v), rz: (v) => lerp(0.09, 0.092, v), cz: 0.012, nu: 32, nv: 6, extra: chin, yOfU: (th, v) => v * 0.024 * Math.exp(-((th / 0.9) ** 2)) });   // higher in front, over the chin
+    add('chest', 'plate', g1.geo, NF); add('chest', 'plate', g2.geo, NF);
+    add('chest', 'brass', edge(g2.fn, 'v1', 0.0036, 32), NF); add('chest', 'trim', edge(g1.fn, 'v1', 0.0032, 32), NF);
+    add('chest', 'brass', mergeGeometries([-2.4, -0.8, 0.8, 2.4].map((th) => rivetOut([Math.sin(th) * 0.1, 0.24, Math.cos(th) * 0.098 + 0.008], [Math.sin(th), 0, Math.cos(th)], 0.004))), NF);
   } else {
     // armet / close helmet: rounded bowl with comb, articulated visor, bevor and neck lames
     const sk = surf((u, v) => {
