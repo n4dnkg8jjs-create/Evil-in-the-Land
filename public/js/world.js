@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { icoSmooth } from './demons.js';
 import { CHAPTERS, HEALED } from './chapters.js';
-import { terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture, cloudTexture, plasterTextures, thatchTextures, roofTextures, leadedGlassTextures } from './textures.js';
+import { settsTextures, emberWoodTextures, terrainTextures, stoneTextures, barkTextures, woodTextures, grassTexture, demonTextures, clothTextures, armorTextures, leafTexture, cloudTexture, plasterTextures, thatchTextures, roofTextures, leadedGlassTextures } from './textures.js';
 import { rng, makeNoise, pathSampler, clamp, lerp, smooth, SpatialHash, TAU } from './util.js';
 import { Vista } from './vista.js';
 import { WX, WATER_U } from './weather.js';
@@ -63,6 +63,26 @@ function lumpy(g, amt, seed) { // perturb a rock along its normals
   g.computeVertexNormals(); return g;
 }
 
+// A standing stone: a rough slab, broader at the foot, its top worn round and broken, its faces pitted and fluted
+// by the weather, leaning a little. Its base is at y=0 (sink it in the ground).
+function megalith(w, h, d, seed) {
+  const g = new THREE.BoxGeometry(w, h, d, 6, 14, 4); g.translate(0, h / 2, 0);
+  const n = makeNoise(seed * 7 + 3), p = g.attributes.position, v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i); const t = v.y / h;
+    const taper = 1.08 - 0.32 * t + (n.fbm(seed, t * 2.5, 2) - 0.5) * 0.2;
+    let x = v.x * taper, z = v.z * taper;
+    // the top worn round: the corners fall away
+    const cr = Math.pow(Math.max(0, t - 0.72) / 0.28, 1.6); const ex = Math.abs(v.x) / (w / 2), ez = Math.abs(v.z) / (d / 2);
+    let y = v.y - cr * (ex * ex * 0.35 + ez * ez * 0.15) * h * 0.25 - (n.fbm(v.x * 3 + seed, v.z * 3, 2) - 0.4) * cr * 0.35;
+    // weathering: fluting runs down the faces, pits, a lean
+    const fl = Math.sin(v.x * 9 + n.fbm(v.y * 0.8, seed, 2) * 4) * 0.025 + (n.fbm(v.x * 4 + seed, v.y * 3.5 + v.z * 4, 4) - 0.45) * 0.14;
+    const len = Math.hypot(x, z) || 1; x += (x / len) * fl; z += (z / len) * fl;
+    x += t * t * (n.fbm(seed + 5, 1, 2) - 0.5) * 0.5;
+    p.setXYZ(i, x, Math.max(0, y), z);
+  }
+  g.computeVertexNormals(); return g;
+}
 // A fractured rock: a lump cut by a few random planes (flat cleavage faces, sharp edges), tapered toward the top
 // if it is a spire, roughened, and shaded flat so every facet catches the light on its own.
 // snow settles on whatever faces the sky
@@ -107,6 +127,18 @@ function lotCorners(L, pad = 0, n = 0) {
   return out;
 }
 
+// do two lots (oriented rectangles) overlap, with pad metres between them?
+function lotsOverlap(A, B, pad = 0) {
+  const ca = lotCorners(A, pad / 2), cb = lotCorners(B, pad / 2);
+  for (const L of [A, B]) for (const [ax, az] of [[Math.cos(L.yaw), -Math.sin(L.yaw)], [Math.sin(L.yaw), Math.cos(L.yaw)]]) {
+    let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
+    for (const [x, z] of ca) { const p = x * ax + z * az; a0 = Math.min(a0, p); a1 = Math.max(a1, p); }
+    for (const [x, z] of cb) { const p = x * ax + z * az; b0 = Math.min(b0, p); b1 = Math.max(b1, p); }
+    if (a1 < b0 || b1 < a0) return false;
+  }
+  return true;
+}
+
 export class World {
   constructor(engine, quality, chapterIdx) {
     this.engine = engine; this.q = quality; this.idx = chapterIdx; this.ch = CHAPTERS[chapterIdx];
@@ -115,7 +147,7 @@ export class World {
     this.r = rng(this.ch.seed); this.noise = makeNoise(this.ch.seed);
     this.colliders = []; this.colGrid = new SpatialHash(6);
     this.time = 0; this.healAnims = []; this.wind = new THREE.Vector3(this.ch.wind[0], 0, this.ch.wind[1]);
-    this.fires = []; this.waterLevel = -1000;
+    this.fires = []; this.waterLevel = -1000; this.fireSpots = []; this.charSpots = []; this.wells = [];
     this.healedFrac = 0;
     this.buildPath();
     this.planSettlement();
@@ -306,7 +338,7 @@ export class World {
       const corners = lotCorners(lot, 0);
       for (const [cx, cz] of corners) { if (!this.inBounds(cx, cz) || this.path.nearest(cx, cz).d < 5.5) return false; for (const a of this.altarT) if (Math.hypot(cx - a.x, cz - a.z) < 13) return false; }
       for (const a of this.altarT) if (Math.hypot(lot.x - a.x, lot.z - a.z) < 16) return false;
-      for (const o of this.lots) if (Math.hypot(o.x - lot.x, o.z - lot.z) < o.rad + lot.rad + 1) return false;
+      for (const o of this.lots) if (lotsOverlap(o, lot, 0.6)) return false;
       let lo = 1e9, hi = -1e9; for (const [cx, cz] of lotCorners(lot, 0, 3)) { const h = this.rawHeight(cx, cz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
       return hi - lo < (lot.kind === 'field' ? 5 : 3.2);
     };
@@ -317,18 +349,42 @@ export class World {
       const yaw = Math.atan2(-R.nx * side, -R.nz * side);
       return add({ kind, x, z, yaw, w, d, x0: -w / 2 - 2.2, x1: w / 2 + 2.2, z0: -d / 2 - 5, z1: d / 2 + 1.2, t, side });
     };
-    // Saint Aldric's: the church by the second altar, and the village street along the road either side of it
+    // Saint Aldric's: the church by the second altar, a square before it, and the village street along the road:
+    // houses side by side fronting the street at the same setback, a lane between them now and then, each with its
+    // fenced plot running back behind it
     if (P.village) {
       const a = this.altarT[1] || this.altarT[0];
       const R = roadPt(a.t); const x = a.x + R.nx * 22, z = a.z + R.nz * 22, yaw = Math.atan2(R.nx, R.nz);
       const ch = { kind: 'church', x, z, yaw, w: 9, d: 20, x0: -18, x1: 18, z0: -12, z1: 24, rad: 0 }; ch.rad = Math.hypot(18, 24); this.lots.push(ch); this.churchLot = ch;
-      let n = 0;
-      for (let k = 0; k < 40 && n < 11; k++) {
-        const t = a.t + (k % 2 ? 1 : -1) * (0.035 + Math.floor(k / 2) * 0.032), side = Math.floor(k / 2) % 2 ? 1 : -1;
-        if (t < 0.04 || t > 0.96) continue;
-        if (house(t, side, r.range(12, 14), r.range(6, 8.5), r.range(5, 6.5))) n++;
-        else if (house(t, -side, r.range(12, 14), r.range(6, 8.5), r.range(5, 6.5))) n++;
+      // distance along the road
+      const NS = 800, sT = new Float32Array(NS + 1); { let prev = this.path.at(0); for (let i = 1; i <= NS; i++) { const q = this.path.at(i / NS); sT[i] = sT[i - 1] + Math.hypot(q.x - prev.x, q.z - prev.z); prev = q; } }
+      const sOf = (t) => { const f = clamp(t, 0, 1) * NS, i = Math.min(NS - 1, Math.floor(f)); return lerp(sT[i], sT[i + 1], f - i); };
+      const tOf = (sv) => { if (sv <= 0) return 0; if (sv >= sT[NS]) return 1; let lo = 0, hi = NS; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (sT[m] < sv) lo = m; else hi = m; } return (lo + (sv - sT[lo]) / Math.max(1e-6, sT[hi] - sT[lo])) / NS; };
+      this.sOf = sOf; this.tOf = tOf;
+      const sA = sOf(a.t); let sMin = sA - 20, sMax = sA + 20;
+      const row = (t, side, w, d) => {
+        const RR = roadPt(t), set = 6.0 + d / 2 + 1.0;   // the house fronts stand 6 m from the middle of the street
+        const hx = RR.p.x + RR.nx * side * set, hz = RR.p.z + RR.nz * side * set, yw = Math.atan2(-RR.nx * side, -RR.nz * side);
+        return add({ kind: 'house', village: true, x: hx, z: hz, yaw: yw, w, d, x0: -w / 2 - 0.5, x1: w / 2 + 0.5, z0: -d / 2 - 9, z1: d / 2 + 1.0, t, side });
+      };
+      for (const dir of [-1, 1]) for (const side of [-1, 1]) {
+        let sv = sA + dir * (side > 0 ? 24 : 13), made = 0;   // the square and the church on one side, the altar's ring on the other
+        for (let k = 0; k < 24 && made < 6; k++) {
+          const w = r.range(6.4, 8.4), d = r.range(5.4, 6.4), t = tOf(sv + dir * w / 2);
+          if (t < 0.05 || t > 0.95) break;
+          const lot = row(t, side, w, d);
+          if (lot) {
+            made++; sv += dir * (w + (r() < 0.3 ? 4.0 : 1.2));   // now and then a lane between two plots
+            sMin = Math.min(sMin, sOf(t) - w); sMax = Math.max(sMax, sOf(t) + w);
+            // the plot behind: fenced along its sides and back, a gate in the back fence
+            const C = Math.cos(lot.yaw), S = Math.sin(lot.yaw), toW = (lx, lz) => [lot.x + lx * C + lz * S, lot.z - lx * S + lz * C];
+            const bx = w / 2 + 0.3, bz0 = -d / 2 - 0.6, bz1 = -d / 2 - 8.6;
+            this.fenceRuns.push({ pts: [toW(-bx, bz0), toW(-bx, bz1), toW(bx, bz1), toW(bx, bz0)], closed: false, lot, gate: 0.5 });
+          } else sv += dir * 2.5;
+        }
       }
+      // the street is paved through the village, and widens into a square between the road and the church
+      this.paving = { t0: tOf(sMin), t1: tOf(sMax), sA, sMin, sMax, a };
     }
     // farmsteads: a house fronting the road, a barn across the yard behind it, a fenced field beside them
     for (let k = 0, made = 0; k < 30 && made < (P.farm || 0); k++) {
@@ -350,7 +406,7 @@ export class World {
     // fences along the road where people lived: a run either side of each settled stretch, open at each gateway
     if (P.fences) {
       const stretches = [];
-      for (const L of this.lots) if (L.t !== undefined) stretches.push([L.t - 0.045, L.t + 0.045]);
+      for (const L of this.lots) if (L.t !== undefined && !L.village) stretches.push([L.t - 0.045, L.t + 0.045]);
       stretches.sort((a, b) => a[0] - b[0]);
       const merged = []; for (const s2 of stretches) { const m = merged[merged.length - 1]; if (m && s2[0] <= m[1] + 0.03) m[1] = Math.max(m[1], s2[1]); else merged.push([...s2]); }
       for (const [t0, t1] of merged) for (const side of [-1, 1]) {
@@ -397,6 +453,28 @@ export class World {
     }
     return null;
   }
+  // inside a building's walls (houses, barns, the church), pad metres out
+  inFootprint(x, z, pad = 0) {
+    for (const L of this.lots || []) {
+      if (L.kind !== 'house' && L.kind !== 'barn' && L.kind !== 'church') continue;
+      const C = Math.cos(L.yaw), S = Math.sin(L.yaw), dx = x - L.x, dz = z - L.z, lx = dx * C - dz * S, lz = dx * S + dz * C;
+      const hw = L.kind === 'church' ? 6.2 : L.w / 2 + 0.45, z0 = L.kind === 'church' ? -10.9 : -L.d / 2 - 0.7, z1 = L.kind === 'church' ? 15.7 : L.d / 2 + 0.7;
+      if (Math.abs(lx) < hw + pad && lz > z0 - pad && lz < z1 + pad) return L;
+    }
+    return null;
+  }
+  // the paved street and square (Saint Aldric's)
+  pavingHalf(t, side) {
+    const P = this.paving, ds = Math.abs(this.sOf(t) - P.sA);
+    const sq = side > 0 ? 7.4 * smooth(clamp(1 - (ds - 10) / 6, 0, 1)) : 0;
+    return 3.7 + sq + (this.noise.fbm(t * 160, side * 3.3, 2) - 0.5) * 0.6;
+  }
+  onPaving(x, z) {
+    const P = this.paving; if (!P) return false;
+    if (Math.hypot(x - P.a.x, z - P.a.z) > 120) return false;
+    const nr = this.path.nearest(x, z); if (nr.t < P.t0 || nr.t > P.t1) return false;
+    return nr.d < this.pavingHalf(nr.t, this.pathSide(x, z, nr.t));
+  }
   // fences as continuous runs of posts and two rails, each rail sloping with the ground between its posts
   buildFences(mat) {
     if (!this.fenceRuns?.length) return;
@@ -411,7 +489,8 @@ export class World {
         if (!this.inBounds(x, z) || this.normalAt(x, z).y < 0.82) return false;
         if (!run.road && this.path.nearest(x, z).d < 4.8) return false;
         for (const a of this.altarT) if (Math.hypot(x - a.x, z - a.z) < 11) return false;
-        const L = this.inLot(x, z, 0.4); if (L && L !== run.field && L.kind !== 'field' && L.kind !== 'paddock') return false;
+        const L = this.inLot(x, z, 0.4); if (L && L !== run.field && L !== run.lot && L.kind !== 'field' && L.kind !== 'paddock') return false;
+        if (run.lot && this.inFootprint(x, z, 0.3)) return false;
         return true;
       });
       // a gateway in front of each house along a road fence
@@ -505,6 +584,7 @@ export class World {
       uDeadTint: { value: new THREE.Color(T.kind === 'fen' ? 0x8a8a78 : T.kind === 'mountain' || T.kind === 'peak' ? 0x9a9090 : 0xffffff) },
       uAliveTint: { value: new THREE.Color(T.kind === 'mountain' ? 0x9aa080 : 0xffffff) },
       uWet: WX.uWet, uRainA: WX.uRain, uWTime: WX.uWTime, uSnowAcc: WX.uSnowAcc,
+      uHoles: { value: [0, 1, 2, 3, 4, 5].map(() => new THREE.Vector4(0, 0, 0, 0)) },   // well shafts: no ground across their mouths
     };
     this.terrainUniforms = uniforms;
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
@@ -516,7 +596,7 @@ export class World {
         varying vec3 vWPos; varying vec3 vWNorm;
         uniform sampler2D tDead, tDeadN, tAlive, tAliveN, tRock, tRockN, tSnow, tMask;
         uniform float uSize, uTile, uSnowLine, uWater, uEmber, uNStr, uRockAll, uFlatSnow, uSnowFrom, uStrata; uniform vec3 uDeadTint, uAliveTint;
-        uniform float uWet, uRainA, uWTime, uSnowAcc;
+        uniform float uWet, uRainA, uWTime, uSnowAcc; uniform vec4 uHoles[6];
         float wxh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float wxn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(wxh(i), wxh(i + vec2(1, 0)), f.x), mix(wxh(i + vec2(0, 1)), wxh(i + vec2(1, 1)), f.x), f.y); }
         // rain rings: in each cell a drop lands now and then and a ring runs out from it; returns the slope of the ripples
@@ -533,6 +613,7 @@ export class World {
           return g;
         }`)
         .replace('#include <map_fragment>', `
+        for (int hi = 0; hi < 6; hi++) { vec4 HH = uHoles[hi]; if (HH.w > 0.5 && length(vWPos.xz - HH.xy) < HH.z) discard; }
         vec2 wuv = vWPos.xz * uTile;
         vec2 muv = vWPos.xz / uSize + 0.5;
         float life = texture2D(tMask, muv).r;
@@ -651,7 +732,7 @@ export class World {
   buildAltars() {
     const st = stoneTextures(512, true), stR = stoneTextures(512, false);
     const stone = new THREE.MeshStandardMaterial({ map: st.map, normalMap: st.normalMap, roughness: 0.85 });
-    const rough = new THREE.MeshStandardMaterial({ map: stR.map, normalMap: stR.normalMap, roughness: 0.9 });
+    const rough = new THREE.MeshStandardMaterial({ map: stR.map, normalMap: stR.normalMap, normalScale: new THREE.Vector2(1.6, 1.6), roughness: 0.92, color: 0xb4b2aa });
     const dt = demonTextures();
     const blight = new THREE.MeshStandardMaterial({ map: dt.map, normalMap: dt.normalMap, emissiveMap: dt.emissiveMap, emissive: 0xff3010, emissiveIntensity: 1.8, roughness: 0.4, metalness: 0.2 });
     this.altarMats = { stone, blight };
@@ -675,8 +756,8 @@ export class World {
       const ring = [];
       for (let k = 0; k < 7; k++) {
         const ang = (k / 7) * TAU + r.range(-0.15, 0.15);
-        const sg = lumpy(new THREE.BoxGeometry(0.7, 2.2 + r.range(0, 1.2), 0.5, 2, 4, 2), 0.15, k + i * 10);
-        const m = new THREE.Mesh(sg, rough); m.position.set(Math.cos(ang) * 8.2, 0.9, Math.sin(ang) * 8.2); m.rotation.set(r.range(-0.12, 0.12), ang, r.range(-0.12, 0.12));
+        const hh = 2.0 + r.range(0, 1.3), sg = megalith(0.78 + r.range(-0.1, 0.15), hh, 0.5 + r.range(-0.08, 0.1), k + i * 10);
+        const m = new THREE.Mesh(sg, rough); m.position.set(Math.cos(ang) * 8.2, -0.35, Math.sin(ang) * 8.2); m.rotation.set(r.range(-0.12, 0.12), ang, r.range(-0.12, 0.12));
         m.castShadow = true; g.add(m); ring.push(m);
         this.addCollider(a.x + Math.cos(ang) * 8.2, a.z + Math.sin(ang) * 8.2, 0.55);
       }
@@ -757,6 +838,7 @@ export class World {
     if (this.ch.terrain.kind !== 'peak' && this.path.nearest(x, z).d < minPath) return false;
     for (const a of this.altarT) if (Math.hypot(x - a.x, z - a.z) < minAltar) return false;
     if (this.inLot(x, z, 1.5)) return false;
+    if (this.paving && this.onPaving(x, z)) return false;
     return true;
   }
   scatter(n, test, cb, tries = 6) {
@@ -924,15 +1006,20 @@ export class World {
     // --- the farms and the village of Saint Aldric, on their planned lots
     for (const L of this.lots || []) if (L.kind === 'house' || L.kind === 'barn') this.placeHouse(r, woodMat, charMat, brickMat, L.kind === 'barn', L);
     if (P.village) this.placeChurch(r, brickMat, charMat);
+    if (P.village) { this.buildWells(); this.buildStreet(); }
     if (P.fires) {
-      for (let k = 0; k < P.fires; k++) {
-        const near = this.ruinSpots?.length ? this.ruinSpots[k % this.ruinSpots.length] : null;
-        const x = near ? near.x + r.range(-3, 3) : r.range(-100, 100), z = near ? near.z + r.range(-3, 3) : r.range(-100, 100);
-        if (!this.inBounds(x, z)) continue;
-        this.fires.push({ x, y: this.heightAt(x, z), z, s: r.range(0.6, 1.4) });
+      // fires burning on in the wrecks of the houses, and out in the street and the plots where something caught
+      const spots = this.fireSpots.slice(0, P.fires);
+      for (let k = 0; spots.length < P.fires && k < 80; k++) {
+        const ru = this.ruinSpots?.[k % (this.ruinSpots?.length || 1)];
+        const x = ru ? ru.x + r.range(-10, 10) : r.range(-100, 100), z = ru ? ru.z + r.range(-10, 10) : r.range(-100, 100);
+        if (!this.inBounds(x, z) || this.inFootprint(x, z, 0.8) || this.path.nearest(x, z).d < 3.2 || this.altarT.some((a) => Math.hypot(x - a.x, z - a.z) < 10) || this.wells.some((w) => Math.hypot(x - w.x, z - w.z) < 2.5)) continue;
+        spots.push({ x, y: this.heightAt(x, z), z, s: r.range(0.55, 0.95), yaw: r() * TAU });
       }
+      for (const f of spots) this.fires.push(f);
+      this.buildBurning(spots, this.charSpots, r);
       this.fireLights = [0, 1, 2].map(() => { const l = new THREE.PointLight(0xff7a30, 0, 18, 2); this.group.add(l); return l; });
-      this.flamePool = [0, 1, 2, 3].map(() => { const f = makeFlame({ height: 1.5, width: 0.95, tongues: 4, sparks: 44 }); f.group.visible = false; this.group.add(f.group); return f; });
+      this.flamePool = [0, 1, 2, 3, 4].map(() => { const f = makeFlame({ height: 1.4, width: 0.9, tongues: 4, sparks: 36 }); f.group.visible = false; this.group.add(f.group); return f; });
     }
     // --- fen: reeds, stumps, boardwalks
     if (P.reeds) {
@@ -1008,6 +1095,107 @@ export class World {
     }
   }
 
+  // the wells of Saint Aldric go down: a stone-lined shaft under each drum, black water far below, and the ground
+  // cut away across its mouth (the terrain shader discards inside each well's circle)
+  buildWells() {
+    if (!this.wells.length) return;
+    const holes = this.terrainUniforms?.uHoles?.value, geos = [], waters = [];
+    this.wells.forEach((W, i) => {
+      if (holes && i < holes.length) holes[i].set(W.x, W.z, W.r + 0.05, 1);
+      const depth = 7, top = W.y + W.top - 0.05, bottom = W.y - depth, H = top - bottom;
+      const g = new THREE.CylinderGeometry(W.r, W.r * 0.96, H, 20, 10, true); g.translate(W.x, (top + bottom) / 2, W.z);
+      uvScale(g, (TAU * W.r) / 1.2, H / 1.2);
+      const P = g.attributes.position, col = new Float32Array(P.count * 3);
+      for (let k = 0; k < P.count; k++) { const d = clamp((top - P.getY(k)) / depth, 0, 1), c = lerp(1, 0.04, Math.pow(d, 0.55)); col[k * 3] = col[k * 3 + 1] = col[k * 3 + 2] = c; }
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3)); geos.push(g);
+      const wd = new THREE.CircleGeometry(W.r * 0.97, 20); wd.rotateX(-PI / 2); wd.translate(W.x, bottom + 0.8, W.z); waters.push(wd);
+      this.addCollider(W.x, W.z, W.r + 0.3);
+    });
+    const shaftMat = buildingMat(stoneTextures(512, true), { key: 'wellshaft', side: THREE.BackSide, moss: 0.9, damp: 0.8, dampTop: 999 }); shaftMat.vertexColors = true;
+    const shaft = new THREE.Mesh(mergeGeometries(geos), shaftMat); shaft.receiveShadow = true; this.group.add(shaft);
+    const wm = new THREE.MeshStandardMaterial({ color: 0x030405, roughness: 0.02, metalness: 0.2, envMapIntensity: 0.25 });
+    this.group.add(new THREE.Mesh(merge(waters), wm));
+  }
+  // the village street, paved with setts, opening into a square between the road and the church
+  buildStreet() {
+    const P = this.paving; if (!P) return;
+    const NA = 18, step = 0.9, pos = [], uv = [], keep = [], idx = []; let rows = 0;
+    for (let sv = P.sMin; sv <= P.sMax; sv += step, rows++) {
+      const t = this.tOf(sv), p = this.path.at(t), q0 = this.path.at(this.tOf(sv - 0.5)), q1 = this.path.at(this.tOf(sv + 0.5));
+      let tx = q1.x - q0.x, tz = q1.z - q0.z; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; const nx = -tz, nz = tx;
+      const hL = this.pavingHalf(t, -1), hR = this.pavingHalf(t, 1);
+      for (let j = 0; j <= NA; j++) {
+        const off = lerp(-hL, hR, j / NA), x = p.x + nx * off, z = p.z + nz * off;
+        pos.push(x, this.heightAt(x, z) + 0.035, z); uv.push(off / 1.6, sv / 1.6);
+        keep.push(this.inBounds(x, z) && !this.altarT.some((a) => Math.hypot(x - a.x, z - a.z) < 9.6) && !this.inFootprint(x, z, 0.05) && !this.wells.some((w) => Math.hypot(x - w.x, z - w.z) < w.r + 0.3));
+      }
+    }
+    for (let i = 0; i < rows - 1; i++) for (let j = 0; j < NA; j++) {
+      const a = i * (NA + 1) + j, b = a + NA + 1;
+      if (keep[a] && keep[a + 1] && keep[b] && keep[b + 1]) idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+    if (!idx.length) return;
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+    // the winding must face up
+    { const N = g.attributes.normal; let up = 0; for (let k = 0; k < N.count; k += 7) up += N.getY(k); if (up < 0) { for (let k = 0; k < idx.length; k += 3) { const t2 = idx[k + 1]; idx[k + 1] = idx[k + 2]; idx[k + 2] = t2; } g.setIndex(idx); g.computeVertexNormals(); } }
+    const mat = buildingMat(settsTextures(512), { key: 'setts', moss: 0.35, damp: 0.25, dampTop: -99, normalScale: 1.4 });
+    mat.polygonOffset = true; mat.polygonOffsetFactor = -2; mat.polygonOffsetUnits = -4;
+    const m = new THREE.Mesh(g, mat); m.receiveShadow = true; this.group.add(m);
+  }
+  // charred timbers heaped where the fires are, still glowing in their cracks, and sparks going up from them
+  // over the whole town (one draw: the sparks move on the GPU)
+  buildBurning(fires, chars, r) {
+    const et = emberWoodTextures(256);
+    const emberMat = new THREE.MeshStandardMaterial({ map: et.map, normalMap: et.normalMap, roughnessMap: et.roughnessMap, roughness: 1, emissive: 0xff6a2a, emissiveMap: et.emissiveMap, emissiveIntensity: 1.6 });
+    this.emberMat = emberMat;
+    const parts = [];
+    const heap = (f, burning) => {
+      const n = burning ? 9 : 7, s0 = f.s || 1;
+      for (let k = 0; k < n; k++) {
+        const len = r.range(1.0, 2.6) * s0, th = r.range(0.14, 0.24), a = (f.yaw || 0) + (k / n) * PI + r.range(-0.3, 0.3), off = r.range(0, 0.5) * s0;
+        const bx = f.x + Math.cos(a + 1.3) * off, bz = f.z + Math.sin(a + 1.3) * off;
+        if (burning && k < 4) {   // the first few lean in together over the fire
+          const tilt = r.range(0.7, 1.0), ca = (k / 4) * TAU + r() * 0.5;
+          parts.push(xf(new THREE.BoxGeometry(th, len, th), [f.x + Math.cos(ca) * Math.sin(tilt) * len * 0.42, f.y + Math.cos(tilt) * len * 0.5 - 0.05, f.z + Math.sin(ca) * Math.sin(tilt) * len * 0.42], [-Math.sin(ca) * tilt, 0, Math.cos(ca) * tilt]));
+        } else {
+          const gy = Math.max(this.heightAt(bx, bz), f.y) + th * 0.5 + Math.floor(k / 3) * th * 0.8;
+          parts.push(xf(new THREE.BoxGeometry(th, th, len), [bx, gy, bz], [r.range(-0.12, 0.12), a, r.range(-0.15, 0.15)]));
+        }
+      }
+      for (let k = 0; k < 6; k++) {   // charcoal and embers about the foot
+        const a = r() * TAU, d = r.range(0.3, 1.3) * s0, x = f.x + Math.cos(a) * d, z = f.z + Math.sin(a) * d, sz = r.range(0.08, 0.2);
+        parts.push(xf(lumpy(icoSmooth(0), 0.3, 50 + k), [x, Math.max(this.heightAt(x, z), f.y) + sz * 0.3, z], [r() * 3, r() * 3, 0], [sz, sz * 0.6, sz]));
+      }
+    };
+    for (const f of fires) heap(f, true);
+    for (const c of chars) heap(c, false);
+    if (parts.length) { const m = new THREE.Mesh(boxUV(merge(parts), 0.9), emberMat); m.castShadow = true; m.receiveShadow = true; this.group.add(m); }
+    // sparks
+    const src = [...fires, ...chars.map((c) => ({ ...c, s: (c.s || 1) * 0.4 }))]; if (!src.length) return;
+    const N = Math.min(1400, src.length * 70), pos = new Float32Array(N * 3), seed = new Float32Array(N), str = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const f = src[i % src.length]; pos[i * 3] = f.x; pos[i * 3 + 1] = f.y; pos[i * 3 + 2] = f.z; seed[i] = i * 1.618 + 0.31; str[i] = f.s || 1; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1)); g.setAttribute('aStr', new THREE.BufferAttribute(str, 1));
+    const wind = this.ch.wind || [0.6, 0.6];
+    const U = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(wind[0], wind[1]).normalize().multiplyScalar(0.9) } };
+    const mat = new THREE.ShaderMaterial({ uniforms: U, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, fog: false,
+      vertexShader: `uniform float uTime; uniform vec2 uWind; attribute float aSeed; attribute float aStr; varying float vA; varying float vHot;
+        float h1(float x){ return fract(sin(x * 91.3) * 47453.5); }
+        void main(){
+          float life = 1.8 + h1(aSeed) * 3.0, cyc = uTime / life + h1(aSeed * 3.1), ph = fract(cyc);
+          vec3 p = position + vec3((h1(aSeed * 2.3) - 0.5) * 1.4, 0.3, (h1(aSeed * 5.1) - 0.5) * 1.4) * aStr;
+          p.y += ph * (2.5 + h1(aSeed * 9.3) * 8.0) * (0.6 + 0.4 * aStr);
+          p.xz += uWind * ph * ph * (4.0 + h1(aSeed * 4.4) * 6.0) + vec2(sin(ph * 7.0 + aSeed * 13.0), cos(ph * 5.0 + aSeed * 11.0)) * (0.15 + ph * 0.9);
+          vA = (1.0 - ph) * smoothstep(0.0, 0.05, ph) * step(0.25, h1(aSeed * 13.1 + floor(cyc))) * (0.55 + 0.45 * sin(uTime * 23.0 + aSeed * 7.0));
+          vHot = 1.0 - ph;
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_PointSize = (1.0 + 2.2 * h1(aSeed * 6.6)) * (1.0 - ph * 0.5) * 11.0 / max(0.5, -mv.z);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `varying float vA; varying float vHot;
+        void main(){ vec2 c = gl_PointCoord - 0.5; float d = dot(c, c); if (d > 0.25) discard; float k = 1.0 - d * 4.0;
+          vec3 col = mix(vec3(1.0, 0.22, 0.02), vec3(1.0, 0.75, 0.35), vHot * vHot); gl_FragColor = vec4(col * 2.6 * k * vA, 1.0); }` });
+    const pts = new THREE.Points(g, mat); pts.frustumCulled = false; this.group.add(pts); this.sparks = U;
+  }
   // the village's materials, made once per world: weathered stone, oak, daub, thatch, slate and shingle, leaded
   // glass, rusted iron, sacking, hay, standing water
   buildingMats() {
@@ -1045,7 +1233,7 @@ export class World {
     const footing = y - lo + 0.9;     // and the footing reaches below the lowest
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
     const walls = [], timber = [], plaster = [], dark = [];
-    const glass = [], iron = [], thatch = [], slate = [], cloth = [], hay = [], water = [], lamp = [];
+    const glass = [], iron = [], thatch = [], slate = [], cloth = [], hay = [], water = [], lamp = [], broken = [];
     walls.push(xf(new THREE.BoxGeometry(w + 0.7, footing, dpt + 0.7), [0, -footing / 2 + 0.12, 0]));
     const intact = big || r() < 0.4;   // some still stand to the eaves; barns are whole
     const roofKind = r() < 0.55 ? 'thatch' : r() < 0.6 ? 'slate' : 'shingle';
@@ -1058,10 +1246,11 @@ export class World {
         const P = (gx, gy, gz) => { const c = Math.cos(rot), s2 = Math.sin(rot); return [cx + gx * c + gz * s2, gy, cz - gx * s2 + gz * c]; };
         const ruin = !intact && r() < 0.45;
         const top = ruin ? r.range(0.5, 2.0) : intact ? 2.6 : r.range(2.0, 2.6);
+        if (ruin) { const [rx0, , rz0] = P(lx, 0, 0); broken.push({ x: rx0, z: rz0, rot, top, sw }); }
         if (sg === door) { // doorway with a heavy lintel
           walls.push(xf(new THREE.BoxGeometry(sw, 0.5, 0.5), P(lx, 2.35, 0), [0, rot, 0]));
           timber.push(xf(new THREE.BoxGeometry(sw + 0.3, 0.22, 0.56), P(lx, 2.1, 0), [0, rot, 0]));
-          dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
+          if (intact) dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
           if (intact) {
             const out = Math.sign(cz || cx) || 1, dw = sw - 0.25;
             timber.push(xf(new THREE.BoxGeometry(dw, 1.95, 0.07), P(lx, 1.0, 0.27 * out), [0, rot, 0]));
@@ -1088,7 +1277,7 @@ export class World {
           timber.push(xf(new THREE.BoxGeometry(sw * 0.8, 0.12, 0.6), P(lx, 1.02, 0), [0, rot, 0]));
           timber.push(xf(new THREE.BoxGeometry(sw * 0.9, 0.16, 0.58), P(lx, 1.95, 0), [0, rot, 0]));
           for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.08, 0.95, 0.56), P(lx + sx * sw * 0.34, 1.48, 0), [0, rot, 0]));
-          (intact ? glass : dark).push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
+          if (intact) glass.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
           if (intact) { timber.push(xf(new THREE.BoxGeometry(0.06, 0.9, 0.14), P(lx, 1.48, 0), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.06, 0.14), P(lx, 1.62, 0), [0, rot, 0])); }
           // shutters: thrown open, one hanging by a hinge, one sometimes fallen
           for (const sx of [-1, 1]) {
@@ -1135,8 +1324,13 @@ export class World {
     // gable ends and roof timbers
     if (intact) {
       for (const sz of [-1, 1]) { const gb = new THREE.BufferGeometry(); const hw = w / 2;
-        gb.setAttribute('position', new THREE.Float32BufferAttribute([-hw, eave, sz * dpt / 2, hw, eave, sz * dpt / 2, 0, eave + 2.6, sz * dpt / 2], 3)); gb.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0.5, 0.5], 2)); gb.setIndex([0, 1, 2]); gb.computeVertexNormals(); plaster.push(gb); }
-      timber.push(xf(new THREE.BoxGeometry(0.24, 0.24, dpt + 1.2), [0, eave + 2.6, 0]));
+        const gz = sz * (dpt / 2 + 0.44); gb.setAttribute('position', new THREE.Float32BufferAttribute([-hw, eave, gz, hw, eave, gz, 0, eave + 2.6, gz], 3)); gb.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0.5, 0.5], 2)); gb.setIndex([0, 1, 2]); gb.computeVertexNormals(); plaster.push(gb); }
+      timber.push(xf(new THREE.BoxGeometry(0.24, 0.24, dpt + 1.4), [0, eave + 2.6, 0]));
+      // where the jetty runs out past the side walls, the corners of the upper storey are closed with a panel and a post
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        plaster.push(xf(new THREE.BoxGeometry(0.24, eave - 2.6, 0.62), [sx * w / 2, (eave + 2.6) / 2, sz * (dpt / 2 + 0.27)]));
+        timber.push(xf(new THREE.BoxGeometry(0.22, eave - 2.5, 0.22), [sx * w / 2, (eave + 2.6) / 2, sz * (dpt / 2 + 0.5)]));
+      }
     }
     const rafters = intact ? 7 : 5, rise = 2.6, slope = Math.atan2(rise, w / 2), rlen = Math.hypot(w / 2, rise) + 0.5;
     const roofs = [];
@@ -1156,23 +1350,40 @@ export class World {
     }
     // a standing house is roofed whole: deep thatch with a ridge roll, or slates/shingles with a wooden gutter
     if (intact && roofKind === 'thatch') {
-      for (const sx of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(rlen + 0.9, 0.42, dpt + 1.3), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.28, 0], [0, 0, -sx * slope]));
-      thatch.push(xf(new THREE.CylinderGeometry(0.3, 0.3, dpt + 1.4, 10), [0, eave + rise + 0.42, 0], [PI / 2, 0, 0]));
+      for (const sx of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(rlen + 0.9, 0.42, dpt + 1.9), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.28, 0], [0, 0, -sx * slope]));
+      thatch.push(xf(new THREE.CylinderGeometry(0.3, 0.3, dpt + 2.0, 10), [0, eave + rise + 0.42, 0], [PI / 2, 0, 0]));
       for (const sz of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(w + 0.8, 0.3, 0.5), [0, eave + 0.05, sz * (dpt / 2 + 0.5)], [0, 0, 0], [1, 1, 1]));
     } else if (intact) {
       for (const sx of [-1, 1]) {
-        slate.push(xf(new THREE.BoxGeometry(rlen + 0.5, 0.1, dpt + 0.9), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.17, 0], [0, 0, -sx * slope]));
-        timber.push(xf(new THREE.CylinderGeometry(0.09, 0.09, dpt + 0.9, 8, 1, true, 0, PI), [sx * (w / 2 + 0.45), eave - 0.08, 0], [PI / 2, 0, sx < 0 ? 0 : PI]));   // the gutter
+        slate.push(xf(new THREE.BoxGeometry(rlen + 0.5, 0.1, dpt + 1.7), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.17, 0], [0, 0, -sx * slope]));
+        timber.push(xf(new THREE.CylinderGeometry(0.09, 0.09, dpt + 1.7, 8, 1, true, 0, PI), [sx * (w / 2 + 0.45), eave - 0.08, 0], [PI / 2, 0, sx < 0 ? 0 : PI]));   // the gutter
       }
-      slate.push(xf(new THREE.BoxGeometry(0.3, 0.18, dpt + 1.0), [0, eave + rise + 0.18, 0]));   // ridge tiles
+      slate.push(xf(new THREE.BoxGeometry(0.3, 0.18, dpt + 1.8), [0, eave + rise + 0.18, 0]));   // ridge tiles
     }
-    // what is left of the roof of a burnt house: shingled panels on the rafters, with holes burnt through
-    if (!intact && r() < 0.5) {
-      for (const sx of [-1, 1]) for (let k = 0; k < 6; k++) {
-        if (r() < 0.3) continue;
-        const lz = -dpt / 2 - 0.3 + (k + 0.5) * (dpt + 0.6) / 6;
-        const len = rlen * r.range(0.55, 1), off = (rlen - len) * (r() < 0.5 ? 0.5 : 0);
-        roofs.push(xf(new THREE.BoxGeometry(len, 0.08, (dpt + 0.6) / 6 + 0.02), [sx * (w / 4 + Math.cos(slope) * off * 0.5), eave + rise / 2 + 0.17 - Math.sin(slope) * off * 0.5, lz], [0, 0, -sx * slope]));
+    // a burnt house's roof has come down: charred panels of it slid in off the wall tops and lying against them,
+    // and shingles strewn over the floor and out round the walls
+    if (!intact) {
+      for (const sx of [-1, 1]) for (let k = 0; k < 5; k++) {
+        if (r() < 0.35) continue;
+        const lz = -dpt / 2 + (k + 0.5) * dpt / 5 + r.range(-0.3, 0.3), top = r.range(1.0, 2.0), len = r.range(2.0, 3.4);
+        const lean = Math.asin(clamp((top - 0.08) / len, 0.15, 0.95));
+        roofs.push(xf(new THREE.BoxGeometry(len, 0.08, dpt / 5 + r.range(-0.2, 0.3)), [sx * (w / 2 - 0.3 - Math.cos(lean) * len / 2), top / 2 + 0.06, lz], [r.range(-0.08, 0.08), r.range(-0.15, 0.15), sx * lean]));
+      }
+      for (let k = 0; k < 40; k++) {
+        const out = r() < 0.4, lx = out ? (r() < 0.5 ? -1 : 1) * (w / 2 + r.range(0.4, 1.8)) : r.range(-w / 2 + 0.4, w / 2 - 0.4), lz = r.range(-dpt / 2 - (out ? 1.5 : -0.4), dpt / 2 + (out ? 1.5 : -0.4));
+        const [px, pz] = toW(lx, lz), gy0 = out ? this.heightAt(px, pz) - y : 0;
+        roofs.push(xf(new THREE.BoxGeometry(r.range(0.18, 0.3), 0.025, r.range(0.12, 0.22)), [lx, gy0 + 0.02 + r() * 0.04, lz], [r.range(-0.3, 0.3), r() * TAU, r.range(-0.3, 0.3)]));
+      }
+    }
+    // rubble: stone fallen from each broken stretch of wall, heaped at its foot inside and out, the heap highest
+    // under the break
+    for (const b of broken) {
+      for (let k = 0; k < 9; k++) {
+        const side = k % 2 ? 1 : -1, c = Math.cos(b.rot), s2 = Math.sin(b.rot);
+        const along = r.range(-b.sw * 0.7, b.sw * 0.7), off = side * r.range(0.35, 1.3), lx = b.x + along * c + off * s2, lz = b.z - along * s2 + off * c;
+        const [px, pz] = toW(lx, lz), inside = Math.abs(lx) < w / 2 && Math.abs(lz) < dpt / 2, gy0 = inside ? 0.1 : this.heightAt(px, pz) - y;
+        const sz = r.range(0.16, 0.36) * (1.3 - Math.abs(off) * 0.4), st = lumpy(icoSmooth(1), 0.32, 900 + k + Math.floor(b.x * 10));
+        walls.push(xf(st, [lx, gy0 + sz * 0.3, lz], [r() * 3, r() * 3, r() * 3], [sz, sz * r.range(0.55, 0.85), sz * r.range(0.8, 1.2)]));
       }
     }
     // chimney stack at one end
@@ -1181,7 +1392,12 @@ export class World {
     for (let k = 0; k < 4; k++) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)), [r.range(-w / 3, w / 3), 0.2, r.range(-dpt / 3, dpt / 3)], [r.range(-0.08, 0.08), r() * TAU, r.range(-0.08, 0.08)]));
     for (let k = 0; k < 14; k++) { const sz = r.range(0.2, 0.55), lx = r.range(-w / 2 - 1.2, w / 2 + 1.2), lz = r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2); const inside = Math.abs(lx) < w / 2 + 0.35 && Math.abs(lz) < dpt / 2 + 0.35; const [px, pz] = toW(lx, lz); walls.push(xf(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), [lx, sz * 0.2 + (inside ? 0 : this.heightAt(px, pz) - y), lz], [r() * 0.4, r() * 3, r() * 0.4])); }
     // the yard: barrels, crates, a woodpile against the wall, a cart, a fence
-    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind });
+    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind, toW, y });
+    // a burnt house still burning: a fire in the wreck on its floor; or its timbers heaped and smouldering
+    if (!intact && !big) {
+      const lx = r.range(-w / 4, w / 4), lz = r.range(-dpt / 4, dpt / 4), [px, pz] = toW(lx, lz);
+      ((r() < 0.6 ? this.fireSpots : this.charSpots) || []).push({ x: px, y: y + 0.12, z: pz, s: r.range(0.8, 1.15), yaw: yaw + r() * TAU });
+    }
     const B = this.buildingMats();
     const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
     for (const [list, m, tile] of [[walls, B.stone, 1.6], [timber, intact ? B.oak : B.charred, 1.1], [plaster, B.plaster, 2.0], [dark, voidMat, 1], [roofs, B.shingleBurnt, 2.2],
@@ -1220,7 +1436,7 @@ export class World {
     if (r() < 0.28) {
       const wx = r.range(-w / 2, w / 2), wz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 3.2);
       St.push(xf(new THREE.CylinderGeometry(0.85, 0.9, 0.85, 18, 1, true), [wx, 0.42, wz])); St.push(xf(new THREE.TorusGeometry(0.86, 0.1, 6, 20), [wx, 0.85, wz], [PI / 2, 0, 0]));
-      Wt.push(xf(new THREE.CircleGeometry(0.78, 18), [wx, 0.25, wz], [-PI / 2, 0, 0]));
+      if (X.toW) { const [px, pz] = X.toW(wx, wz); (this.wells || (this.wells = [])).push({ x: px, z: pz, y: X.y + gy(wx, wz), r: 0.76, top: 0.85 }); }
       for (const sx of [-1, 1]) T.push(xf(new THREE.BoxGeometry(0.14, 1.9, 0.14), [wx + sx * 0.92, 0.95, wz]));
       T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 1.9, 8), [wx, 1.6, wz], [0, 0, PI / 2])); T.push(xf(new THREE.BoxGeometry(0.05, 0.3, 0.05), [wx + 1.05, 1.45, wz]));
       I.push(xf(new THREE.CylinderGeometry(0.008, 0.008, 0.9, 4), [wx, 1.15, wz])); T.push(xf(new THREE.CylinderGeometry(0.15, 0.12, 0.25, 10), [wx, 0.62, wz]));
@@ -1307,8 +1523,9 @@ export class World {
     // before the west door: the village well under its little roof, and a preaching cross on its steps
     const gyC = (lx, lz) => this.heightAt(x + lx * C0 + lz * S0, z - lx * S0 + lz * C0) - y;
     { const wx = -6, wz = L / 2 + 9, wy = gyC(wx, wz);
-      parts.push(xf(new THREE.CylinderGeometry(1.0, 1.1, 0.9, 14, 1, true), [wx, wy + 0.45, wz]), xf(new THREE.TorusGeometry(1.02, 0.12, 6, 16), [wx, wy + 0.9, wz], [PI / 2, 0, 0]));
-      parts.push(xf(new THREE.CylinderGeometry(1.15, 1.2, 0.3, 14), [wx, wy - 0.1, wz]));
+      parts.push(xf(new THREE.CylinderGeometry(1.0, 1.1, 0.9, 18, 1, true), [wx, wy + 0.45, wz]), xf(new THREE.TorusGeometry(0.98, 0.13, 6, 20), [wx, wy + 0.9, wz], [PI / 2, 0, 0]));
+      parts.push(xf(new THREE.CylinderGeometry(1.15, 1.2, 0.3, 18, 1, true), [wx, wy - 0.1, wz]), xf(new THREE.RingGeometry(1.0, 1.16, 18), [wx, wy + 0.05, wz], [-PI / 2, 0, 0]));
+      (this.wells || (this.wells = [])).push({ x: x + wx * C0 + wz * S0, z: z - wx * S0 + wz * C0, y: y + wy, r: 0.9, top: 0.9 });
       const cx = 6, cz = L / 2 + 10, cy = gyC(cx, cz);
       for (let k = 0; k < 3; k++) parts.push(xf(new THREE.BoxGeometry(2.4 - k * 0.6, 0.3, 2.4 - k * 0.6), [cx, cy + 0.15 + k * 0.3 - 0.15, cz]));
       parts.push(xf(new THREE.BoxGeometry(0.3, 3.2, 0.3), [cx, cy + 2.35, cz]), xf(new THREE.BoxGeometry(1.3, 0.28, 0.28), [cx, cy + 3.2, cz]));
@@ -1532,6 +1749,8 @@ export class World {
   }
 
   // ---------------------------------------------------------------- grass
+  // somewhere nothing grows up through: a building's floor, the paved street, a well's mouth
+  blocked(x, z) { return !!this.inFootprint(x, z, 0.4) || this.wells.some((w) => Math.hypot(x - w.x, z - w.z) < w.r + 0.6) || (!!this.paving && this.onPaving(x, z)); }
   buildGrass() {
     const kind = this.ch.terrain.kind; if (kind === 'peak') return;
     const g1 = new THREE.PlaneGeometry(1.0, 0.7); g1.translate(0, 0.33, 0); const g2 = g1.clone(); g2.rotateY(PI / 2);
@@ -1547,6 +1766,7 @@ export class World {
       if (kind === 'fen' && this.heightAt(x, z) < 0.05) continue;
       if (this.normalAt(x, z).y < 0.82 || this.inCaveZone(x, z, 1)) continue;
       if (this.lifeAt(x, z) > 0.5) continue;
+      if (this.blocked(x, z)) continue;
       dead.push({ x, y: this.heightAt(x, z) - 0.05, z, ry: r() * TAU, s: r.range(0.7, 1.3) });
     }
     this.instanced(geo, deadMat, dead, { shadow: false });
@@ -1558,7 +1778,7 @@ export class World {
       for (let k = 0; k < per; k++) {
         const ang = r() * TAU, d = Math.sqrt(r()) * 34; const x = a.x + Math.cos(ang) * d, z = a.z + Math.sin(ang) * d;
         if (!this.inBounds(x, z) || (kind === 'fen' && this.heightAt(x, z) < 0.0)) continue;
-        if (Math.hypot(x - a.x, z - a.z) < 3.2) continue;
+        if (Math.hypot(x - a.x, z - a.z) < 3.2 || this.blocked(x, z)) continue;
         list.push({ x, y: this.heightAt(x, z) - 0.04, z, ry: r() * TAU, s: 0.0001, target: r.range(0.8, 1.5), d, altar: a });
       }
     }
@@ -1567,7 +1787,7 @@ export class World {
       const n0 = list.length, want = Math.floor(5000 * this.q.grass);
       for (let k = 0; k < want * 2 && list.length - n0 < want; k++) {
         const x = r.range(-HALF + 6, HALF - 6), z = r.range(-HALF + 4, -95);
-        if (this.lifeAt(x, z) < 0.6 || this.normalAt(x, z).y < 0.8) continue;
+        if (this.lifeAt(x, z) < 0.6 || this.normalAt(x, z).y < 0.8 || this.blocked(x, z)) continue;
         const s = r.range(0.8, 1.5); list.push({ x, y: this.heightAt(x, z) - 0.04, z, ry: r() * TAU, s, target: s, d: 0, altar: null });
       }
     }
@@ -1675,6 +1895,8 @@ export class World {
     }
     if (grassDirty) this.aliveMesh.instanceMatrix.needsUpdate = true;
     if (leavesDirty) this.leaves.mesh.instanceMatrix.needsUpdate = true;
+    if (this.sparks) this.sparks.uTime.value = this.time;
+    if (this.emberMat) this.emberMat.emissiveIntensity = 1.5 + Math.sin(this.time * 2.3) * 0.25 + Math.sin(this.time * 7.1) * 0.15;
     // village fires: nearest few get lights
     if (this.fires.length && camPos) {
       const near = this.fires.map((f) => [f, (f.x - camPos.x) ** 2 + (f.z - camPos.z) ** 2]).sort((a, b) => a[1] - b[1]);

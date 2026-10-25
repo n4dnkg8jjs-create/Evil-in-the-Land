@@ -654,3 +654,55 @@ export function leadedGlassTextures(size = 256) {
   }
   const out = pack(H, A, s, 2.0, (i) => M[i], false); cache.set(k, out); return out;
 }
+
+// street setts: squared granite stones laid in staggered courses, their tops worn round, mud and moss in the joints
+export function settsTextures(size = 512) {
+  const k = 'setts' + size; if (cache.has(k)) return cache.get(k);
+  const s = size, H = new Float32Array(s * s), A = new Float32Array(s * s * 3), rows = 8, cols = 6;
+  const hsh = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
+  const R = new Float32Array(s * s);
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s, i = y * s + x;
+    const row = Math.floor(v * rows), off = (row % 2) * 0.5, cu = u * cols + off, col = Math.floor(cu), cid = ((col % cols) + cols) % cols;
+    const j1 = hsh(cid, row), j2 = hsh(cid + 7, row + 3), j3 = hsh(cid + 13, row + 11);
+    const fu = cu - col, fv = v * rows - row;
+    const dx = (fu - 0.5 - (j1 - 0.5) * 0.06) / (0.44 + j2 * 0.04), dy = (fv - 0.5) / (0.42 + j3 * 0.05);
+    const d = Math.max(Math.abs(dx), Math.abs(dy)) * 0.7 + Math.hypot(dx, dy) * 0.3;
+    const n = tn.fbm(u, v, 16, 4), fine = tn.fbm(u, v, 64, 3);
+    const stone = smooth(clamp((1 - d) * 6, 0, 1)), dome = Math.sqrt(Math.max(0, 1 - Math.min(1, d) ** 2));
+    const chip = smooth(clamp((tn.fbm(u + 0.3, v, 24, 3) - 0.68) * 8, 0, 1)) * stone;
+    H[i] = stone > 0.01 ? lerp(0.12, 0.38 + dome * 0.4 + n * 0.08 + fine * 0.04 - chip * 0.15, stone) : 0.1 + fine * 0.06;
+    const tint = 0.78 + j1 * 0.3, warm = j2 * 0.12;
+    const st = [118 * tint * (1 + warm), 114 * tint, 108 * tint * (1 - warm)].map((q) => q * (0.85 + n * 0.25 + fine * 0.1) * (0.8 + dome * 0.25));
+    const moss = smooth(clamp((tn.fbm(u + 0.6, v + 0.2, 6, 3) - 0.48) * 4, 0, 1));
+    const joint = [46, 40, 32].map((q, jj) => lerp(q * (0.8 + fine * 0.4), [40, 52, 22][jj], moss * 0.7));
+    A.set(st.map((q, jj) => lerp(joint[jj], q, stone)), i * 3);
+    R[i] = lerp(0.97, 0.62 - dome * 0.18, stone);   // the worn tops polished smooth
+  }
+  const out = pack(H, A, s, 3.2, (i) => R[i], true); cache.set(k, out); return out;
+}
+
+// charred timber still burning inside: black, cracked across the grain into blocks ("alligatored"), silvered with
+// ash on the tops, and in the cracks the red of the fire. emissiveMap carries the glow.
+export function emberWoodTextures(size = 256) {
+  const k = 'emberwood' + size; if (cache.has(k)) return cache.get(k);
+  const s = size, H = new Float32Array(s * s), A = new Float32Array(s * s * 3), E = new Float32Array(s * s);
+  const hsh = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const u = x / s, v = y / s, i = y * s + x;
+    const cols = 5, colF = u * cols, col = Math.floor(colF), rows = 9, rowF = v * rows + hsh(col % cols, 1) * 0.9, row = Math.floor(rowF);
+    const fu = colF - col, fv = rowF - row, edge = Math.min(fu, 1 - fu, fv * 0.55, (1 - fv) * 0.55);
+    const crack = 1 - smooth(clamp(edge / 0.07, 0, 1)), grain = Math.abs(Math.sin(u * 90 + tn.fbm(u, v, 6, 3) * 6)) * 0.5;
+    const n = tn.fbm(u, v, 12, 4), blk = hsh(col % cols, row % rows);
+    H[i] = 0.55 + (1 - crack) * 0.3 * (0.6 + blk * 0.4) - grain * 0.06 + n * 0.08 - crack * 0.4;
+    const ash = smooth(clamp((n - 0.5) * 3, 0, 1)) * (1 - crack) * 0.55;
+    const c = [22, 18, 16].map((q) => q * (0.7 + blk * 0.6 + grain * 0.4));
+    A.set(c.map((q) => lerp(q, 120, ash)), i * 3);
+    E[i] = crack * (0.35 + 0.65 * smooth(clamp((tn.fbm(u + 0.2, v, 5, 3) - 0.35) * 2.2, 0, 1)));
+  }
+  const out = pack(H, A, s, 4.0, (i) => 0.82 + E[i] * 0.1, true);
+  const ec = canvas(s), ex = ec.getContext('2d'), img = ex.createImageData(s, s);
+  for (let i = 0; i < s * s; i++) { const e = E[i]; img.data[i * 4] = clamp(e * 255, 0, 255); img.data[i * 4 + 1] = clamp(e * e * 120, 0, 255); img.data[i * 4 + 2] = clamp(e * e * e * 30, 0, 255); img.data[i * 4 + 3] = 255; }
+  ex.putImageData(img, 0, 0); out.emissiveMap = tex(ec);
+  cache.set(k, out); return out;
+}
