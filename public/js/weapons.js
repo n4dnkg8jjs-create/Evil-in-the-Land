@@ -97,7 +97,7 @@ function weaponMats(q) {
     // the relics: real gilt (warm, a little worn), silver, the old dark steel of the Lance, blackened steel with gilt
     gold: new THREE.MeshStandardMaterial({ color: 0xd8b062, metalness: 1, roughness: 0.3, roughnessMap: steel.roughnessMap, normalMap: steel.normalMap, normalScale: new THREE.Vector2(0.15, 0.15), envMapIntensity: 1.5 }),
     silver: new THREE.MeshStandardMaterial({ color: 0xdfe2e6, metalness: 1, roughness: 0.26, roughnessMap: steel.roughnessMap, normalMap: steel.normalMap, normalScale: new THREE.Vector2(0.2, 0.2), envMapIntensity: 1.4 }),
-    oldsteel: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, color: 0xb0a89e, metalness: 0.75, roughness: 0.62, envMapIntensity: 1.6, normalScale: new THREE.Vector2(0.5, 0.5) }),
+    oldsteel: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, color: 0xd2ccc4, metalness: 0.9, roughness: 0.42, envMapIntensity: 1.6, normalScale: new THREE.Vector2(0.5, 0.5) }),
     black: new THREE.MeshStandardMaterial({ map: steel.map, normalMap: steel.normalMap, roughnessMap: steel.roughnessMap, color: 0x4a4644, metalness: 1, roughness: 0.6, envMapIntensity: 1.4, normalScale: new THREE.Vector2(0.4, 0.4) }),
     relic: new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffd890, emissiveIntensity: 1.2, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.9 }),
   };
@@ -220,7 +220,7 @@ const BUILD = {
     for (let i = 0; i < 5; i++) gold.push(xf(new THREE.TorusGeometry(0.0158 - i * 0.0004, 0.0012, 4, 12), [0, 1.735 + i * 0.004, 0], [PI / 2, 0, 0]));
     // the leaf: narrow neck, widest a third of the way up, a long fine point
     const Y0 = 1.78, LEN = 0.52;
-    const lw = (t) => t < 0.36 ? 0.007 + 0.025 * Math.sin((t / 0.36) * PI / 2) : 0.032 * Math.pow((1 - t) / 0.64, 0.9);
+    const lw = (t) => t < 0.3 ? 0.006 + 0.016 * Math.sin((t / 0.3) * PI / 2) : 0.022 * Math.pow((1 - t) / 0.7, 1.15);
     oldsteel.push(xf(shapedBlade(LEN, lw, (t) => 0.0034 * (1 - 0.5 * t), { rib: 1.9 }), [0, Y0, 0]));
     // the two little wings at its foot, flattened in the blade's plane
     for (const sd of [-1, 1]) {
