@@ -321,16 +321,42 @@ const RENDER = {
     return normalize(await ctx.startRendering(), 0.8);
   },
   // thunder: a crack, then the long roll across the hills
+  // thunder, synthesised sample by sample. Near: the air tearing open, a ripping crackle that runs on for most of a
+  // second, a great low boom under it, then the roll. Far: no crack, only the roll, coming late and from low down.
+  // The roll is brown noise through a low-pass that closes as the sound travels, swelling and sinking in uneven surges
+  // (each a fast rise and a long fall), with a grumbling middle band that flutters over it, and a long tail.
   async thunder(near) {
-    const dur = 6 + R() * 2; const ctx = off(dur);
-    const n = src(ctx, noiseBuf(ctx, dur, 'brown')); const lp = filt(ctx, 'lowpass', near ? 900 : 300, 0.5);
-    const g = ctx.createGain(); g.gain.setValueAtTime(0, 0);
-    let t = near ? 0.0 : 0.3; const rolls = 4 + Math.floor(R() * 4);
-    for (let i = 0; i < rolls; i++) { const a = (1 - i / rolls) * (0.6 + R() * 0.4); g.gain.linearRampToValueAtTime(a, t + 0.15 + R() * 0.2); t += 0.4 + R() * 0.9; g.gain.linearRampToValueAtTime(a * 0.4, t); }
-    g.gain.linearRampToValueAtTime(0, dur);
-    n.connect(lp).connect(g).connect(ctx.destination); n.start();
-    if (near) { const c = src(ctx, noiseBuf(ctx, 0.5)); const hp = filt(ctx, 'highpass', 1200); const cg = gainEnv(ctx, [[0, 0], [0.005, 1.4], [0.35, 0.0001, 'e']]); c.connect(hp).connect(cg).connect(ctx.destination); c.start(); }
-    return normalize(await ctx.startRendering(), 0.9);
+    const dur = near ? 10 + R() * 2 : 8 + R() * 3, N = Math.floor(dur * SR), out = new Float32Array(N);
+    const swells = []; const t0 = near ? 0.12 : 0.35 + R() * 0.6, ns = 5 + Math.floor(R() * 5);
+    let tt = t0; for (let i = 0; i < ns; i++) { swells.push({ t: tt, up: 0.12 + R() * 0.3, down: 0.6 + R() * 1.6, a: (1 - i / ns * 0.6) * (0.45 + R() * 0.6) }); tt += 0.35 + R() * 1.1; }
+    const env = (t) => { let e = 0; for (const s of swells) { const d = t - s.t; e += s.a * Math.exp(-((d / (d < 0 ? s.up : s.down)) ** 2)); } return e * Math.exp(-Math.max(0, t - t0) / (near ? 6.5 : 6.5)); };
+    let br = 0, l1 = 0, l2 = 0, m1 = 0, m2 = 0, fl = 0, fl2 = 0;
+    const k = (fc) => 1 - Math.exp(-2 * Math.PI * fc / SR);
+    const kM1 = k(520), kM2 = k(140), kF = k(3);
+    for (let i = 0; i < N; i++) {
+      const t = i / SR, w = R() * 2 - 1;
+      br = (br + 0.03 * w) * 0.9985;                                   // brown noise
+      const fc = near ? 1100 * Math.exp(-t / 1.4) + 110 : 380 * Math.exp(-t / 2.5) + 80;
+      const kk = k(fc); l1 += kk * (br - l1); l2 += kk * (l1 - l2);    // the roll: low and closing
+      m1 += kM1 * (w - m1); m2 += kM2 * (w - m2);                      // a middle band, for the grumble
+      fl += kF * ((R() * 2 - 1) - fl); fl2 += kF * (fl - fl2);         // and its flutter
+      const e = env(t);
+      out[i] = l2 * 9 * e + (m1 - m2) * 0.35 * e * Math.min(1, Math.abs(fl2) * 40) * (near ? 1 : 0.5);
+    }
+    if (near) {
+      // the crack: the main report, then a tearing crackle of smaller ones running on and thinning out
+      const cracks = [{ t: 0, a: 1.0, d: 0.02 }]; let ct = 0.012;
+      for (let j = 0; j < 46; j++) { cracks.push({ t: ct, a: (0.9 - j / 60) * (0.5 + R() * 0.5), d: 0.003 + R() * 0.012 }); ct += 0.004 + Math.pow(j / 46, 1.8) * 0.05 * (0.5 + R()); }
+      for (const c of cracks) {
+        const i0 = Math.floor(c.t * SR), len = Math.floor(c.d * 6 * SR); let prev = 0;
+        for (let i = 0; i < len && i0 + i < N; i++) { const w = R() * 2 - 1, hp = w - prev * 0.6; prev = w; out[i0 + i] += hp * c.a * 1.05 * Math.exp(-i / (c.d * SR)); }
+      }
+      // the boom under it: a falling low thud with body
+      let ph = 0; const nb = Math.floor(3.5 * SR);
+      for (let i = 0; i < nb && i < N; i++) { const t = i / SR, f = 75 * Math.exp(-t / 0.5) + 32; ph += 2 * Math.PI * f / SR; out[i] += Math.sin(ph) * 0.9 * Math.min(1, t / 0.015) * Math.exp(-t / 1.1); }
+    }
+    const ctx = off(dur), buf = ctx.createBuffer(1, N, SR); buf.copyToChannel(out, 0);
+    return normalize(buf, 0.95);
   },
   // horror strings: a cluster of high violins bowed hard near the bridge, sliding apart
   async cluster() {
@@ -407,7 +433,7 @@ export class AudioEngine {
     to(L.squelch, () => RENDER.squelch(false), 4); to(L.squelchDeep, () => RENDER.squelch(true), 3); to(L.bone, () => RENDER.bone(), 3);
     to(L.screech, () => RENDER.screech(false), 8); to(L.growl, () => RENDER.screech(true), 4); to(L.boom, () => RENDER.boom(), 2);
     to(L.scream, () => RENDER.scream(false), 8); to(L.screamLow, () => RENDER.scream(true), 3); to(L.chatter, () => RENDER.chatter(), 4);
-    to(L.thunder, () => RENDER.thunder(false), 2); to(L.thunderNear, () => RENDER.thunder(true), 2);
+    to(L.thunder, () => RENDER.thunder(false), 3); to(L.thunderNear, () => RENDER.thunder(true), 3);
     to(L.cluster, () => RENDER.cluster(), 3); to(L.drone, () => RENDER.drone(), 2); to(L.breath, () => RENDER.breath(), 3); to(L.scrape, () => RENDER.scrape(), 3);
     tasks.push(async () => { L.bells.low = await RENDER.bell(110); }, async () => { L.bells.mid = await RENDER.bell(220); });
     tasks.push(async () => { L.drums.low = await RENDER.drum(55); });
@@ -517,7 +543,7 @@ export class AudioEngine {
   }
   chatter(pos, gain = 0.4) { const now = performance.now(); if (now - (this.lastChatter || 0) < 600) return; this.lastChatter = now; this.play('chatter', pos, gain, 0.35, 0.9 + R() * 0.25); }
   thunder(strength = 1, delay = 2) {
-    setTimeout(() => { const near = strength > 0.8; if (!this.play(near ? 'thunderNear' : 'thunder', null, 0.55 * strength, 0.4, 0.85 + R() * 0.3)) this.liveBoom(null, 0.5 * strength); }, delay * 1000);
+    setTimeout(() => { const near = strength > 0.8; if (!this.play(near ? 'thunderNear' : 'thunder', null, (near ? 0.95 : 0.7) * Math.min(1.2, strength), 0.55, 0.92 + R() * 0.16)) this.liveBoom(null, 0.5 * strength); }, delay * 1000);
   }
   // unpositioned stingers that live under the music
   stinger(kind, gain = 0.35) {
