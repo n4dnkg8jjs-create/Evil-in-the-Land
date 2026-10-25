@@ -100,6 +100,7 @@ function buildMenuScene() {
   // the title has a stage of its own (see menu_scene.js): the five round the cross, the horde, the light
   menu.stage = new MenuStage(e, e.q); menu.world = menu.stage;
   menu.altar = menu.stage.altar;
+  if (menu.stage.world.vista) menu.stage.world.vista.onThunder = (str, delay) => app.audio.thunder(str, delay);
   makeMenuKnight();
   app.audio.music?.setMood('menu');
 }
@@ -108,7 +109,7 @@ function makeMenuKnight() {
   if (menu.knight) menu.knight.dispose();
   // the player's own knight, shown in the lobby, standing on the paving in front of the altar
   const k = menu.knight = new Knight(e.scene, e.q, app.loadout, { id: 0, name: '' });
-  k.pos.set(0, 0, 3.4); k.yaw = 0;
+  k.pos.copy(menu.stage.lobbyPos); k.yaw = menu.stage.lobbyYaw;
 }
 function menuUpdate(dt) {
   const e = app.engine, k = menu.knight, S = menu.stage; menu.t += dt;
@@ -118,6 +119,7 @@ function menuUpdate(dt) {
   const c = e.camera;
   if (lobby) {
     const inp = { mx: 0, mz: 0, aimYaw: k.yaw, sprint: false, block: false, pray: false, attack: false, heavy: false, dodge: false, relic: false };
+    S.world.update(dt, c.position);
     k.simulate(dt, inp, S.W);
     if (!k.action && Math.random() < dt * 0.25) k.tryAttack(Math.random() < 0.3);
     k.events.length = 0; k.animate(dt, S.W);
@@ -128,7 +130,7 @@ function menuUpdate(dt) {
     e.focusShadows(p);
   } else {
     S.update(dt, c.position); S.camera(c, dt);
-    e.focusShadows(new THREE.Vector3(0, 0, 0));
+    e.focusShadows(S.focus);
   }
   app.audio.update(dt);
   e.render(dt);
