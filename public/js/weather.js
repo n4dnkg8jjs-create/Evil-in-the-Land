@@ -31,7 +31,7 @@ const CLIMATE = {
 };
 
 // ---------------------------------------------------------------- the falling streaks/flakes
-function precipitation(max) {
+export function precipitation(max) {
   const base = new THREE.PlaneGeometry(1, 1); base.translate(0, 0.5, 0);
   const g = new THREE.InstancedBufferGeometry(); g.index = base.index; g.setAttribute('position', base.attributes.position); g.setAttribute('uv', base.attributes.uv);
   const seed = new Float32Array(max * 4); for (let i = 0; i < max; i++) { seed[i * 4] = R(); seed[i * 4 + 1] = R(); seed[i * 4 + 2] = R(); seed[i * 4 + 3] = i / max; }
@@ -39,7 +39,7 @@ function precipitation(max) {
   const U = { uCam: { value: new THREE.Vector3() }, uTime: { value: 0 }, uAmt: { value: 0 }, uSnow: { value: 0 }, uWind: { value: new THREE.Vector2() },
     uHeight: { value: null }, uHalf: { value: 150 }, uN: { value: 257 }, uLight: { value: new THREE.Color(1, 1, 1) } };
   const m = new THREE.ShaderMaterial({
-    uniforms: U, transparent: true, depthWrite: false, fog: false,
+    uniforms: U, transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
     vertexShader: `
       uniform vec3 uCam; uniform float uTime, uAmt, uSnow, uHalf, uN; uniform vec2 uWind; uniform sampler2D uHeight;
       attribute vec4 aSeed; varying vec2 vUv; varying float vA;
@@ -54,26 +54,26 @@ function precipitation(max) {
         float fall = mod(aSeed.y * H + uTime * speed, H);
         vec2 xz = uCam.xz + mod(vec2(aSeed.x, aSeed.z) * B - uCam.xz + B * 0.5, B) - B * 0.5;
         float drop = H * 0.55 - fall;
-        vec3 wp = vec3(xz, uCam.y + drop);
+        vec3 wp = vec3(xz.x, uCam.y + drop, xz.y);
         wp.xz += uWind * (drop / speed) * mix(1.0, 3.0, uSnow);
         wp.x += uSnow * sin(uTime * 0.9 + aSeed.x * 40.0) * 0.6; wp.z += uSnow * cos(uTime * 0.7 + aSeed.z * 40.0) * 0.6;
         float ground = hAt(wp.xz);
         if (wp.y < ground) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-        vec3 vel = normalize(vec3(uWind * mix(1.0, 0.2, uSnow), -speed));
+        vec2 wv = uWind * mix(1.0, 0.2, uSnow); vec3 vel = normalize(vec3(wv.x, -speed, wv.y));   // falling (y), blown sideways by the wind (x, z)
         vec3 toCam = normalize(cameraPosition - wp);
         vec3 side = normalize(cross(vel, toCam));
-        float len = mix(0.55 + speed * 0.025, 0.06, uSnow), wid = mix(0.012, 0.06, uSnow);
+        float len = mix(0.55 + speed * 0.025, 0.06, uSnow), wid = mix(0.02, 0.06, uSnow);
         vec3 p = wp + side * (position.x * wid) - vel * (position.y * len) * (1.0 - uSnow) + vec3(0.0, position.y * len, 0.0) * uSnow;
         float d = length(cameraPosition - wp);
-        vA = (1.0 - smoothstep(B * 0.35, B * 0.5, d)) * smoothstep(0.3, 1.2, d);
+        vA = (1.0 - smoothstep(B * 0.35, B * 0.5, d)) * smoothstep(0.9, 2.6, d);
         gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
       }`,
     fragmentShader: `
       uniform float uSnow; uniform vec3 uLight; varying vec2 vUv; varying float vA;
       void main(){
         float x = abs(vUv.x - 0.5) * 2.0;
-        float a = uSnow > 0.5 ? (1.0 - smoothstep(0.3, 1.0, length(vUv - 0.5) * 2.0)) * 0.85 : (1.0 - x) * 0.32 * smoothstep(0.0, 0.3, vUv.y);
-        vec3 c = mix(vec3(0.62, 0.66, 0.72), vec3(0.92, 0.94, 0.98), uSnow) * uLight;
+        float a = uSnow > 0.5 ? (1.0 - smoothstep(0.3, 1.0, length(vUv - 0.5) * 2.0)) * 0.85 : (1.0 - x) * 0.42 * smoothstep(0.0, 0.3, vUv.y);
+        vec3 c = mix(vec3(0.75, 0.79, 0.86), vec3(0.92, 0.94, 0.98), uSnow) * uLight;
         gl_FragColor = vec4(c, a * vA);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -83,14 +83,14 @@ function precipitation(max) {
   return { mesh, U, max };
 }
 // splashes: little crowns of water thrown up where drops land, round the camera
-function splashes(max) {
+export function splashes(max) {
   const base = new THREE.PlaneGeometry(1, 1); base.translate(0, 0.5, 0);
   const g = new THREE.InstancedBufferGeometry(); g.index = base.index; g.setAttribute('position', base.attributes.position); g.setAttribute('uv', base.attributes.uv);
   const seed = new Float32Array(max * 4); for (let i = 0; i < max; i++) { seed[i * 4] = R(); seed[i * 4 + 1] = R(); seed[i * 4 + 2] = R(); seed[i * 4 + 3] = i / max; }
   g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 4)); g.instanceCount = max;
   const U = { uCam: { value: new THREE.Vector3() }, uTime: { value: 0 }, uAmt: { value: 0 }, uHeight: { value: null }, uHalf: { value: 150 }, uN: { value: 257 }, uWaterY: { value: -9999 }, uLight: { value: new THREE.Color(1, 1, 1) } };
   const m = new THREE.ShaderMaterial({
-    uniforms: U, transparent: true, depthWrite: false, fog: false,
+    uniforms: U, transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
     vertexShader: `
       uniform vec3 uCam; uniform float uTime, uAmt, uHalf, uN, uWaterY; uniform sampler2D uHeight;
       attribute vec4 aSeed; varying vec2 vUv; varying float vT, vA;
@@ -100,10 +100,13 @@ function splashes(max) {
         return mix(mix(a, b, t.x), mix(c, d, t.x), t.y); }
       void main(){
         vUv = uv; vA = 0.0; vT = 0.0;
-        if (aSeed.w > uAmt) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-        float rate = 2.2 + aSeed.y * 1.5, cyc = uTime * rate + aSeed.z * 7.0, n = floor(cyc); float t = fract(cyc); vT = t;
-        vec2 off = vec2(hh(vec2(n, aSeed.x * 91.0)), hh(vec2(aSeed.z * 53.0, n))) - 0.5;
-        vec2 xz = uCam.xz + off * 22.0;
+        // each instance owns a fixed patch of ground in the world (a 16 x 16 grid of cells round the camera, wrapping, so
+        // a cell keeps the same instance as you move): every drop lands somewhere new in that patch and stays put there
+        const float C = 1.4; float id = floor(aSeed.w * 256.0 + 0.5); vec2 ij = vec2(mod(id, 16.0), floor(id / 16.0));
+        vec2 base = floor(uCam.xz / C) - 8.0; vec2 cell = base + mod(ij - base, 16.0);
+        float rate = 2.2 + hh(cell * 0.37) * 1.5, cyc = uTime * rate + hh(cell + 3.1) * 7.0, n = floor(cyc); float t = fract(cyc); vT = t;
+        if (hh(cell * 1.7 + n) > uAmt * 0.95 + 0.05) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+        vec2 xz = (cell + vec2(hh(cell + n * 0.71), hh(cell.yx + n * 1.37))) * C;
         float y = max(hAt(xz), uWaterY + 0.02);
         float s = 0.05 + t * 0.12;
         vec3 toCam = normalize(vec3(cameraPosition.x - xz.x, 0.0, cameraPosition.z - xz.y)); vec3 side = vec3(toCam.z, 0.0, -toCam.x);
@@ -215,7 +218,7 @@ export class Weather {
     const H = W.H, N = Math.round(Math.sqrt(H.length));
     this.htex = new THREE.DataTexture(H, N, N, THREE.RedFormat, THREE.FloatType); this.htex.needsUpdate = true;
     this.fall = precipitation(game.engine.q?.post === false ? 3500 : 7000); this.fall.U.uHeight.value = this.htex; this.fall.U.uN.value = N; this.fall.U.uSnow.value = this.cl.snow ? 1 : 0;
-    this.spl = splashes(260); this.spl.U.uHeight.value = this.htex; this.spl.U.uN.value = N;
+    this.spl = splashes(256); this.spl.U.uHeight.value = this.htex; this.spl.U.uN.value = N;
     if (W.waterLevel > -100 && W.water) this.spl.U.uWaterY.value = W.waterLevel;
     game.scene.add(this.fall.mesh); game.scene.add(this.spl.mesh);
     WX.uWet.value = 0; WX.uRain.value = 0; WX.uSnowAcc.value = 0;
