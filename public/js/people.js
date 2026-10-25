@@ -171,7 +171,7 @@ function personMat(look) {
         // hair: fine strands running down the head
         float strand = pn(vec3(vObj.x * 420.0, vObj.y * 30.0, vObj.z * 420.0));
         vec3 hair = uHair * (0.6 + 0.7 * strand);
-        float rH = rS0 * smoothstep(0.15, 0.6, vHair * (0.75 + 0.5 * strand)); float rS = rS0 - rH;
+        float rH = rS0 * smoothstep(0.15, 0.6, vHair * (0.75 + 0.5 * strand)) * (1.0 - uDead); float rS = rS0 - rH;   // the dead one: not a hair on him, not even brows
         vec3 cloth = uCloth * (0.75 + 0.35 * pn(vObj * vec3(160.0, 40.0, 160.0)));
         vec3 shoe = uShoe * (0.8 + 0.4 * pn(vObj * 60.0));
         vec3 eye = texture2D(uEye, vUv0).rgb;
