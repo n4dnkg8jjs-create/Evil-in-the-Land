@@ -435,7 +435,14 @@ export class AudioEngine {
     to(L.squelch, () => RENDER.squelch(false), 4); to(L.squelchDeep, () => RENDER.squelch(true), 3); to(L.bone, () => RENDER.bone(), 3);
     to(L.screech, () => RENDER.screech(false), 8); to(L.growl, () => RENDER.screech(true), 4); to(L.boom, () => RENDER.boom(), 2);
     to(L.scream, () => RENDER.scream(false), 8); to(L.screamLow, () => RENDER.scream(true), 3); to(L.chatter, () => RENDER.chatter(), 4);
-    to(L.thunder, () => RENDER.thunder(false), 3); to(L.thunderNear, () => RENDER.thunder(true), 3);
+    // thunder: real recordings (public/audio/sfx, from Wikimedia Commons, CC BY-SA 4.0: see the credits), the
+    // synthesised kind only if they cannot be had
+    const rec = async (name) => { for (const ext of ['ogg', 'mp3']) { try { const r = await fetch(`audio/sfx/${name}.${ext}`); if (!r.ok) continue; return await this.ctx.decodeAudioData(await r.arrayBuffer()); } catch {} } return null; };
+    tasks.unshift(async () => {
+      const [n1, f1, f2] = await Promise.all([rec('thunder_near'), rec('thunder_far'), rec('thunder_far2')]);
+      if (n1) L.thunderNear.push(n1); else for (let i = 0; i < 2; i++) L.thunderNear.push(await RENDER.thunder(true));
+      if (f1 || f2) { if (f1) L.thunder.push(f1); if (f2) L.thunder.push(f2); } else for (let i = 0; i < 2; i++) L.thunder.push(await RENDER.thunder(false));
+    });
     to(L.cluster, () => RENDER.cluster(), 3); to(L.drone, () => RENDER.drone(), 2); to(L.breath, () => RENDER.breath(), 3); to(L.scrape, () => RENDER.scrape(), 3);
     tasks.push(async () => { L.bells.low = await RENDER.bell(110); }, async () => { L.bells.mid = await RENDER.bell(220); });
     tasks.push(async () => { L.drums.low = await RENDER.drum(55); });
