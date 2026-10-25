@@ -60,7 +60,7 @@ export class MenuStage {
       const { k } = P;
       P.next -= dt; if (P.next <= 0) { P.next = 2 + Math.random() * 4; P.look = Math.random() < 0.5 ? 0 : (Math.random() - 0.5) * 1.0; }
       const aim = this.face - P.s.off * 0.2 + P.look;
-      k.simulate(dt, { mx: 0, mz: 0, aimYaw: aim, sprint: false, block: true, pray: false, attack: false, heavy: false, dodge: false, relic: false }, this.W);
+      k.simulate(dt, { mx: 0, mz: 0, aimYaw: aim, sprint: false, block: false, pray: false, attack: false, heavy: false, dodge: false, relic: false }, this.W);
       k.events.length = 0; k.animate(dt, this.W); k.events.length = 0;
     }
   }
