@@ -17,6 +17,7 @@ import { Dread } from './dread.js';
 import { fallenKnightSpots } from './battlefield.js';
 import { Shop } from './shop.js';
 import { Terror } from './terror.js';
+import { account } from './account.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, rng, TAU } from './util.js';
 
 const DIFF = { pilgrim: { dmg: 0.55, spawn: 0.75, prayer: 0.85 }, knight: { dmg: 1, spawn: 1, prayer: 1 }, martyr: { dmg: 1.4, spawn: 1.3, prayer: 1.15 } };
@@ -67,6 +68,7 @@ export class Game {
 
   // ================================================================ chapters
   loadChapter(n, { skipIntro = false } = {}) {
+    this.chT0 = performance.now();
     this.ui.fade(true);
     this.chapterIdx = n; const ch = CHAPTERS[n];
     if (this.world) this.world.dispose();
@@ -163,7 +165,14 @@ export class Game {
     n.on('k:relic', (m) => this.onRelic(m, false));
     n.on('k:gear', (m) => { const k = this.knights.get(m.id); if (k && k !== this.me) { k.setWeapon(m.weapon, this.engine.q); if (m.maxHp) k.maxHp = m.maxHp; } });
     n.on('k:skip', () => { if (this.cinema.active) this.cinema.finish(); });
-    n.on('left', (m) => { for (const [id, k] of this.knights) if (!k.isAI && !m.players.find((p) => p.id === id)) { k.dispose(); this.knights.delete(id); this.ui.toast(`${k.name} has left the company`); } });
+    n.on('k:kc', () => account.record('kill'));
+    // a knight whose player drops out keeps fighting: a companion takes up their place
+    n.on('left', (m) => { for (const [id, k] of this.knights) if (!k.isAI && k !== this.me && !m.players.find((p) => p.id === id)) this.knightToAI(k); });
+  }
+  knightToAI(k) {
+    k.isAI = true; k.human = false; k.netS = null;
+    if (this.isHost) this.companions.push(new Companion(k, this.companions.length));
+    this.ui.toast(`${k.name} has lost the road. A companion fights on in his harness.`, 3);
   }
   bcast(e, a) { if (this.isHost) { if (!this.opts.solo) this.net.send('ev', { e, a }); this.onEvent(e, a, false); } }
 
@@ -185,8 +194,8 @@ export class Game {
       case 'consecrate': this.consecrations.push({ x: a.x, y: a.y, z: a.z, r: a.r, t: a.t }); break;
       case 'reliquary': this.reliquaryFx(a); break;
       case 'ward': this.wardFx(a); break;
-      case 'outro': this.playOutro(a.n); break;
-      case 'victory': this.victory(); break;
+      case 'outro': this.recordChapter(a.n); this.playOutro(a.n); break;
+      case 'victory': account.record('victory'); this.victory(); break;
       case 'watcher': this.watcherEvent(a.s); break;
     }
   }
@@ -496,7 +505,9 @@ export class Game {
     this.bcast('outro', { n });
     setTimeout(() => { if (this.chapterIdx === n && this.obj.ph === 'outro' && n + 1 < CHAPTERS.length) this.bcast('chapter', { n: n + 1 }); }, 14000);
   }
-  saveProgress(next) { try { const cur = +(localStorage.getItem('evil.progress') || 0); if (next > cur) localStorage.setItem('evil.progress', String(Math.min(next, CHAPTERS.length - 1))); } catch {} }
+  saveProgress(next) { if (next > account.get('evil.progress', 0)) account.set('evil.progress', Math.min(next, CHAPTERS.length - 1)); }
+  // every knight's own profile keeps what they did (host and guests alike)
+  recordChapter(n) { account.record('chapterDone', { idx: n, next: Math.min(n + 1, CHAPTERS.length - 1), secs: this.chT0 ? (performance.now() - this.chT0) / 1000 : 0 }); }
 
   hostRespawn() {
     const o = this.obj; const cp = o.checkpoint !== null ? this.world.altars[o.checkpoint] : null;
@@ -651,7 +662,7 @@ export class Game {
         if (kind === 'pierce' && d.def.big) dmg *= 1.15;
         const dir = new THREE.Vector3(d.pos.x - k.pos.x, 0, d.pos.z - k.pos.z).normalize();
         this.onWeaponHit(k, hitP, kind, d.def.big ? 1.2 : 1, dir, false, d, d.hp - dmg <= 0);
-        if (this.isHost) { if (d.takeHit(dmg, dir, h.stagger || 0.5, this.hostCtx(), k.id)) this.stats.kills++; }
+        if (this.isHost) { if (d.takeHit(dmg, dir, h.stagger || 0.5, this.hostCtx(), k.id)) { this.stats.kills++; if (k === this.me) account.record('kill'); } }
         else this.net.send('hit', { d: d.id, dmg, dx: dir.x, dz: dir.z, st: h.stagger || 0.5 }, this.net.hostId);
       }
       // boss
@@ -702,7 +713,7 @@ export class Game {
       this.engine.shake(0.025 * heft, 0.1);
     }
   }
-  hostApplyHit(m) { const d = this.horde.byId.get(m.d); if (d && d.alive) { if (d.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx(), m.from)) this.stats.kills++; } }
+  hostApplyHit(m) { const d = this.horde.byId.get(m.d); if (d && d.alive) { if (d.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx(), m.from)) { this.stats.kills++; this.net.send('kc', {}, m.from); } } }
   hostApplyBossHit(m) { if (this.boss && this.boss.alive) this.boss.takeHit(m.dmg, V(m.dx, 0, m.dz), m.st, this.hostCtx()); }
   hostParried(srcId) {
     if (srcId === 'boss') { if (this.boss && this.boss.alive) this.boss.parried?.(this.hostCtx()); return; }   // a parry wears down a boss's poise
@@ -953,10 +964,10 @@ export class Game {
     if (W.state !== 'watch' || !W.mesh.visible) return;
     const me = this.me; if (me.downed || me.praying) return;
     const d = Math.hypot(W.pos.x - me.pos.x, W.pos.z - me.pos.z); if (d > 200 || d < 40) return;
-    let seen = {}; try { seen = JSON.parse(localStorage.getItem('evil.devilReveal') || '{}'); } catch {}
+    const seen = { ...account.get('evil.devilReveal', {}) };
     const key = CHAPTERS[this.chapterIdx].id; if (seen[key]) return;
     for (const dm of this.horde.list) if (dm.alive && dm.pos.distanceTo(me.pos) < 25) return;
-    seen[key] = 1; try { localStorage.setItem('evil.devilReveal', JSON.stringify(seen)); } catch {}
+    seen[key] = 1; account.set('evil.devilReveal', seen);
     const LINES = { vale: ['Ecce, adversarius vester.', 'Behold your adversary.'], village: ['Circuit, quaerens quem devoret.', 'He walks about, seeking whom he may devour.'], fen: ['Vidit vos. Semper vidit.', 'He has seen you. He has always seen you.'], wood: ['Princeps huius mundi.', 'The prince of this world.'], field: ['Legio nomen mihi est.', 'My name is Legion.'], ascent: ['Venite. Exspecto.', 'Come. I am waiting.'] };
     const p = W.pos, hy = p.y + 3.1, m = me.pos;
     const dir = V(p.x - m.x, 0, p.z - m.z).normalize();
@@ -1118,7 +1129,7 @@ export class Game {
     if (this.watcher) this.scene.remove(this.watcher.mesh);
     if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
     this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; this.weather?.dispose(); this.weather = null; for (const k of this.fallenKnights || []) k.dispose();
-    for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'left']) this.net?.off(k);
+    for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'k:kc', 'left']) this.net?.off(k);
   }
 }
 

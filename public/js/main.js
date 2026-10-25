@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import { Engine } from './engine.js';
 import { AudioEngine } from './audio.js';
 import { UI, heraldCss, esc } from './ui.js';
-import { Net } from './net.js';
+import { Net, P2P_CODE_LEN, WS_CODE_LEN } from './net.js';
+import { account, cleanName } from './account.js';
 import { Game } from './game.js';
 import { World } from './world.js';
 import { Knight, RELICS, HERALDRY } from './knight.js';
@@ -17,11 +18,13 @@ import { loadArmoury, saveArmoury } from './shop.js';
 import { prewarmDemons } from './demons.js';
 import { Watcher } from './devil.js';
 import { MenuStage } from './menu_scene.js';
+import { introWanted, playIntro } from './intro.js';
 import { CHAPTERS } from './chapters.js';
 import { clamp, lerp, damp } from './util.js';
 
 const $ = (id) => document.getElementById(id);
-const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+// everything the player keeps lives in their profile (account.js), not loose in the browser
+const store = { get: (k, d) => account.get(k, d), set: (k, v) => account.set(k, v) };
 
 // ---------------------------------------------------------------- input
 class Input {
@@ -45,11 +48,15 @@ class Input {
 }
 
 // ---------------------------------------------------------------- app
+const DEFAULT_SETTINGS = { quality: 'high', sens: 1, fov: 62, invert: false, lockKey: 'ctrl', vol: 0.8, music: 0.65, sfx: 0.9, subs: true };
+const DEFAULT_LOADOUT = { style: 'maximilian', finish: 'bright', weapon: 'longsword', relic: 'water', heraldry: 'gules', cape: true, plume: true };
+// before anyone signs in, the last-used settings of this browser (so the title has the right quality and volume)
+const deviceSettings = () => { try { return JSON.parse(localStorage.getItem('evil.deviceSettings') || 'null') || JSON.parse(localStorage.getItem('evil.settings') || '{}') || {}; } catch { return {}; } };
 const app = {
-  settings: Object.assign({ quality: 'high', sens: 1, fov: 62, invert: false, lockKey: 'ctrl', vol: 0.8, music: 0.65, sfx: 0.9, subs: true }, store.get('evil.settings', {})),
-  loadout: Object.assign({ style: 'maximilian', finish: 'bright', weapon: 'longsword', relic: 'water', heraldry: 'gules', cape: true, plume: true }, store.get('evil.loadout', {})),
-  name: store.get('evil.name', ''),
-  game: null, lobby: null,
+  settings: Object.assign({}, DEFAULT_SETTINGS, deviceSettings()),
+  loadout: { ...DEFAULT_LOADOUT },
+  name: '',
+  game: null, lobby: null, account,
 };
 window.__app = app; // handy for debugging from the console
 
@@ -72,19 +79,29 @@ async function boot() {
   await step(0.95, 'Saying the morning office…');
   ui.boot(1, ''); window.__bootProgress = 1;
   setupMenus();
-  $('playerName').value = app.name || randomName();
-  // without the local server (e.g. opened as a hosted page) only solo play is possible
+  setupProfiles();
+  // a profile from an older build is folded in; otherwise sign back in to the last one (if it has no PIN)
+  try {
+    await account.migrateLegacy() || await account.resume();
+    // automated test browsers get a profile of their own so they land on the title
+    if (!account.signedIn && navigator.webdriver && !(await account.list()).length) await account.create('Tester');
+  } catch (e) { console.warn(e); }
+  if (account.signedIn) applyProfile();
+  // opened from the local server (server.js)? then its lobbies are a fallback; otherwise everything is peer to peer
   app.offline = !(await fetch('health').then((r) => r.ok && r.text()).then((t) => t === 'ok').catch(() => false));
-  if (app.offline) { $('titleErr').textContent = ''; $('offlineNote').hidden = false; $('joinAddrField').hidden = false; }
-  ui.show('title');
+  app.net.serverAvailable = !app.offline;
+  // the first time: the opening (intro.js), which brings the title up at its end; afterwards straight to the title
+  if (introWanted() && menu.stage) playIntro({ stage: menu.stage, audio: app.audio, ui, onTitle: () => showTitle() }); else showTitle();
   // links from the start script (?host) or from the web page's Join (?join=CODE) go straight in
   const q = new URLSearchParams(location.search);
-  if (!app.offline && (q.has('host') || q.has('join'))) {
-    if (q.get('name')) { app.name = q.get('name').slice(0, 18); $('playerName').value = app.name; store.set('evil.name', app.name); }
+  if (q.has('host') || q.has('join')) {
     history.replaceState(null, '', location.pathname);
-    if (q.has('join')) { $('joinCode').value = q.get('join').toUpperCase().slice(0, 4); $('btnJoin').click(); $('joinGo').click(); }
-    else $('btnHost').click();
+    // an invite link: once someone is signed in, straight into that lobby
+    app.pending = q.has('join') ? { join: q.get('join').toUpperCase().slice(0, P2P_CODE_LEN) } : { host: true };
+    if (account.signedIn) runPending();
   }
+  // closing the tab says goodbye, so friends hear the host has gone (or a guest's knight passes to a companion) at once
+  addEventListener('pagehide', () => { if (app.net.mode) app.net.leave(true); });
   requestAnimationFrame(loop);
   // audio may only start after the first gesture
   const wake = () => { app.audio.init(); app.audio.setVolumes(app.audio.vol); if (app.audio.music) { app.audio.music.start(); app.audio.music.setMood(app.game ? 'dread' : 'menu'); app.audio.music.setIntensity(0); } removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); };
@@ -150,32 +167,29 @@ function setupMenus() {
   const ui = app.ui;
   const click = () => app.audio.ui('click');
   for (const b of document.querySelectorAll('button')) b.addEventListener('click', click);
-  $('playerName').addEventListener('change', () => { app.name = $('playerName').value.trim().slice(0, 18) || randomName(); store.set('evil.name', app.name); });
-  const nameNow = () => { app.name = $('playerName').value.trim().slice(0, 18) || randomName(); store.set('evil.name', app.name); return app.name; };
-  $('btnHost').onclick = async () => { $('titleErr').textContent = ''; if (app.offline) { nameNow(); ui.show('hostHelp'); return; } try { await app.net.connect(); await app.net.host(nameNow()); enterLobby(); } catch (e) { $('titleErr').textContent = e.message; } };
-  $('btnJoin').onclick = () => { nameNow(); $('joinErr').textContent = ''; ui.show('join'); $('joinCode').focus(); };
+  const nameNow = () => app.name || randomName();
+  // hosting and joining happen in the browser (net.js): no server to run, nothing to download
+  let busy = false;
+  $('btnHost').onclick = async () => {
+    if (busy) return; busy = true; $('titleErr').textContent = 'Opening a lobby…';
+    try { await app.net.host(nameNow()); $('titleErr').textContent = ''; enterLobby(); } catch (e) { $('titleErr').textContent = e.message; } finally { busy = false; }
+  };
+  $('btnJoin').onclick = () => { $('joinErr').textContent = ''; ui.show('join'); $('joinCode').focus(); };
   $('joinBack').onclick = () => ui.show('title');
-  $('hostBack').onclick = () => ui.show('title');
-  $('hostOpenLocal').onclick = () => { location.href = `http://localhost:7777/?host&name=${encodeURIComponent(app.name)}`; };
-  $('joinAddr').value = store.get('evil.lastHost', '');
-  $('joinAddr').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinCode').focus(); });
+  $('joinCode').addEventListener('input', () => { const el = $('joinCode'); el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
   $('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinGo').click(); });
   $('joinGo').onclick = async () => {
+    if (busy) return;
     const code = $('joinCode').value.trim().toUpperCase();
-    if (code.length !== 4) { $('joinErr').textContent = 'Lobby codes are four letters or numbers.'; return; }
-    if (app.offline) {
-      // the web page can't hold the lobby itself: open the game from the host's PC with the code filled in
-      const m = $('joinAddr').value.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '').match(/^([\w.-]+|\[[0-9a-f:]+\])(?::(\d{1,5}))?$/i);
-      if (!m) { $('joinErr').textContent = 'Type the address shown in the host\'s lobby, like 192.168.1.20:7777.'; $('joinAddr').focus(); return; }
-      store.set('evil.lastHost', $('joinAddr').value.trim());
-      location.href = `http://${m[1]}:${m[2] || 7777}/?join=${code}&name=${encodeURIComponent(app.name)}`;
-      return;
-    }
-    try { await app.net.connect(); await app.net.join(code, app.name); enterLobby(); } catch (e) { $('joinErr').textContent = e.message; }
+    if (code.length !== P2P_CODE_LEN && !(code.length === WS_CODE_LEN && app.net.serverAvailable)) { $('joinErr').textContent = `Lobby codes are ${P2P_CODE_LEN} letters, like KDRWX.`; return; }
+    busy = true; $('joinErr').textContent = 'Finding the lobby…'; $('joinGo').disabled = true;
+    try { await app.net.join(code, nameNow()); $('joinErr').textContent = ''; enterLobby(); } catch (e) { $('joinErr').textContent = e.message; } finally { busy = false; $('joinGo').disabled = false; }
   };
-  $('btnSolo').onclick = () => { nameNow(); enterLobby(true); };
+  $('btnCopyCode').onclick = () => copyText(app.net.code, 'Copied', $('btnCopyCode'));
+  $('btnCopyLink').onclick = () => copyText(inviteLink(), 'Copied', $('btnCopyLink'));
+  $('btnSolo').onclick = () => { enterLobby(true); };
   // testing: straight into the battle on the Peak, alone with two companions
-  $('btnTestPeak').onclick = () => { nameNow(); enterLobby(true); $('optAI').value = '2'; $('optChapter').value = String(CHAPTERS.length - 1); $('btnStart').click(); };
+  $('btnTestPeak').onclick = () => { enterLobby(true); $('optAI').value = '2'; $('optChapter').value = String(CHAPTERS.length - 1); $('btnStart').click(); };
   $('btnSettings').onclick = () => openSettings('title');
   $('btnHow').onclick = () => { app.howReturn = 'title'; ui.show('how'); };
   $('howBack').onclick = () => ui.show(app.howReturn || 'title');
@@ -216,7 +230,102 @@ function setupMenus() {
   app.net.on('k:lobby', () => { if (app.game && !app.net.isHost) app.endGame(false); });
   app.net.on('hostLeft', () => { const wasGame = !!app.game; if (app.game) app.endGame(false, true); else { app.lobby = null; app.ui.show('title'); } $('titleErr').textContent = 'The host has left. The company is disbanded.'; });
   app.net.on('kicked', () => { app.lobby = null; app.ui.show('title'); $('titleErr').textContent = 'The host removed you from the lobby.'; });
-  app.net.on('close', () => { if (app.lobby && !app.lobby.solo) { if (app.game) app.endGame(false, true); else app.ui.show('title'); app.lobby = null; $('titleErr').textContent = 'Lost the connection to the game server.'; } });
+  app.net.on('close', () => { if (app.lobby && !app.lobby.solo) { if (app.game) app.endGame(false, true); else app.ui.show('title'); app.lobby = null; $('titleErr').textContent = app.net.mode === 'ws' ? 'Lost the connection to the game server.' : 'Lost the connection to the host.'; } });
+}
+// ---------------------------------------------------------------- profiles
+// Sign in / create / switch. The profile carries the harness, settings, armoury and progress (account.js).
+function applyProfile() {
+  const d = account.load(); if (!d) return;
+  app.name = d.name;
+  app.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || deviceSettings());
+  app.loadout = Object.assign({}, DEFAULT_LOADOUT, d.loadout || {});
+  if (!d.settings) store.set('evil.settings', { ...app.settings });
+  if (!d.loadout) store.set('evil.loadout', { ...app.loadout });
+  app.ui.subsOn = app.settings.subs;
+  app.audio.vol = { master: app.settings.vol, music: app.settings.music, sfx: app.settings.sfx }; app.audio.setVolumes?.(app.audio.vol);
+  if (app.engine.qKey !== app.settings.quality) app.engine.setQuality(app.settings.quality);
+  syncLoadoutForm();
+  if (menu.world) makeMenuKnight();
+  $('profName').textContent = d.name;
+}
+function syncLoadoutForm() {
+  const L = app.loadout;
+  fillWeapons();
+  for (const [id, k] of [['loStyle', 'style'], ['loFinish', 'finish'], ['loRelic', 'relic'], ['loHeraldry', 'heraldry']]) $(id).value = L[k];
+  $('loCape').checked = L.cape; $('loPlume').checked = L.plume;
+  describeLoadout();
+}
+function showTitle() {
+  if (!account.signedIn) { openProfiles(); return; }
+  $('profName').textContent = app.name;
+  app.ui.show('title');
+}
+function runPending() {
+  const p = app.pending; app.pending = null; if (!p) return;
+  if (p.join) { $('joinCode').value = p.join; $('btnJoin').click(); $('joinGo').click(); }
+  else if (p.host) $('btnHost').click();
+}
+const inviteLink = () => `${location.origin}${location.pathname}?join=${app.net.code}`;
+function copyText(t, msg, btn) {
+  const done = () => { if (!btn) return; const was = btn.dataset.label || (btn.dataset.label = btn.textContent); btn.textContent = msg; setTimeout(() => { btn.textContent = was; }, 1500); };
+  const show = () => { $('lobbyAddr').textContent = t; };
+  try { navigator.clipboard.writeText(t).then(done, show); } catch { show(); }
+}
+function setupProfiles() {
+  let pinTarget = null;
+  $('btnProfile').onclick = () => openProfiles();
+  $('profBack').onclick = () => { if (account.signedIn) app.ui.show('title'); };
+  $('newName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('newGo').click(); });
+  $('newPin').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('newGo').click(); });
+  $('newGo').onclick = async () => {
+    $('profErr').textContent = '';
+    try { await account.create($('newName').value || randomName(), $('newPin').value); $('newName').value = ''; $('newPin').value = ''; signedIn(); } catch (e) { $('profErr').textContent = e.message; }
+  };
+  const tryPin = async () => { try { await account.signIn(pinTarget, $('pinInput').value); $('pinInput').value = ''; signedIn(); } catch (e) { $('profErr').textContent = e.message; $('pinInput').select(); } };
+  $('pinGo').onclick = tryPin;
+  $('pinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryPin(); });
+  $('pinCancel').onclick = () => { pinTarget = null; $('pinBox').hidden = true; $('newBox').hidden = false; $('profErr').textContent = ''; };
+  app.pickProfile = async (id) => {
+    $('profErr').textContent = '';
+    const e = (await account.list()).find((p) => p.id === id); if (!e) return;
+    if (account.current()?.id === id) { app.ui.show('title'); return; }
+    if (e.pin) { pinTarget = id; $('pinFor').textContent = e.name; $('pinBox').hidden = false; $('newBox').hidden = true; $('pinInput').focus(); return; }
+    try { await account.signIn(id); signedIn(); } catch (err) { $('profErr').textContent = err.message; }
+  };
+}
+function signedIn() {
+  if (app.lobby) leaveLobby();
+  applyProfile(); app.ui.show('title');
+  $('titleErr').textContent = '';
+  if (app.pending) runPending();
+}
+async function openProfiles() {
+  const list = (await account.list()).sort((a, b) => (b.last || 0) - (a.last || 0));
+  const cur = account.current();
+  $('pinBox').hidden = true; $('newBox').hidden = false; $('profErr').textContent = '';
+  $('newHead').textContent = list.length ? 'Or a new knight' : 'Name your knight';
+  $('profBack').hidden = !cur;
+  const rows = [];
+  for (const p of list) {
+    const d = await account.backend.read(p.id) || {};
+    const pr = d.progress || {}, silver = d.armoury?.silver ?? 60;
+    const what = `Chapter ${(pr.chapter || 0) + 1} reached · ${silver} silver · ${pr.kills || 0} demons banished${p.pin ? ' · PIN' : ''}`;
+    rows.push(`<li class="${cur?.id === p.id ? 'me' : ''}" data-pick="${p.id}" style="cursor:pointer" tabindex="0"><span class="shield" style="background:${heraldCss(d.loadout?.heraldry || 'gules')}"></span><span>${esc(p.name)}<span class="what">${esc(what)}</span></span><span class="ready ${cur?.id === p.id ? 'on' : ''}">${cur?.id === p.id ? 'riding' : ''}<button class="kick" data-del="${p.id}" title="Delete this profile">delete</button></span></li>`);
+  }
+  $('profileList').innerHTML = rows.join('');
+  $('profileList').hidden = !rows.length;
+  for (const li of document.querySelectorAll('[data-pick]')) {
+    li.onclick = () => app.pickProfile(li.dataset.pick);
+    li.onkeydown = (e) => { if (e.key === 'Enter') app.pickProfile(li.dataset.pick); };
+  }
+  for (const b of document.querySelectorAll('[data-del]')) b.onclick = async (e) => {
+    e.stopPropagation();
+    // two clicks to delete (no browser dialogs)
+    if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'really delete?'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'delete'; }, 3000); return; }
+    await account.remove(b.dataset.del); openProfiles();
+  };
+  if (!list.length && !$('newName').value) $('newName').value = randomName();
+  app.ui.show('profiles');
 }
 function openSettings(ret) {
   const s = app.settings; app.settingsReturn = ret;
@@ -228,7 +337,7 @@ function saveSettings() {
   const s = app.settings;
   const q = $('setQuality').value; const qChanged = q !== s.quality;
   Object.assign(s, { quality: q, sens: +$('setSens').value, fov: +$('setFov').value, invert: $('setInvert').checked, lockKey: $('setLockKey').value, vol: +$('setVol').value, music: +$('setMusic').value, sfx: +$('setSfx').value, subs: $('setSubs').checked });
-  app.ui.subsOn = s.subs; store.set('evil.settings', s);
+  app.ui.subsOn = s.subs; store.set('evil.settings', { ...s }); try { localStorage.setItem('evil.deviceSettings', JSON.stringify(s)); } catch {}
   app.audio.setVolumes({ master: s.vol, music: s.music, sfx: s.sfx });
   if (qChanged) app.engine.setQuality(q);
 }
@@ -273,8 +382,9 @@ function enterLobby(solo = false) {
   $('hostOpts').hidden = !host;
   $('btnStart').hidden = !host; $('btnReady').hidden = host;
   $('lobbyCode').textContent = solo ? '—' : app.net.code;
-  $('lobbyAddr').textContent = '';
-  if (!solo) fetch('api/info').then((r) => r.json()).then((info) => { $('lobbyAddr').textContent = info.lan.length ? `Friends join with address ${info.lan[0]}:${info.port} (on the game's web page, or open http://${info.lan[0]}:${info.port})` : ''; }).catch(() => {});
+  $('lobbyAddr').textContent = solo ? '' : app.net.mode === 'p2p' ? 'Friends open this game\'s page, choose Join with a Code and type this code. Nothing to download.' : '';
+  $('inviteRow').hidden = solo || !host;
+  if (!solo && app.net.mode === 'ws') fetch('api/info').then((r) => r.json()).then((info) => { $('lobbyAddr').textContent = info.lan.length ? `Friends join with address ${info.lan[0]}:${info.port} (on the game's web page, or open http://${info.lan[0]}:${info.port})` : ''; }).catch(() => {});
   if (solo) { $('optAI').value = store.get('evil.soloAI', '3'); }
   app.ui.show('lobby');
   if (host) broadcastLobby(); else pushLobbySelf();
@@ -347,6 +457,7 @@ function startGame(m) {
   app.audio.init();
   app.game.loadChapter(m.chapter);
   app.input.lock();
+  account.record('run');
 }
 app.endGame = (victory, toTitle = false) => {
   if (app.game) { app.game.dispose(); app.game = null; }

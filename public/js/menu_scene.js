@@ -11,6 +11,7 @@ import { World } from './world.js';
 const CHAPTER = 0;                 // the Vale of Ashes: dead land under the storm, the mountain beyond
 const HORDE = 0.14;                // the demons come on in slow motion
 const ST_CHASE = 1;
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * t * (t * (t * 6 - 15) + 10); };
 
 // the five, from the camera's left to its right; the middle one a little forward
 const LINE = [
@@ -124,9 +125,36 @@ export class MenuStage {
   camera(c, dt) {
     const t = this.t, sway = Math.sin(t * 0.05) * 0.6;
     const want = this.at(sway, -7.0); want.y += 1.95 + Math.sin(t * 0.07) * 0.06;
+    const look = this.at(sway * 0.3, 0); look.y += 1.75;
+    if (this.intro) { this.introCamera(c, want, look); this.snapped = true; return; }
     c.position.lerp(want, this.snapped ? 1 - Math.exp(-1.5 * dt) : 1); this.snapped = true;
-    const look = this.at(sway * 0.3, 0); look.y += 1.75; c.lookAt(look);
+    c.lookAt(look);
     if (Math.abs(c.fov - 44) > 0.1) { c.fov = 44; c.updateProjectionMatrix(); }
+  }
+  // the opening shot (intro.js drives this.intro.u from 0 to 1): high in the storm over the dead land, looking at the
+  // mountain; then down out of the sky, over the horde, to the five before the altar, ending on the title's own camera
+  introCamera(c, P1, L1) {
+    const I = this.intro, u = Math.min(1, Math.max(0, I.u)), drift = I.drift || 0;
+    if (!I.path) {
+      const P0 = this.at(6, -84); P0.y += 34;
+      const Pm = this.at(-5, -30); Pm.y += 9;
+      const V = this.world.vista, m = V?.mountain?.position, pk = V?.peakPos;
+      const L0 = m && pk ? m.clone().lerp(pk, 0.5) : this.c.clone().addScaledVector(this.toM, 600).add(new THREE.Vector3(0, 90, 0));
+      I.path = { P0, Pm, L0 };
+    }
+    const { P0, Pm, L0 } = I.path;
+    const p0 = P0.clone(); p0.y += drift * 1.2; p0.addScaledVector(this.toM, drift * 2.5);   // drifting slowly in, before the dive
+    const curve = new THREE.CatmullRomCurve3([p0, Pm, P1.clone()], false, 'centripetal');
+    const pos = curve.getPoint(u);
+    pos.y = Math.max(pos.y, this.world.heightAt(pos.x, pos.z) + 1.6);
+    c.position.copy(pos);
+    // turn from the mountain down to the knights by direction, not by sliding the aim point (which would whip round at the end)
+    const d0 = L0.clone().sub(pos).normalize(), d1 = L1.clone().sub(pos).normalize();
+    const w = smooth(0.18, 0.92, u);
+    const dir = d0.lerp(d1, w).normalize();
+    c.lookAt(pos.clone().add(dir));
+    const fov = 52 - 8 * smooth(0.4, 1, u);
+    if (Math.abs(c.fov - fov) > 0.01) { c.fov = fov; c.updateProjectionMatrix(); }
   }
   get focus() { return this.c; }
   setVisible(v) {

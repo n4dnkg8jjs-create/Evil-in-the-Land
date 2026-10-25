@@ -2,6 +2,7 @@
 // Sir Godric of Wenden, with Brother Anselm as their chaplain. None came home.
 // Their dead lie along the same road, and Anselm's pages lie with them: a story
 // told in the order you find it, and a warning about the fear (see dread.js).
+import { account } from './account.js';
 import * as THREE from 'three';
 import { clamp, rng, TAU } from './util.js';
 import { normalFromHeight } from './textures.js';
@@ -140,7 +141,7 @@ function loreModel(kind, r) {
 export class Story {
   constructor(game) {
     this.game = game; this.spots = []; this.group = null;
-    try { this.found = new Set(JSON.parse(localStorage.getItem('evil.pages') || '[]')); } catch { this.found = new Set(); }
+    this.found = new Set(account.get('evil.pages', []));
     this.whisperI = 0; this.cardT = 0;
   }
   // two of Anselm's dead lie along each road (not on the summit)
@@ -197,7 +198,7 @@ export class Story {
   read(s) {
     if (s.lore) return this.readLore(s);
     s.taken = true; s.page.visible = false;
-    this.found.add(s.pageIdx); try { localStorage.setItem('evil.pages', JSON.stringify([...this.found])); } catch {}
+    this.found.add(s.pageIdx); account.set('evil.pages', [...this.found]);
     const [title, text] = PAGES[s.pageIdx];
     const el = document.getElementById('page');
     if (el) { el.innerHTML = `<div class="page-num">Brother Anselm · page ${s.pageIdx + 1} of ${PAGES.length}</div><h3>${title}</h3><p>${text}</p>`; el.classList.add('show'); }
@@ -221,10 +222,10 @@ export class Story {
   // a short, skippable look at what was found, the first time only (and never with demons close by)
   cinematic(s, key, lines) {
     const g = this.game; if (g.cinema.active || g.boss || g.obj?.ph !== 'travel') return;
-    let seen = {}; try { seen = JSON.parse(localStorage.getItem('evil.loreSeen') || '{}'); } catch {}
+    let seen = { ...account.get('evil.loreSeen', {}) };
     if (seen[key]) return;
     for (const d of g.horde.list) if (d.alive && d.pos.distanceTo(g.me.pos) < 25) return;
-    seen[key] = 1; try { localStorage.setItem('evil.loreSeen', JSON.stringify(seen)); } catch {}
+    seen[key] = 1; account.set('evil.loreSeen', seen);
     const V = (x, y, z) => new THREE.Vector3(x, y, z), y0 = s.y, a = (s.yaw ?? Math.atan2(g.me.pos.x - s.x, g.me.pos.z - s.z));
     const P = (ang, r, h) => V(s.x + Math.sin(ang) * r, y0 + h, s.z + Math.cos(ang) * r);
     g.cinema.play([

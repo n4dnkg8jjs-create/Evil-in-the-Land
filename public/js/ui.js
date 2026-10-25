@@ -8,11 +8,62 @@ const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
 export class UI {
   constructor() {
     this.subsOn = true; this.toastT = 0; this.subT = 0; this.lagHp = 1; this.lagBoss = 1;
+    this.navMode = false; this.setupNav();
   }
   // show one menu screen (or none); the HUD is toggled separately
   show(id) {
     for (const s of document.querySelectorAll('.screen')) if (s.id !== 'hud') s.classList.toggle('show', s.id === id);
     this.current = id;
+    // playing by keyboard or pad: put the focus on the new screen's first control
+    if (id && this.navMode) requestAnimationFrame(() => { const f = this.focusables(); if (f.length && !$(id).contains(document.activeElement)) f[0].focus({ preventScroll: true }); });
+  }
+  // ---- menus by keyboard and by game pad: arrows / d-pad move between controls, Enter / A presses, B goes back
+  focusables() {
+    const scr = this.current && $(this.current); if (!scr) return [];
+    const shop = $('shop'); const root = shop && shop.classList.contains('show') ? shop : scr;
+    return [...root.querySelectorAll('button, select, input, a[href]')].filter((n) => !n.disabled && n.offsetParent !== null && getComputedStyle(n).visibility !== 'hidden');
+  }
+  moveFocus(dir) {
+    const f = this.focusables(); if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    f[i < 0 ? 0 : (i + dir + f.length) % f.length].focus({ preventScroll: false });
+  }
+  back() {
+    const scr = this.current && $(this.current); if (!scr) return;
+    const b = scr.querySelector('[data-back], #joinBack, #hostBack, #setBack, #howBack, #pResume'); if (b && b.offsetParent !== null) b.click();
+  }
+  setupNav() {
+    addEventListener('pointermove', () => { this.navMode = false; }, { passive: true });
+    addEventListener('keydown', (e) => {
+      if (!this.current || this.current === 'boot' || document.getElementById('intro')) return;
+      const a = document.activeElement, typing = a && (a.tagName === 'INPUT' && !['checkbox', 'range', 'button'].includes(a.type) || a.tagName === 'SELECT');
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (typing && a.tagName === 'SELECT') return;   // a select's own arrows change its value
+        this.navMode = true; e.preventDefault(); this.moveFocus(e.key === 'ArrowDown' ? 1 : -1);
+      } else if (e.key === 'Tab') this.navMode = true;
+    });
+    // game pads: polled only while a menu screen is up
+    const pad = { held: {}, next: 0 };
+    const poll = (now) => {
+      requestAnimationFrame(poll);
+      if (!this.current || this.current === 'boot' || !navigator.getGamepads) return;
+      const gp = [...navigator.getGamepads()].find((g) => g && g.connected); if (!gp) return;
+      const B = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed), ax = gp.axes[1] || 0, axX = gp.axes[0] || 0;
+      const up = B(12) || ax < -0.6, down = B(13) || ax > 0.6, left = B(14) || axX < -0.6, right = B(15) || axX > 0.6;
+      const edge = (k, on) => { const was = pad.held[k]; pad.held[k] = on; return on && !was; };
+      const rep = (k, on) => { if (!on) { pad.held[k] = false; return false; } if (!pad.held[k]) { pad.held[k] = true; pad.next = now + 380; return true; } if (now > pad.next) { pad.next = now + 120; return true; } return false; };
+      if (rep('up', up)) { this.navMode = true; this.moveFocus(-1); }
+      if (rep('down', down)) { this.navMode = true; this.moveFocus(1); }
+      const a = document.activeElement;
+      const lr = rep('left', left) ? -1 : rep('right', right) ? 1 : 0;
+      if (lr && a) {
+        if (a.type === 'range') { const s = +a.step || 0.01; a.value = Math.min(+a.max, Math.max(+a.min, +a.value + lr * s * 4)); a.dispatchEvent(new Event('input', { bubbles: true })); a.dispatchEvent(new Event('change', { bubbles: true })); }
+        else if (a.tagName === 'SELECT') { a.selectedIndex = Math.min(a.options.length - 1, Math.max(0, a.selectedIndex + lr)); a.dispatchEvent(new Event('change', { bubbles: true })); }
+      }
+      if (edge('a', B(0))) { this.navMode = true; if (a && a !== document.body) { if (a.type === 'checkbox') { a.checked = !a.checked; a.dispatchEvent(new Event('change', { bubbles: true })); } else a.click(); } else this.moveFocus(0); }
+      if (edge('b', B(1))) this.back();
+    };
+    requestAnimationFrame(poll);
   }
   setHud(on) { $('hud').classList.toggle('show', on); }
   overlay(id, on) { $(id).classList.toggle('show', on); }

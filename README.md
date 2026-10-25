@@ -8,9 +8,27 @@ A cooperative action game for one to five knights in 16th-century plate. Fight t
 
 **https://n4dnkg8jjs-create.github.io/Evil-in-the-Land/**
 
-Ride alone with up to four companion knights, nothing to install. To play with friends using lobby codes, run the game yourself as described below.
+Ride alone or with friends, nothing to install. Everyone just opens the page.
 
-## Start the game
+## Profiles
+
+The first time you play, make a profile: your knight's name and, if you like, a PIN so others on the same computer can't play as you. Your profile keeps your harness, settings, silver, armoury and how far you've got, and saves itself as you play. Several people can have profiles on one computer; **switch profile** on the title screen changes who is riding.
+
+Profiles are saved in your browser on this computer, so clearing the browser's site data deletes them, and they don't follow you to another computer yet.
+
+## Play with friends
+
+Nothing to download or run: the host's browser holds the lobby.
+
+1. **The host** opens the page and chooses **Host a Lobby**. The lobby shows a five-letter code, with buttons to copy the code or an invite link.
+2. **Friends** open the same page, choose **Join with a Code** and type the code, or just open the invite link. They arrive in the lobby under their profile names.
+3. Everyone picks a harness and marks themselves **Ready**. The host chooses difficulty, companions and chapter, then **Ride Out**.
+
+Each friend's knight takes the place of a companion. Companions fill any places that are left, up to five knights in all. If a friend drops out mid-game, a companion carries on in their knight's harness. If the host leaves, the game ends for everyone and they're sent back to the title.
+
+Players find each other through the free PeerJS matchmaking service, then connect directly browser to browser. Everyone needs an internet connection. A few strict networks, such as some offices, schools and mobile hotspots, block direct connections; if friends can't join, try another network, or use the local server below.
+
+## Run the game yourself (optional)
 
 You need **Node.js 18 or newer**, free from https://nodejs.org (the "LTS" download).
 
@@ -22,19 +40,9 @@ Leave the server window open while you play, then open **http://localhost:7777**
 
 The very first time, the host computer needs internet so the server can download the 3D engine (Three.js). It keeps a copy in the `vendor` folder, so after that nobody needs internet to play.
 
-## Play with friends
+### Lobbies on the local server
 
-The lobby runs on the host's PC. Nobody else installs anything.
-
-1. **The host** downloads this game, installs Node.js, and double-clicks the start script for their system. The game opens in their browser with a lobby already made and shows a four-letter code and an address such as `192.168.1.20:7777`.
-2. **Friends** open the game's web page (or the address itself), choose **Join with a Code**, and type the host's address and the code.
-3. Everyone picks a harness and marks themselves ready; the host chooses difficulty and companions, then **Ride Out**.
-
-On the web page, **Host a Lobby** walks you through the same steps.
-
-Empty places can be filled with companion knights who fight, pray and raise the fallen.
-
-Friends must be on the same Wi-Fi or network as the host. For friends somewhere else, install a free private network such as Tailscale on every computer and use the host's Tailscale address, or forward port 7777 on the host's router.
+Opened from your own server, the game still uses five-letter lobbies by default. If the matchmaking service can't be reached, **Host a Lobby** opens the lobby on your server instead and shows a four-letter code. Friends on the same network open the server's address, such as `http://192.168.1.20:7777`, and join with that code.
 
 If port 7777 is taken, start the server on another one: `PORT=7788 node server.js`. On Windows, use `set PORT=7788` then `node server.js`.
 
@@ -63,7 +71,7 @@ If port 7777 is taken, start the server on another one: `PORT=7788 node server.j
 - **Dread.** Fear rises when you stand alone in the blight, when demons close in, when you are wounded, and when the hooded figure on the ridge is watching. As it rises you will hear whispers, the edges of the screen go dark, and you will see things that are not there. At its worst your hands shake. Praying, staying near your fellow knights and standing in the light of cleansed altars bring it down.
 - **It gets worse.** Each chapter deeper into the blight, fear builds faster and things start happening on the road: a figure standing in your way, something crossing the path in the fog, a silence broken by a scream, footsteps behind you, your own name whispered, and the light going out. Every player experiences these separately.
 - **The First Company.** Twenty knights took this road a year before you and never came back. Their graves lie beside it, each marked with a cross and a helm, and their chaplain's pages are on the graves. Walk up to one to read it.
-- **The sutler's wagon.** Every road starts at a trader's wagon. Spend the silver you earn from kills, altars, finished roads and found pages on new weapons, tempered blades, stronger armour, a blessed relic and healing draughts. Purchases are saved in your browser.
+- **The sutler's wagon.** Every road starts at a trader's wagon. Spend the silver you earn from kills, altars, finished roads and found pages on new weapons, tempered blades, stronger armour, a blessed relic and healing draughts. Purchases are saved in your profile.
 
 ## Your own music
 
@@ -84,7 +92,8 @@ Settings → Graphics has Low, Medium, High and Ultra. High suits most gaming PC
 ## Troubleshooting
 
 - **The loading screen says the 3D engine could not be loaded.** The host computer had no internet on the first run. Connect once, restart the server, and reload.
-- **Friends can't connect.** They must be on the same network and use the host's address, not `localhost`. Windows may ask to allow Node.js through the firewall; allow it on private networks.
+- **Friends can't join a five-letter lobby.** Check the code. If it's right but joining times out, one of your networks is blocking direct connections; try another network (a phone hotspot often works, and so does a home network instead of a work one).
+- **Friends can't join a four-letter lobby on your own server.** They must be on the same network and use the host's address, not `localhost`. Windows may ask to allow Node.js through the firewall; allow it on private networks.
 - **"No lobby with that code".** Codes vanish when the host leaves. Check the code with your host.
 
 ## Credits

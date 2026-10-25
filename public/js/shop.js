@@ -2,6 +2,7 @@
 // waits at the start of each road with steel to sell, for the silver the knights
 // win: from the demons they cut down, the altars they hallow, the pages they find.
 // What a knight owns and has had tempered is kept between pilgrimages.
+import { account } from './account.js';
 import * as THREE from 'three';
 import { WEAPONS, buildWeapon } from './weapons.js';
 import { clothTextures } from './textures.js';
@@ -23,12 +24,12 @@ export const UPGRADES = {
 const DRAUGHT = { name: 'Healing draught', desc: 'Wine, myrrh and a prayer. Press H in battle to drink: heals 70 over three seconds. Carry up to three.', cost: 35, max: 3 };
 
 export function loadArmoury() {
-  let a = null; try { a = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch {}
+  let a = account.get(KEY, null);
   a = Object.assign({ silver: 60, owned: [...START_WEAPONS], up: {}, draughts: 1 }, a || {});
   for (const w of START_WEAPONS) if (!a.owned.includes(w)) a.owned.push(w);
   return a;
 }
-export function saveArmoury(a) { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch {} }
+export function saveArmoury(a) { account.set(KEY, a); }
 // edge is kept per weapon; proof and blessing belong to the knight
 export function upgradesFor(a, weapon) { return { edge: (a.up['edge:' + weapon] || 0), proof: a.up.proof || 0, blessing: a.up.blessing || 0 }; }
 
@@ -348,7 +349,7 @@ export class Shop {
     const g = this.g; g.me.setWeapon(key, g.engine.q); this.applyToMe();
     g.ui.setSelf(g.me);
     // the lobby remembers it, and everyone else sees the new weapon in your hands
-    g.app.loadout.weapon = key; try { localStorage.setItem('evil.loadout', JSON.stringify(g.app.loadout)); } catch {}
+    g.app.loadout.weapon = key; account.set('evil.loadout', { ...g.app.loadout });
     if (!g.opts.solo) g.net.send('gear', { id: g.meId, weapon: key, maxHp: g.me.maxHp });
   }
   dispose() { if (this.people) { for (const pp of this.people) pp.dispose?.(); this.people = null; } if (this.ring) { this.ring.removeFromParent(); this.ring = null; } if (this.priest) { this.priest.root.removeFromParent(); this.priest = null; } this.sanctuary = null; if (this.wagon) { this.wagon.removeFromParent(); this.wagon.traverse((o) => o.geometry?.dispose?.()); this.wagon = null; } this.spot = null; if (this.open) this.close(); }

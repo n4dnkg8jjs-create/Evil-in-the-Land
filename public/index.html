@@ -6,7 +6,7 @@
 <title>Evil in the Land</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Cinzel:wght@500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
@@ -38,9 +38,8 @@
       <button id="btnSettings" class="mbtn">Settings</button>
       <button id="btnHow" class="mbtn">How to Play</button>
     </nav>
-    <label class="field name-field"><span>Your name</span><input id="playerName" maxlength="18" autocomplete="off" spellcheck="false"></label>
+    <div class="field name-field profile-chip"><span>Riding as</span><span class="profile-line"><b id="profName"></b> <button id="btnProfile" class="kick" title="Sign in as someone else">switch profile</button></span></div>
     <p id="titleErr" class="err" role="alert"></p>
-    <p id="offlineNote" class="muted small" hidden>To play together, the host runs the start script on their PC. Everyone else can join from this page.</p>
   </div>
   <p class="foot">Keyboard and mouse. Best in Chrome, Edge or Firefox on a desktop.</p>
 </section>
@@ -49,9 +48,8 @@
 <section id="join" class="screen dim">
   <div class="panel narrow">
     <h2>Join a Lobby</h2>
-    <p class="muted">Ask the host for the four-letter code shown in their lobby.</p>
-    <label class="field" id="joinAddrField" hidden><span>Host's address (shown in their lobby)</span><input id="joinAddr" maxlength="60" autocomplete="off" spellcheck="false" placeholder="192.168.1.20:7777"></label>
-    <label class="field"><span>Lobby code</span><input id="joinCode" maxlength="4" autocomplete="off" spellcheck="false" placeholder="ABCD"></label>
+    <p class="muted">Ask the host for the five-letter code shown in their lobby. Nothing to download: you join straight from this page.</p>
+    <label class="field"><span>Lobby code</span><input id="joinCode" maxlength="5" autocomplete="off" spellcheck="false" placeholder="KDRWX" style="text-transform:uppercase;letter-spacing:0.3em"></label>
     <p id="joinErr" class="err" role="alert"></p>
     <div class="row">
       <button id="joinGo" class="btn primary">Join</button>
@@ -60,21 +58,23 @@
   </div>
 </section>
 
-<!-- hosting from the web page: the host's PC runs the server -->
-<section id="hostHelp" class="screen dim">
+<!-- profiles: who is playing (saved in this browser for now; see account.js) -->
+<section id="profiles" class="screen dim">
   <div class="panel narrow">
-    <h2>Host from Your PC</h2>
-    <p class="muted">The lobby runs on the host's computer, so friends connect straight to you. No online servers or accounts.</p>
-    <ol class="steps">
-      <li><a id="dlZip" href="https://github.com/n4dnkg8jjs-create/Evil-in-the-Land/archive/refs/heads/main.zip">Download the game</a> and unzip it.</li>
-      <li>Install <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a> (the LTS version) if you don't have it.</li>
-      <li>Double-click the start script: <b>start-windows.bat</b>, <b>start-mac.command</b> or <b>start-linux.sh</b>.</li>
-    </ol>
-    <p class="muted">The game opens in your browser with a lobby already made. Give friends the code and the address it shows. They can join from this page.</p>
-    <div class="row">
-      <button id="hostOpenLocal" class="btn primary">It's Running: Open It</button>
-      <button id="hostBack" class="btn">Back</button>
+    <h2>Who Rides?</h2>
+    <p class="muted small">A profile keeps your knight's harness, armoury, silver and progress. Profiles are saved in this browser.</p>
+    <ol id="profileList" class="party"></ol>
+    <div id="pinBox" hidden>
+      <label class="field"><span>PIN for <b id="pinFor"></b></span><input id="pinInput" type="password" maxlength="12" autocomplete="off"></label>
+      <div class="row"><button id="pinGo" class="btn primary">Sign in</button><button id="pinCancel" class="btn">Cancel</button></div>
     </div>
+    <div id="newBox">
+      <h3 id="newHead">A new knight</h3>
+      <label class="field"><span>Name</span><input id="newName" maxlength="18" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>PIN (optional: stops others on this computer playing as you)</span><input id="newPin" type="password" maxlength="12" autocomplete="new-password"></label>
+      <div class="row"><button id="newGo" class="btn primary">Create profile</button><button id="profBack" class="btn">Back</button></div>
+    </div>
+    <p id="profErr" class="err" role="alert"></p>
   </div>
 </section>
 
@@ -83,8 +83,9 @@
   <div class="lobby-left panel">
     <div class="code-block">
       <span class="label">Lobby code</span>
-      <span id="lobbyCode" class="code">····</span>
+      <span id="lobbyCode" class="code">·····</span>
       <span id="lobbyAddr" class="muted small"></span>
+      <span class="row" id="inviteRow" hidden style="margin-top:0.4rem"><button id="btnCopyCode" class="btn">Copy code</button><button id="btnCopyLink" class="btn">Copy invite link</button></span>
     </div>
     <h3>The Company</h3>
     <ol id="partyList" class="party"></ol>
