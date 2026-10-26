@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { spriteTextures } from './textures.js';
 import { clamp, lerp, rng } from './util.js';
+import { WX } from './weather.js';
 
 const R = Math.random;
 
@@ -126,6 +127,213 @@ class Trail {
   dispose(scene) { scene.remove(this.mesh); this.geo.dispose(); this.mat.dispose(); }
 }
 
+
+// ================================================================ BLOOD
+// What runs in them is black-red. Three parts: droplets in flight (velocity-stretched streaks, simulated on the
+// CPU), splats where each droplet actually lands (irregular, elongated by the angle it struck at, with satellite
+// drops), and pools that spread under the fallen. Splats and pools share one lit material: wet and glossy with a
+// raised rim, darker at the centre and thinner at the edge, dimpled by rain, drying dark and matte, then fading.
+const BLOOD_T = { value: 0 };   // seconds, the clock the decals age by
+const BLOOD_GLSL = `
+  uniform float uBT, uBRain; varying vec4 vD; varying vec4 vD2; varying vec2 vDuv;
+  float bH(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float bN(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(bH(i), bH(i + vec2(1, 0)), f.x), mix(bH(i + vec2(0, 1)), bH(i + vec2(1, 1)), f.x), f.y); }
+  float bF(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a * bN(p); p = p * 2.03 + 7.1; a *= 0.5; } return s; }
+  // 0..1: how much blood lies here (1 = thick at the heart of it)
+  float bloodField(vec2 p) {
+    float seed = vD.x, el = vD.y, age = uBT - vD.z;
+    if (vD.w < 0.5) {
+      // a splat: the main drop squashed along the line it travelled (+x), a ragged crown, a tail and satellites
+      vec2 q = vec2((p.x + 0.18 * el) / (0.55 + 0.25 * el), p.y / 0.55);
+      float n = bF(q * 3.0 + seed * 17.0);
+      float r = length(q) + (n - 0.5) * 0.55;
+      float f = smoothstep(0.62, 0.3, r);
+      // fingers thrown out along the direction of travel
+      float a = atan(q.y, q.x), sp = bN(vec2(a * 3.2 + seed * 5.0, seed));
+      f = max(f, smoothstep(0.8, 0.45, r - sp * (0.35 + 0.5 * el) * smoothstep(-0.4, 1.0, cos(a))));
+      for (int i = 0; i < 8; i++) {
+        float fi = float(i);
+        vec2 c = vec2(bH(vec2(seed, fi)) * 1.6 - 0.35 + el * 0.25, (bH(vec2(fi, seed)) * 2.0 - 1.0) * (0.75 - el * 0.25));
+        float rr = 0.025 + 0.06 * bH(vec2(seed + fi, 3.0));
+        f = max(f, smoothstep(rr, rr * 0.35, length((p - c) * vec2(1.0 / (1.0 + el * 0.6), 1.0))));
+      }
+      return f;
+    }
+    // a pool: spreads out over vD2.y seconds from where the body fell, its edge lobed and creeping
+    float grow = 1.0 - exp(-max(0.0, age) / max(0.1, vD2.y));
+    float n = bF(p * 2.2 + seed * 9.0), n2 = bN(p * 7.0 + seed);
+    float R = (0.18 + 0.72 * grow) * (0.72 + 0.42 * n);
+    return smoothstep(R, R - 0.22 - 0.1 * n2, length(p));
+  }
+`;
+function bloodMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0, envMapIntensity: 0.15, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uBT = BLOOD_T; sh.uniforms.uBRain = WX.uRain;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
+      attribute vec4 aD; attribute vec4 aD2; varying vec4 vD; varying vec4 vD2; varying vec2 vDuv;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+      vD = aD; vD2 = aD2; vDuv = uv * 2.0 - 1.0;`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      ${BLOOD_GLSL}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+      float bf = bloodField(vDuv);
+      if (bf < 0.02) discard;
+      float bAge = uBT - vD.z, bLife = vD2.x;
+      float bDry = smoothstep(bLife * 0.2, bLife * 0.85, bAge);
+      float bFade = 1.0 - smoothstep(bLife, bLife + 12.0, bAge);
+      float bWet = 1.0 - bDry, bRain = uBRain * bWet;
+      // thick centre almost black, the thin edge a deep red; dried it goes brown-black
+      vec3 bC = mix(vec3(0.085, 0.006, 0.008), vec3(0.035, 0.002, 0.004), smoothstep(0.03, 0.4, bf));
+      bC = mix(bC, vec3(0.05, 0.016, 0.012), bDry);
+      // rain thins the edge to a pinkish wash
+      bC = mix(bC, bC * 1.7 + vec3(0.05, 0.0, 0.004), bRain * (1.0 - smoothstep(0.1, 0.6, bf)) * 0.7);
+      diffuseColor.rgb = bC;
+      diffuseColor.a = smoothstep(0.02, 0.12, bf) * bFade * (0.97 - 0.3 * bRain * (1.0 - bf));
+      // thickness for the surface: a raised meniscus at the rim, a dome in the middle, rain rings on pools
+      float bh = smoothstep(0.02, 0.12, bf) * 0.7 + bf * 0.3;
+      if (vD.w > 0.5) { vec2 cp = vDuv * 6.0; vec2 ci = floor(cp); vec2 cf = fract(cp) - 0.5; float ph = fract(uBT * 0.9 + bH(ci) * 7.0); float rd = length(cf - (vec2(bH(ci + 1.3), bH(ci + 2.7)) - 0.5) * 0.5);
+        bh += uBRain * bWet * sin((rd - ph * 0.45) * 60.0) * (1.0 - ph) * smoothstep(0.45 * ph + 0.05, 0.0, abs(rd - ph * 0.45)) * 0.25; }`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = mix(0.16, 0.85, bDry);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      { vec3 dpx = dFdx(-vViewPosition), dpy = dFdy(-vViewPosition); vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx); float det = dot(dpx, r1);
+        vec3 g = sign(det) * (dFdx(bh) * r1 + dFdy(bh) * r2) * (0.006 * (1.0 - 0.7 * bDry)); normal = normalize(abs(det) * normal - g); }`);
+  };
+  m.customProgramCacheKey = () => 'blood-decal-v1';
+  return m;
+}
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4(), _v = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _n = new THREE.Vector3(), _s = new THREE.Vector3();
+const groundNormal = (ground, x, z, out) => { const e = 0.25; return out.set(ground(x - e, z) - ground(x + e, z), 2 * e, ground(x, z - e) - ground(x, z + e)).normalize(); };
+
+class Blood {
+  constructor(scene, q) {
+    this.scene = scene;
+    const low = q.particles < 0.7;
+    // ---- droplets in flight
+    this.maxDrops = low ? 260 : 700; this.drops = [];
+    const qg = new THREE.PlaneGeometry(1, 1), ig = new THREE.InstancedBufferGeometry(); ig.index = qg.index; ig.attributes.position = qg.attributes.position;
+    this.dP = new Float32Array(this.maxDrops * 3); this.dV = new Float32Array(this.maxDrops * 3); this.dS = new Float32Array(this.maxDrops * 2);
+    this.aP = new THREE.InstancedBufferAttribute(this.dP, 3); this.aV = new THREE.InstancedBufferAttribute(this.dV, 3); this.aS = new THREE.InstancedBufferAttribute(this.dS, 2);
+    for (const a of [this.aP, this.aV, this.aS]) a.setUsage(THREE.DynamicDrawUsage);
+    ig.setAttribute('iP', this.aP); ig.setAttribute('iV', this.aV); ig.setAttribute('iS', this.aS); ig.instanceCount = 0;
+    this.dropMat = new THREE.ShaderMaterial({
+      uniforms: { fogColor: { value: new THREE.Color() }, fogDensity: { value: 0.01 } },
+      vertexShader: `attribute vec3 iP; attribute vec3 iV; attribute vec2 iS; varying vec2 vUv; varying float vA; varying float vFog;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(iP, 1.0); vec3 vv = (modelViewMatrix * vec4(iV, 0.0)).xyz;
+          vec2 d = vv.xy; float L = length(d); d = L > 1e-4 ? d / L : vec2(0.0, 1.0); vec2 n = vec2(-d.y, d.x);
+          float len = iS.x * 2.0 + L * 0.022;                       // streaked along the way it is moving (a 1/45 s exposure)
+          mv.xy += d * position.y * len + n * position.x * iS.x * 2.0;
+          vUv = position.xy * 2.0; vA = iS.y; vFog = -mv.z; gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform vec3 fogColor; uniform float fogDensity; varying vec2 vUv; varying float vA; varying float vFog;
+        void main(){
+          float r = length(vec2(vUv.x, vUv.y * 0.9)); float a = smoothstep(1.0, 0.55, r) * vA; if (a < 0.02) discard;
+          vec3 c = mix(vec3(0.26, 0.02, 0.025), vec3(0.07, 0.004, 0.006), smoothstep(0.0, 0.9, r));
+          c += vec3(0.35, 0.18, 0.18) * smoothstep(0.35, 0.0, length(vUv - vec2(-0.3, 0.35))) * 0.6;   // the glint of a wet bead
+          float f = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog); gl_FragColor = vec4(mix(c, fogColor, f), a); }`,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    this.dropMesh = new THREE.Mesh(ig, this.dropMat); this.dropMesh.frustumCulled = false; this.dropMesh.renderOrder = 2; scene.add(this.dropMesh);
+    this.dropGeo = ig;
+    // ---- splats
+    this.mat = bloodMaterial();
+    this.maxSplats = low ? 160 : 480; this.splatI = 0;
+    const sg = new THREE.PlaneGeometry(1, 1); sg.rotateX(-Math.PI / 2);
+    this.sD = new THREE.InstancedBufferAttribute(new Float32Array(this.maxSplats * 4), 4); this.sD2 = new THREE.InstancedBufferAttribute(new Float32Array(this.maxSplats * 4), 4);
+    sg.setAttribute('aD', this.sD); sg.setAttribute('aD2', this.sD2);
+    this.splats = new THREE.InstancedMesh(sg, this.mat, this.maxSplats); this.splats.count = 0; this.splats.frustumCulled = false; this.splats.renderOrder = 1; this.splats.receiveShadow = true;
+    this.splats.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(this.splats);
+    // ---- pools: each a little grid draped over the ground
+    this.maxPools = low ? 14 : 40; this.pools = [];
+  }
+  setFog(fog) { this.dropMat.uniforms.fogColor.value.copy(fog.color); this.dropMat.uniforms.fogDensity.value = fog.density; }
+  drop(x, y, z, vx, vy, vz, r, ground) {
+    if (this.drops.length >= this.maxDrops) this.drops.shift();
+    this.drops.push({ x, y, z, vx, vy, vz, r, ground, t: 0 });
+  }
+  splat(x, z, ground, size, dirX = 1, dirZ = 0, el = 0) {
+    if (!ground) return;
+    const i = this.splatI; this.splatI = (this.splatI + 1) % this.maxSplats; this.splats.count = Math.max(this.splats.count, i + 1);
+    const y = ground(x, z); groundNormal(ground, x, z, _n);
+    _q.setFromUnitVectors(_up, _n); _q2.setFromAxisAngle(_up, Math.atan2(-dirZ, dirX)); _q.multiply(_q2);
+    _s.set(size * (1 + el * 1.4), 1, size); _m.compose(_v.set(x, y + 0.012, z).addScaledVector(_n, 0.006), _q, _s);
+    this.splats.setMatrixAt(i, _m); this.splats.instanceMatrix.needsUpdate = true;
+    this.sD.setXYZW(i, Math.random() * 100, el, BLOOD_T.value, 0); this.sD2.setXYZW(i, 70 + Math.random() * 40, 0, 0, 0);
+    this.sD.needsUpdate = true; this.sD2.needsUpdate = true;
+  }
+  pool(x, z, ground, r = 0.6, spread = 4, delay = 0, life = 90) {
+    if (!ground) return;
+    if (this.pools.length >= this.maxPools) { const o = this.pools.shift(); this.scene.remove(o); o.geometry.dispose(); }
+    const N = 10, g = new THREE.PlaneGeometry(2 * r, 2 * r, N, N); g.rotateX(-Math.PI / 2);
+    const P = g.attributes.position; for (let i = 0; i < P.count; i++) { const px = x + P.getX(i), pz = z + P.getZ(i); P.setY(i, ground(px, pz) + 0.014); P.setX(i, px); P.setZ(i, pz); }
+    g.computeVertexNormals();
+    const seed = Math.random() * 100, born = BLOOD_T.value + delay, n = P.count;
+    const d = new Float32Array(n * 4), d2 = new Float32Array(n * 4); for (let i = 0; i < n; i++) { d.set([seed, 0, born, 1], i * 4); d2.set([life, spread, 0, 0], i * 4); }
+    g.setAttribute('aD', new THREE.BufferAttribute(d, 4)); g.setAttribute('aD2', new THREE.BufferAttribute(d2, 4));
+    const m = new THREE.Mesh(g, this.mat); m.renderOrder = 1; m.receiveShadow = true; m.userData.end = born + life + 14; this.scene.add(m); this.pools.push(m);
+  }
+  update(dt) {
+    BLOOD_T.value += dt;
+    // pools that have soaked away
+    for (let i = this.pools.length - 1; i >= 0; i--) if (BLOOD_T.value > this.pools[i].userData.end) { const o = this.pools[i]; this.scene.remove(o); o.geometry.dispose(); this.pools.splice(i, 1); }
+    // droplets: fall, and where they meet the ground, spatter
+    let n = 0; const D = this.drops;
+    for (let i = 0; i < D.length; i++) {
+      const d = D[i]; d.t += dt;
+      const dr = Math.exp(-0.35 * dt); d.vx *= dr; d.vz *= dr; d.vy = d.vy * dr - 9.8 * dt;
+      d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
+      const gy = d.ground ? d.ground(d.x, d.z) : -1e9;
+      if (d.y <= gy + 0.01 || d.t > 3) {
+        if (d.y <= gy + 0.02 && d.ground && (d.r > 0.012 || Math.random() < 0.45)) {
+          const vh = Math.hypot(d.vx, d.vz), el = Math.min(1.6, vh / Math.max(1, -d.vy) * 0.9);
+          this.splat(d.x, d.z, d.ground, d.r * (5 + Math.min(6, -d.vy * 0.6)), d.vx / (vh || 1), d.vz / (vh || 1), el);
+        }
+        continue;
+      }
+      D[n++] = d;
+    }
+    D.length = n;
+    for (let i = 0; i < n; i++) { const d = D[i]; this.dP.set([d.x, d.y, d.z], i * 3); this.dV.set([d.vx, d.vy, d.vz], i * 3); this.dS[i * 2] = d.r; this.dS[i * 2 + 1] = 0.95; }
+    this.dropGeo.instanceCount = n; this.aP.needsUpdate = true; this.aV.needsUpdate = true; this.aS.needsUpdate = true;
+  }
+}
+
+// blood on a knight's weapon: the edge darkens with every kill, then rain and time wash it off
+export function bloodyWeapon(k, add = 0.1) {
+  if (!k || !k.weapon) return;
+  let B = k._blood;
+  if (!B || B.w !== k.weapon) {
+    B = k._blood = { w: k.weapon, u: { uBlood: { value: 0 }, uBloodT: { value: BLOOD_T.value } }, level: 0, t: BLOOD_T.value };
+    k.weapon.traverse((o) => {
+      if (!o.isMesh || !o.material || o.material.metalness < 0.5) return;
+      const m = o.material.clone(); o.material = m;
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.uBlood = B.u.uBlood; sh.uniforms.uBloodT = B.u.uBloodT; sh.uniforms.uBT = BLOOD_T; sh.uniforms.uBRain = WX.uRain;
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vBP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvBP = position;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+          uniform float uBlood, uBloodT, uBT, uBRain; varying vec3 vBP;
+          float wbH(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+          float wbN(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mix(wbH(i), wbH(i + vec3(1,0,0)), f.x), mix(wbH(i + vec3(0,1,0)), wbH(i + vec3(1,1,0)), f.x), f.y), mix(mix(wbH(i + vec3(0,0,1)), wbH(i + vec3(1,0,1)), f.x), mix(wbH(i + vec3(0,1,1)), wbH(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+          .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+          // how much is left: washed by rain and by time since the last kill
+          float wbL = uBlood * exp(-(uBT - uBloodT) * (0.006 + uBRain * 0.05));
+          // it gathers toward the business end, runs down in streaks, and lies thicker in the hollows
+          float wbn = wbN(vBP * vec3(90.0, 7.0, 90.0)) * 0.55 + wbN(vBP * 220.0) * 0.45;
+          float wbm = smoothstep(0.86 - wbL * 0.38, 0.9 - wbL * 0.3, wbn) * smoothstep(0.0, 0.25, wbL);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.07, 0.004, 0.005), wbm);
+          roughnessFactor = mix(roughnessFactor, 0.3, wbm);
+          metalnessFactor = mix(metalnessFactor, 0.0, wbm);`);
+      };
+      m.customProgramCacheKey = () => 'bloody-weapon-' + o.material.uuid;
+    });
+  }
+  // bank what is left, then add the new blood
+  const left = B.u.uBlood.value * Math.exp(-(BLOOD_T.value - B.u.uBloodT.value) * (0.006 + WX.uRain.value * 0.05));
+  B.u.uBlood.value = Math.min(1, left + add); B.u.uBloodT.value = BLOOD_T.value;
+}
+
 export class FX {
   constructor(scene, quality) {
     this.scene = scene; this.q = quality;
@@ -136,8 +344,9 @@ export class FX {
     for (let i = 0; i < 4; i++) { const l = new THREE.PointLight(0xffaa55, 0, 12, 2); l.userData.t = 0; scene.add(l); this.lights.push(l); }
     this.ringGeo = new THREE.RingGeometry(0.9, 1.0, 48, 1); this.ringGeo.rotateX(-Math.PI / 2);
     this.ashT = 0;
+    this.gore = new Blood(scene, quality);
   }
-  setFog(fog) { for (const p of [this.smoke, this.glow]) { p.mat.uniforms.fogColor.value.copy(fog.color); p.mat.uniforms.fogDensity.value = fog.density; } }
+  setFog(fog) { for (const p of [this.smoke, this.glow]) { p.mat.uniforms.fogColor.value.copy(fog.color); p.mat.uniforms.fogDensity.value = fog.density; } this.gore.setFog(fog); }
   resize(h) { const s = h * 0.9; this.smoke.mat.uniforms.scale.value = s; this.glow.mat.uniforms.scale.value = s; }
 
   trail(color) { return new Trail(this.scene, color); }
@@ -175,33 +384,36 @@ export class FX {
     }
     for (let i = 0; i < n * 0.7; i++) this.glow.emit({ x: pos.x, y: pos.y, z: pos.z, vx: (R() - 0.5) * 5 + (dir?.x || 0) * 3, vy: R() * 4, vz: (R() - 0.5) * 5 + (dir?.z || 0) * 3, color: [1.0, 0.35, 0.08], size: 0.05 + R() * 0.05, life: 0.4 + R() * 0.5, drag: 2, grav: -6, cell: 1 });
   }
-  // blood thrown off a cut: a spray along the line of the blade and out of the wound, droplets that fall and
-  // spatter, flecks of torn flesh; black-red, the colour of what runs in them
-  blood(pos, cut, out, amount = 1, ground = null) {
-    const n = Math.round(22 * amount), cx = cut?.x || 0, cy = cut?.y || 0, cz = cut?.z || 0, ox = out?.x || 0, oy = out?.y || 0, oz = out?.z || 0;
+  // blood thrown off a wound: an arterial spray along the line of the blade and out of the wound, droplets that
+  // streak, fall and spatter where they land; a mist; flecks of flesh. kind: 'cut' | 'pierce' | 'blunt'
+  blood(pos, cut, out, amount = 1, ground = null, kind = 'cut') {
+    const cx = cut?.x || 0, cy = cut?.y || 0, cz = cut?.z || 0, ox = out?.x || 0, oy = out?.y || 0, oz = out?.z || 0;
+    const G = this.gore, mul = this.q.particles < 0.7 ? 0.55 : 1;
+    // the spray: a cut throws it along the blade, a thrust jets it back out of the wound, a blow bursts it round
+    const along = kind === 'pierce' ? 0.6 : kind === 'blunt' ? 0.4 : 1, outw = kind === 'pierce' ? 1.6 : kind === 'blunt' ? 1.1 : 0.8;
+    const n = Math.round((26 + 30 * amount) * mul);
     for (let i = 0; i < n; i++) {
-      const along = 2.5 + R() * 4.5, outS = 0.8 + R() * 2.2;
-      this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * along + ox * outS + (R() - 0.5) * 1.2, vy: cy * along + oy * outS + 0.8 + R() * 2.2, vz: cz * along + oz * outS + (R() - 0.5) * 1.2,
-        color: [0.2 + R() * 0.08, 0.008, 0.01], a: 0.95, size: 0.035 + R() * 0.06, life: 0.55 + R() * 0.5, drag: 0.6, grav: -9.8, cell: 2, spin: 0, fadeIn: 0.01 });
+      const sA = (2 + R() * 6.5) * along, sO = (0.8 + R() * 3) * outw, j = kind === 'blunt' ? 2.6 : 1.1;
+      const r = R() < 0.12 ? 0.012 + R() * 0.016 : 0.004 + R() * 0.008;
+      G.drop(pos.x + (R() - 0.5) * 0.08, pos.y + (R() - 0.5) * 0.08, pos.z + (R() - 0.5) * 0.08,
+        cx * sA + ox * sO + (R() - 0.5) * j, cy * sA + oy * sO + 0.6 + R() * 2.4, cz * sA + oz * sO + (R() - 0.5) * j, r, ground);
     }
+    // gouts: a few heavy ropes of it, slower, falling close
+    for (let i = 0; i < Math.round((2 + 3 * amount) * mul); i++) G.drop(pos.x, pos.y, pos.z, ox * (1 + R() * 1.5) + cx * R() * 2, 0.3 + R() * 1.5, oz * (1 + R() * 1.5) + cz * R() * 2, 0.018 + R() * 0.014, ground);
     // a fine red mist where the blade went through
-    for (let i = 0; i < 4 * amount; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 1.2 + (R() - 0.5), vy: R() * 0.6, vz: cz * 1.2 + (R() - 0.5), color: [0.16, 0.01, 0.01], a: 0.35, size: 0.2 + R() * 0.2, grow: 0.9, life: 0.5 + R() * 0.4, drag: 3, cell: 0 });
+    for (let i = 0; i < 5 * amount * mul; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 1.4 + (R() - 0.5) * 0.8, vy: R() * 0.5, vz: cz * 1.4 + (R() - 0.5) * 0.8, color: [0.13, 0.008, 0.01], a: 0.28, size: 0.18 + R() * 0.25, grow: 1.1, life: 0.5 + R() * 0.5, drag: 3.5, cell: 0 });
     // flecks of flesh
-    for (let i = 0; i < 5 * amount; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 3 + ox * 2 + (R() - 0.5) * 2, vy: 1.5 + R() * 2.5, vz: cz * 3 + oz * 2 + (R() - 0.5) * 2, color: [0.08, 0.03, 0.03], a: 1, size: 0.05 + R() * 0.04, life: 0.8 + R() * 0.3, drag: 0.4, grav: -11, cell: 2, spin: 6, fadeIn: 0.01 });
-    // where it lands: a spatter on the ground ahead along the cut
-    if (ground) for (let k = 0; k < Math.ceil(2 * amount); k++) {
-      const d = 0.6 + R() * 1.8, x = pos.x + cx * d + ox * 0.6 + (R() - 0.5) * 0.6, z = pos.z + cz * d + oz * 0.6 + (R() - 0.5) * 0.6;
-      this.bloodPool(x, ground(x, z), z, 0.12 + R() * 0.25 * amount, 0.35 + R() * 0.4);
-    }
+    for (let i = 0; i < 4 * amount * mul; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 3 + ox * 2 + (R() - 0.5) * 2, vy: 1.5 + R() * 2.5, vz: cz * 3 + oz * 2 + (R() - 0.5) * 2, color: [0.07, 0.025, 0.025], a: 1, size: 0.045 + R() * 0.035, life: 0.8 + R() * 0.3, drag: 0.4, grav: -11, cell: 2, spin: 6, fadeIn: 0.01 });
+    // what runs straight down the body to its feet
+    if (ground) for (let k = 0; k < Math.ceil(amount); k++) { const x = pos.x + (R() - 0.5) * 0.4, z = pos.z + (R() - 0.5) * 0.4; G.splat(x, z, ground, 0.12 + R() * 0.15, R() - 0.5, R() - 0.5, R() * 0.4); }
   }
-  // a dark wet stain on the ground (it soaks in and fades after a while)
-  bloodPool(x, y, z, r = 0.3, delay = 0) {
-    if (!this.poolGeo) { this.poolGeo = new THREE.CircleGeometry(1, 14); const p = this.poolGeo.attributes.position; for (let i = 1; i < p.count; i++) { const a = Math.atan2(p.getY(i), p.getX(i)), k = 0.75 + 0.35 * Math.sin(a * 5 + i) * Math.sin(a * 3); p.setXY(i, p.getX(i) * k, p.getY(i) * k); } this.poolGeo.rotateX(-Math.PI / 2); }
-    if (!this.poolMat) this.poolMat = new THREE.MeshStandardMaterial({ color: 0x1c0204, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.92, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-    const pools = this.pools || (this.pools = []);
-    if (pools.length > 70) { const old = pools.shift(); this.scene.remove(old.m); old.m.material.dispose(); }
-    const m = new THREE.Mesh(this.poolGeo, this.poolMat.clone()); m.position.set(x, y + 0.02, z); m.rotation.y = R() * 6.28; m.scale.setScalar(0.001); m.renderOrder = 1; this.scene.add(m);
-    pools.push({ m, r, t: -delay, life: 40 + R() * 20 });
+  // a pool spreading under one that has fallen
+  corpsePool(pos, ground, size = 1) { this.gore.pool(pos.x, pos.z, ground, 0.55 + 0.45 * size, 3 + 3 * size, 0.35, 80 + R() * 30); }
+  // a dark wet stain on the ground (older callers): now a small pool draped on the ground
+  bloodPool(x, y, z, r = 0.3, delay = 0, ground = null) {
+    const gr = ground || (() => y);
+    if (r < 0.28) this.gore.splat(x, z, gr, r * 2.2, R() - 0.5, R() - 0.5, R() * 0.5);
+    else this.gore.pool(x, z, gr, r * 1.3, 1.2, delay, 50 + R() * 20);
   }
   // a severed part: thrown off, tumbling, bleeding from the stump, coming to rest on the ground
   gib(mesh, vel, spin, ground, bleed = 1.6) {
@@ -291,22 +503,17 @@ export class FX {
       m.scale.setScalar(0.2 + t * m.userData.maxR); m.material.opacity = (1 - t) * 0.8;
       if (t >= 1) { this.scene.remove(m); m.material.dispose(); this.rings.splice(i, 1); }
     }
-    if (this.pools) for (let i = this.pools.length - 1; i >= 0; i--) {
-      const P = this.pools[i]; P.t += dt; if (P.t < 0) continue;
-      P.m.scale.setScalar(Math.max(0.001, P.r * Math.min(1, P.t / 0.6)));   // spreading as it lands
-      P.m.material.opacity = 0.92 * (1 - smoothT(clamp((P.t - P.life) / 8, 0, 1)));
-      if (P.t > P.life + 8) { this.scene.remove(P.m); P.m.material.dispose(); this.pools.splice(i, 1); }
-    }
+    this.gore.update(dt);
     if (this.gibs) for (let i = this.gibs.length - 1; i >= 0; i--) {
       const G = this.gibs[i], m = G.m; G.t += dt;
       if (!G.rest) {
         G.v.y -= 9.8 * dt; m.position.addScaledVector(G.v, dt);
         m.rotation.x += G.w.x * dt; m.rotation.y += G.w.y * dt; m.rotation.z += G.w.z * dt;
         const gy = G.ground ? G.ground(m.position.x, m.position.z) + 0.05 : 0.05;
-        if (m.position.y < gy) { m.position.y = gy; if (Math.abs(G.v.y) > 1.5) { G.v.y *= -0.25; G.v.x *= 0.5; G.v.z *= 0.5; G.w.multiplyScalar(0.5); this.bloodPool(m.position.x, gy, m.position.z, 0.2 + R() * 0.2); } else { G.rest = true; this.bloodPool(m.position.x, gy, m.position.z, 0.35 + R() * 0.25, 0.3); } }
+        if (m.position.y < gy) { m.position.y = gy; if (Math.abs(G.v.y) > 1.5) { G.v.y *= -0.25; G.v.x *= 0.5; G.v.z *= 0.5; G.w.multiplyScalar(0.5); this.bloodPool(m.position.x, gy, m.position.z, 0.2 + R() * 0.2, 0, G.ground); } else { G.rest = true; m.userData.settle?.(G.ground); this.bloodPool(m.position.x, gy, m.position.z, 0.35 + R() * 0.25, 0.3, G.ground); } }
       }
       // the stump bleeds for a while
-      if (G.t < G.bleed && R() < dt * 30) this.smoke.emit({ x: m.position.x, y: m.position.y, z: m.position.z, vx: (R() - 0.5) * 0.8, vy: 0.5 + R(), vz: (R() - 0.5) * 0.8, color: [0.2, 0.01, 0.01], a: 0.9, size: 0.04 + R() * 0.03, life: 0.5, drag: 0.5, grav: -9.8, cell: 2, fadeIn: 0.01 });
+      if (G.t < G.bleed && R() < dt * 40) this.gore.drop(m.position.x, m.position.y, m.position.z, (R() - 0.5) * 0.8, 0.4 + R(), (R() - 0.5) * 0.8, 0.005 + R() * 0.008, G.ground);
       if (G.t > 18) { const k = clamp((G.t - 18) / 3, 0, 1); m.position.y -= dt * 0.08; if (k >= 1) { this.scene.remove(m); this.gibs.splice(i, 1); } }
     }
     for (let i = this.beams.length - 1; i >= 0; i--) {

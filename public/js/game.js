@@ -8,7 +8,7 @@ import { Watcher, Crevices, Hound, Serpent, Cryptid, Dragon, phantomDevil } from
 import { robeWind } from './horror.js';
 import { Cave } from './cave.js';
 import { Weather } from './weather.js';
-import { FX } from './fx.js';
+import { FX, bloodyWeapon } from './fx.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
 import { CHAPTERS, PRAYERS, HEALED as HEALED_LOW, HEALED_HIGH } from './chapters.js';
@@ -154,6 +154,7 @@ export class Game {
   // ================================================================ net
   bindNet() {
     const n = this.net; if (!n || this.opts.solo) return;
+    n.on('k:sv', (m) => { const d = this.horde.byId.get(m.d); if (!d || d.severed) return; const P = V(m.p[0], m.p[1], m.p[2]); d.sever(P, V(m.c[0], m.c[1], m.c[2]), this.fx, (x, z) => this.world ? this.world.heightAt(x, z) : 0, m.part); this.audio.gore?.('cut', P, true); });
     n.on('k:ks', (m) => { const k = this.knights.get(m.from); if (k && k !== this.me) k.netS = m.s; });
     n.on('k:snap', (m) => { if (!this.isHost) this.lastSnap = m; });
     n.on('k:ev', (m) => { if (!this.isHost || m.from !== this.net.id) this.onEvent(m.e, m.a, true); });
@@ -695,7 +696,9 @@ export class Game {
     const out = target ? new THREE.Vector3(p.x - target.pos.x, 0.25, p.z - target.pos.z).normalize() : dir.clone().negate();
     const ground = (x, z) => this.world ? this.world.heightAt(x, z) : 0;
     this.fx.ichor(p, cut, 0.35 * weight);   // a breath of the black smoke they are made of
-    this.fx.blood(p, cut, out, (kind === 'blunt' ? 0.5 : kind === 'pierce' ? 0.8 : 1.1) * weight * (heavy ? 1.5 : 1) * (k.fury > 0 ? 1.3 : 1), ground);
+    this.fx.blood(p, cut, out, (kind === 'blunt' ? 0.5 : kind === 'pierce' ? 0.8 : 1.1) * weight * (heavy ? 1.5 : 1) * (k.fury > 0 ? 1.3 : 1), ground, kind);
+    bloodyWeapon(k, (heavy ? 0.12 : 0.07) * weight * (lethal ? 1.6 : 1));
+    if (lethal && target) this.fx.corpsePool(target.pos, ground, target.def?.big ? 1.6 : 1);
     if (boss || kind === 'blunt') this.fx.sparks(p, boss ? 8 : 3, [1, 0.5, 0.2]);
     if (k.fury > 0) this.fx.holyMotes(p, 0.5, 8);
     this.audio.hit(kind, p, weight * (heavy ? 1.3 : 1));
@@ -710,7 +713,11 @@ export class Game {
       target.addWound?.(p, cut, kind, heft);
       target.strikePart?.(p, dir, Math.min(1.6, heft));
       if ((heavy || kind === 'blunt' && fin) && !target.def?.big && !lethal) target.knockVis = 1;
-      if (lethal && kind !== 'blunt' && (heavy || fin || Math.random() < 0.45)) { target.sever?.(p, cut, this.fx, ground); this.audio.gore?.('cut', p, true); }
+      if (lethal && kind !== 'blunt' && (heavy || fin || Math.random() < 0.45)) {
+        const part = target.sever?.(p, cut, this.fx, ground); this.audio.gore?.('cut', p, true);
+        // everyone else sees the same part come off the same demon
+        if (part && !this.opts.solo && target.id != null && this.horde.byId.get(target.id) === target) this.net.send('sv', { d: target.id, part, p: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], c: [+cut.x.toFixed(2), +cut.y.toFixed(2), +cut.z.toFixed(2)] });
+      }
     }
     if (k === this.me) {
       this.ui.hitMark(); this.hitstop = stop;
@@ -1222,7 +1229,7 @@ export class Game {
     if (this.watcher) this.scene.remove(this.watcher.mesh);
     if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
     this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; this.weather?.dispose(); this.weather = null; for (const k of this.fallenKnights || []) k.dispose();
-    for (const k of ['k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'k:kc', 'left']) this.net?.off(k);
+    for (const k of ['k:sv', 'k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'k:kc', 'left']) this.net?.off(k);
   }
 }
 

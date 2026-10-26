@@ -167,6 +167,59 @@ const WOUND = (() => {
   };
 })();
 
+// ---------------------------------------------------------------- severing: splitting a part off the skinned mesh
+// For each demon kind and each severable bone, the triangles weighted mostly to that bone and those below it
+// become the piece; the rest stay with the body. Both share the kind's vertex buffers (only the index differs).
+const SPLITS = new WeakMap();
+function splitFor(mesh, bone) {
+  const geo = mesh.geometry.userData.whole || mesh.geometry;
+  let per = SPLITS.get(geo); if (!per) SPLITS.set(geo, per = {});
+  if (per[bone.name]) return per[bone.name];
+  const bones = mesh.skeleton.bones, set = new Set(); bone.traverse((o) => { if (o.isBone) set.add(bones.indexOf(o)); });
+  const pos = geo.attributes.position, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight; if (!si || !sw) return null;
+  const n = pos.count, w = new Float32Array(n);
+  for (let i = 0; i < n; i++) { let t = 0; for (let k = 0; k < 4; k++) if (set.has(si.getComponent(i, k))) t += sw.getComponent(i, k); w[i] = t; }
+  const idx = geo.index ? geo.index.array : Array.from({ length: n }, (_, i) => i);
+  const pieceI = [], bodyI = [];
+  for (let t = 0; t < idx.length; t += 3) { const a = idx[t], b = idx[t + 1], c = idx[t + 2]; ((w[a] + w[b] + w[c]) / 3 >= 0.5 ? pieceI : bodyI).push(a, b, c); }
+  if (!pieceI.length) return per[bone.name] = null;
+  // the rim of the cut: edges of piece triangles that a body triangle shares (welded by position, across UV seams)
+  const key = (i) => `${Math.round(pos.getX(i) * 2000)},${Math.round(pos.getY(i) * 2000)},${Math.round(pos.getZ(i) * 2000)}`;
+  const ek = (a, b) => { const ka = key(a), kb = key(b); return ka < kb ? ka + '|' + kb : kb + '|' + ka; };
+  const bodyEdges = new Set(); for (let t = 0; t < bodyI.length; t += 3) for (let e = 0; e < 3; e++) bodyEdges.add(ek(bodyI[t + e], bodyI[t + (e + 1) % 3]));
+  const rim = new Map();
+  for (let t = 0; t < pieceI.length; t += 3) for (let e = 0; e < 3; e++) { const a = pieceI[t + e], b = pieceI[t + (e + 1) % 3]; if (bodyEdges.has(ek(a, b))) { rim.set(key(a), a); rim.set(key(b), b); } }
+  const used = [...new Set(pieceI)], step = Math.max(1, Math.floor(used.length / 80));
+  const make = (I) => { const g = new THREE.BufferGeometry(); for (const k in geo.attributes) g.setAttribute(k, geo.attributes[k]); g.setIndex(I); g.boundingSphere = geo.boundingSphere?.clone() || null; g.boundingBox = geo.boundingBox?.clone() || null; g.userData.whole = geo; return g; };
+  return per[bone.name] = { pieceGeo: make(pieceI), bodyGeo: make(bodyI), boundary: rim.size ? [...rim.values()] : used.slice(0, 12), sample: used.filter((_, i) => i % step === 0) };
+}
+// a cut face: wet dark flesh domed slightly out of the wound, a ring of torn skin, the pale bone in the middle
+const CUT = {
+  flesh: new THREE.MeshStandardMaterial({ color: 0x4a0508, emissive: 0x120000, roughness: 0.18, metalness: 0.05 }),
+  meat: new THREE.MeshStandardMaterial({ color: 0x6e1a16, roughness: 0.4 }),
+  bone: new THREE.MeshStandardMaterial({ color: 0xd6cbb6, roughness: 0.55 }),
+  marrow: new THREE.MeshStandardMaterial({ color: 0x5a1a12, roughness: 0.35 }),
+  dome: (() => { const g = new THREE.SphereGeometry(1, 18, 6, 0, Math.PI * 2, 0, Math.PI * 0.32); const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.sin(i * 12.9898) * 43758.5453 % 1) * 0.06; p.setXYZ(i, p.getX(i) * k, (p.getY(i) - Math.cos(Math.PI * 0.32)) * 0.6, p.getZ(i) * k); } g.computeVertexNormals(); return g; })(),
+  ring: new THREE.TorusGeometry(1, 0.09, 6, 20).rotateX(Math.PI / 2),
+  bone1: new THREE.CylinderGeometry(1, 1.08, 1, 10),
+};
+function cutFace(bone, at, out, r, head) {
+  const g = new THREE.Group();
+  const dome = new THREE.Mesh(CUT.dome, CUT.flesh); dome.scale.set(r * 1.08, r * 0.55, r * 1.08); g.add(dome);
+  const ring = new THREE.Mesh(CUT.ring, CUT.meat); ring.scale.setScalar(r * 1.0); g.add(ring);
+  const br = r * (head ? 0.3 : 0.36);
+  const b1 = new THREE.Mesh(CUT.bone1, CUT.bone); b1.scale.set(br, r * 0.22, br); b1.position.y = r * 0.08; g.add(b1);
+  const mw = new THREE.Mesh(CUT.bone1, CUT.marrow); mw.scale.set(br * (head ? 0.42 : 0.5), r * 0.23, br * (head ? 0.42 : 0.5)); mw.position.y = r * 0.09; g.add(mw);
+  // place it at the cut in the bone's own frame, its +Y pointing out of the wound
+  bone.updateWorldMatrix(true, false);
+  const inv = new THREE.Matrix4().copy(bone.matrixWorld).invert();
+  g.position.copy(at.clone().applyMatrix4(inv));
+  const qb = bone.getWorldQuaternion(new THREE.Quaternion()).invert(), sb = bone.getWorldScale(new THREE.Vector3());
+  g.quaternion.copy(qb.multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), out)));
+  g.scale.set(1 / sb.x, 1 / sb.y, 1 / sb.z);
+  return g;
+}
+
 // ---------------------------------------------------------------- demon instance
 const ST = { spawn: 0, chase: 1, windup: 2, strike: 3, recover: 4, stagger: 5, dead: 6, special: 7, flee: 8, leap: 9 };
 export const STATE_NAMES = Object.fromEntries(Object.entries(ST).map(([k, v]) => [v, k]));
@@ -351,30 +404,62 @@ export class Demon {
     this.partHit = { bone: this.B[name], t: 0, ax: lz * 0.9 * heft, az: -lx * 0.9 * heft };
     if (/hand|fArm/.test(name)) { const up = this.B[name.replace('hand', 'fArm').replace('fArm', 'uArm')]; if (up) this.partHit2 = { bone: up, t: 0, ax: lz * 0.5 * heft, az: -lx * 0.5 * heft }; }
   }
-  // a killing cut takes off a head or an arm: the bone folds away to nothing and the part falls free, bleeding
-  sever(p, cut, fx, ground) {
-    if (this.severed || !fx) return; const B = this.B;
-    const name = this.nearestBone(p) || 'chest';
-    let part = /head|neck/.test(name) ? 'head' : /R$/.test(name) && /arm|Arm|hand|clav/.test(name) ? 'R' : /L$/.test(name) && /arm|Arm|hand|clav/.test(name) ? 'L' : null;
-    if (!part) part = p.y > this.pos.y + this.def.height * this.scale * 0.78 ? 'head' : (Math.random() < 0.5 ? 'R' : 'L');
-    const bone = part === 'head' ? B.head : B['uArm' + part]; if (!bone) return;
-    this.severed = part; bone.updateWorldMatrix(true, false);
-    const at = bone.getWorldPosition(new THREE.Vector3()), s = this.scale * (this.def.height / 1.8);
-    // the piece itself
-    const flesh = WOUND.fleshMat, gore = WOUND.gashMat, grp = new THREE.Group();
-    if (part === 'head') {
-      const h = new THREE.Mesh(WOUND.head, flesh); h.scale.setScalar(s); grp.add(h);
-      for (const e of [-1, 1]) { const ey = new THREE.Mesh(WOUND.eye, WOUND.eyeMat); ey.position.set(e * 0.04 * s, 0.03 * s, 0.1 * s); grp.add(ey); }
-      const st = new THREE.Mesh(WOUND.stump, gore); st.scale.setScalar(0.07 * s); st.position.y = -0.1 * s; grp.add(st);
-    } else {
-      const a = new THREE.Mesh(WOUND.arm, flesh); a.scale.setScalar(s); grp.add(a);
-      const st = new THREE.Mesh(WOUND.stump, gore); st.scale.setScalar(0.05 * s); st.position.y = 0.02 * s; grp.add(st);
+  // a killing cut takes off a head or an arm. The piece that falls is the demon's own flesh: the triangles
+  // weighted to that bone are split off its skinned mesh (same geometry, skin, material, horns and eyes, in the
+  // pose of the moment), the body keeps the rest, and both open ends are capped with a wet cut face and bone.
+  sever(p, cut, fx, ground, forcePart) {
+    if (this.severed || !fx) return null; const B = this.B;
+    let part = forcePart || null;
+    if (!part) {
+      const name = this.nearestBone(p) || 'chest';
+      part = /head|neck/.test(name) ? 'head' : /R$/.test(name) && /arm|Arm|hand|clav/.test(name) ? 'R' : /L$/.test(name) && /arm|Arm|hand|clav/.test(name) ? 'L' : null;
+      if (!part) part = p.y > this.pos.y + this.def.height * this.scale * 0.78 ? 'head' : (Math.random() < 0.5 ? 'R' : 'L');
     }
-    grp.position.copy(at); grp.quaternion.copy(bone.getWorldQuaternion(new THREE.Quaternion())); grp.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-    const v = (cut ? cut.clone() : new THREE.Vector3()).multiplyScalar(3.5).add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 2.5 + Math.random() * 2, (Math.random() - 0.5) * 1.5));
-    fx.gib(grp, v, new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 14), ground, 2.2);
-    // and on the body, the part is gone: the bone (and all below it) folds to a point, and the stump spurts
-    bone.scale.setScalar(0.001); this.stump = { bone: part === 'head' ? (B.neck || bone) : (B['clav' + part] || bone), t: 0 };
+    const bone = part === 'head' ? B.head : B['uArm' + part]; if (!bone) return null;
+    this.severed = part;
+    const mesh = this.mesh; mesh.updateMatrixWorld(true);
+    const split = splitFor(mesh, bone); if (!split) return null;
+    // where the cut runs, in the world, right now
+    const v = new THREE.Vector3(), C = new THREE.Vector3(), P = new THREE.Vector3();
+    const world = (i) => mesh.localToWorld(mesh.applyBoneTransform(i, v.fromBufferAttribute(mesh.geometry.attributes.position, i)));
+    for (const i of split.boundary) C.add(world(i)); C.multiplyScalar(1 / split.boundary.length);
+    for (const i of split.sample) P.add(world(i)); P.multiplyScalar(1 / split.sample.length);
+    const n = P.clone().sub(C).normalize();   // from the cut into the severed piece
+    let r = 0; for (const i of split.boundary) { const d = world(i).sub(C); r += d.sub(n.clone().multiplyScalar(d.dot(n))).length(); } r /= split.boundary.length;
+    // ---- the piece: a second skinned mesh on the same geometry, drawing only the piece's triangles, on a frozen
+    // copy of the skeleton (with whatever rides on the piece's bones: eyes, horns, crown, wounds)
+    const sub = new Set(); bone.traverse((o) => { if (o.isBone) sub.add(o); });
+    const root = mesh.skeleton.bones[0], copy = root.clone(true), byName = {};
+    copy.traverse((o) => { if (o.isBone) byName[o.name] = o; });
+    const keep = new Set(); for (const b of sub) keep.add(byName[b.name]);
+    copy.traverse((o) => { if (o.isBone) for (const c of [...o.children]) if (!c.isBone && (!keep.has(o) || c.isSkinnedMesh)) o.remove(c); });
+    const piece = new THREE.SkinnedMesh(split.pieceGeo, this.mat); piece.frustumCulled = false; piece.castShadow = true;
+    piece.add(copy);
+    piece.bind(new THREE.Skeleton(mesh.skeleton.bones.map((b) => byName[b.name]), mesh.skeleton.boneInverses), mesh.bindMatrix);
+    // hide what rode on the body's own piece bones (it is on the copy now)
+    for (const b of sub) for (const c of b.children) if (!c.isBone) c.visible = false;
+    // the piece hangs from a pivot at its own middle, so it tumbles about itself
+    const grp = new THREE.Group(); grp.position.copy(P.clone().lerp(C, 0.35)); grp.quaternion.copy(bone.getWorldQuaternion(new THREE.Quaternion())); grp.updateMatrixWorld(true);
+    new THREE.Matrix4().copy(grp.matrixWorld).invert().multiply(mesh.matrixWorld).decompose(piece.position, piece.quaternion, piece.scale);
+    grp.add(piece);
+    // cut faces: on the piece (facing out of it) and on the body (facing up out of the stump)
+    const pieceBone = byName[bone.name], bodyBone = bone.parent && bone.parent.isBone ? bone.parent : bone;
+    grp.updateMatrixWorld(true);
+    pieceBone.add(cutFace(pieceBone, C, n.clone().negate(), r, part === 'head'));
+    const bodyCap = cutFace(bodyBone, C, n, r, part === 'head'); bodyBone.add(bodyCap);
+    grp.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    // when it comes to rest, it lies on the ground by its lowest point (not by its pivot)
+    grp.userData.settle = (gfn) => {
+      grp.updateMatrixWorld(true); let lo = Infinity, lx = 0, lz = 0;
+      for (const i of split.sample) { piece.localToWorld(piece.applyBoneTransform(i, v.fromBufferAttribute(piece.geometry.attributes.position, i))); if (v.y < lo) { lo = v.y; lx = v.x; lz = v.z; } }
+      const gy = gfn ? gfn(lx, lz) : 0; grp.position.y += gy - lo + 0.01;
+    };
+    // ---- the body: the same geometry without the piece's triangles, open at the cut and capped
+    mesh.geometry = split.bodyGeo;
+    const dir = (cut ? cut.clone() : new THREE.Vector3()).multiplyScalar(3.5).add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 2.5 + Math.random() * 2, (Math.random() - 0.5) * 1.5));
+    fx.gib(grp, dir, new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 14), ground, 2.2);
+    this.stump = { bone: bodyCap, t: 0 };
+    return part;
   }
   // ------------------------------------------------ client puppet
   applySnap(s, dt) {
