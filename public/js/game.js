@@ -76,18 +76,19 @@ export class Game {
     if (this.boss) { this.boss.dispose(); this.boss = null; }
     if (this.watcher) { this.scene.remove(this.watcher.mesh); this.watcher = null; }
     this.crevices = null;
-    this.world = new World(this.engine, this.engine.q, n);
+    const __T = (window.__LT = {}), __m = (k) => { const t = performance.now(); __T[k] = Math.round(t - (__T._t || t)); __T._t = t; }; __m('start');
+    this.world = new World(this.engine, this.engine.q, n); __m('world');
     this.story.build(this.world, n); this.dread.clear();
-    this.layOutFallen(ch);
+    __m('story'); this.layOutFallen(ch); __m('fallen');
     this.shop.build(this.world); this.terror.reset();
-    this.cave?.dispose(); this.cave = this.world.cave ? new Cave(this) : null;
-    this.weather?.dispose(); this.weather = new Weather(this);   // after everything in the land is built, so it all goes wet
+    __m('shop'); this.cave?.dispose(); this.cave = this.world.cave ? new Cave(this) : null; __m('cave');
+    this.weather?.dispose(); this.weather = new Weather(this); __m('weather');   // after everything in the land is built, so it all goes wet
     if (this.world.vista) { const peak = this.world.ch.id === 'peak'; this.world.vista.onThunder = (str, delay) => this.audio.thunder(peak ? Math.max(1.3, str * 1.6) : str, peak ? Math.min(delay, 0.7) : delay); }   // on the Peak the storm is right on top of you
     this.world.onToll = (p) => this.audio.bell(p, 0.5, 0.75);
     this.world.dragonWorld = this.world;
     this.fx.setFog(this.scene.fog);
     if (ch.devil?.watch) { this.watcher = new Watcher(this.scene, this.fx); this.watcher.world = this.world; if (ch.devil.army) this.watcher.mode = 'army'; this.watcher.audio = this.audio; this.watcher.view = this.engine.camera; this.watcher.prewarm(this.engine.renderer, this.engine.camera); }
-    phantomDevil(this);   // the scares' Devil, built and compiled now rather than the first time he appears
+    __m('watcher'); phantomDevil(this); __m('phantom');   // the scares' Devil, built and compiled now rather than the first time he appears
     if (ch.devil?.crevice) this.crevices = new Crevices(this.scene, this.world.creviceSpots);
     this.obj = { ch: n, ph: 'intro', a: 0, p: this.world.altars.map(() => 0), s: this.world.altars.map(() => 'blighted'), waveT: 6, roamT: 14, checkpoint: null, wards: false, bossDone: [] };
     // place the company at the road's start

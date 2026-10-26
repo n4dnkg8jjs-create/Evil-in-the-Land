@@ -382,19 +382,20 @@ export class World {
     this.time = 0; this.healAnims = []; this.wind = new THREE.Vector3(this.ch.wind[0], 0, this.ch.wind[1]);
     this.fires = []; this.waterLevel = -1000; this.fireSpots = []; this.charSpots = []; this.wells = [];
     this.healedFrac = 0;
-    this.buildPath();
-    this.planSettlement();
-    this.buildHeights();
-    this.buildTerrain();
-    if (this.ch.terrain.kind !== 'peak') this.buildFarTerrain();
-    this.buildAltars();
-    this.buildProps();
-    this.buildGrass();
-    if (this.ch.terrain.water !== undefined) this.buildWater();
-    if (this.ch.terrain.kind === 'peak') this.buildCloudSea();
-    engine.setAtmosphere(this.ch.atmos);
-    this.baseAtmos = this.ch.atmos;
-    this.vista = new Vista(engine, chapterIdx, this.ch, (x, z) => this.groundAt(x, z));
+    const __W = (window.__WT = {}); let __t = performance.now(); const __m = (k) => { const t = performance.now(); __W[k] = Math.round(t - __t); __t = t; };
+    this.buildPath(); __m('buildPath');
+    this.planSettlement(); __m('planSettlement');
+    this.buildHeights(); __m('buildHeights');
+    this.buildTerrain(); __m('buildTerrain');
+    if (this.ch.terrain.kind !== 'peak') this.buildFarTerrain(); __m('far');
+    this.buildAltars(); __m('buildAltars');
+    this.buildProps(); __m('buildProps');
+    this.buildGrass(); __m('buildGrass');
+    if (this.ch.terrain.water !== undefined) this.buildWater(); __m('water');
+    if (this.ch.terrain.kind === 'peak') this.buildCloudSea(); __m('cloud');
+    engine.setAtmosphere(this.ch.atmos); __m('engine.setAtmosphere');
+    this.baseAtmos = this.ch.atmos; __m('baseAtmos = ch.atmos');
+    this.vista = new Vista(engine, chapterIdx, this.ch, (x, z) => this.groundAt(x, z)); __m('vista');
   }
 
   // ---------------------------------------------------------------- layout
