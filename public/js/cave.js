@@ -392,7 +392,7 @@ export class Cave {
     if (mHall) { const a = Math.atan2(mHall.z - Ch0.z, mHall.x - Ch0.x) - 0.55, rr = S.rAt(Ch0, a) * 0.8, x = Ch0.x + Math.cos(a) * rr, z = Ch0.z + Math.sin(a) * rr; spots.push({ pose: 'slump', x, z, yaw: Math.atan2(Ch0.x - x, Ch0.z - z) }); }
     if (mNave) { const toC = Math.atan2(Ch1.x - mNave.x, Ch1.z - mNave.z), x = mNave.x + Math.sin(toC) * 4.2 + Math.cos(toC) * 1.3, z = mNave.z + Math.cos(toC) * 4.2 - Math.sin(toC) * 1.3; spots.push({ pose: 'slump', x, z, yaw: Math.atan2(mNave.x - x, mNave.z - z) }); }
     { const F = S.mainAt(S.sB - 13); spots.push({ pose: 'lie', x: F.x, z: F.z, yaw: Math.atan2(F.tx, F.tz) + Math.PI / 2 }); }
-    this.dead = spots.map((sp, i) => { const fz = makeFrozen(sp.pose, seed); if (!fz) return null; fz.settle((x, z) => W.heightAt(x, z), sp.x, sp.z, sp.yaw); fz.root.visible = i === 0; this.group.add(fz.root); return { root: fz.root, x: sp.x, z: sp.z, y: W.heightAt(sp.x, sp.z) }; }).filter(Boolean);
+    this.dead = spots.map((sp, i) => { const fz = makeFrozen(sp.pose, seed, { snow: false }); if (!fz) return null; fz.settle((x, z) => W.heightAt(x, z), sp.x, sp.z, sp.yaw); fz.root.visible = i === 0; this.group.add(fz.root); return { root: fz.root, x: sp.x, z: sp.z, y: W.heightAt(sp.x, sp.z) }; }).filter(Boolean);
     this.deadAt = 0;
     // NON EXIBIS, in blood, come up on the Hall's wall behind you
     const c = document.createElement('canvas'); c.width = 1024; c.height = 256; const x = c.getContext('2d');

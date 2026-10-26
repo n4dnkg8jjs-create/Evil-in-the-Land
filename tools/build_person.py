@@ -23,6 +23,9 @@ VARIANTS = {
     # a well-fed camp trader in his prime, cropped hair and a beard
     'sutler': {'height': 1.72, 'targets': [('universal-male-young-averagemuscle-maxweight.target', 0.75), ('male-young-averagemuscle-averageweight-idealproportions.target', 0.5)], 'hair': 'crop'},
 }
+# Our Lady of the Fen (statue.js): a young woman, built to lady.json so the townsfolk file stays as it was.
+# python3 tools/build_person.py /home/claude/mh --lady
+LADY = {'lady': {'height': 1.66, 'targets': [('universal-female-young-averagemuscle-averageweight.target', 1.0), ('female-young-averagemuscle-averageweight-idealproportions.target', 0.6)], 'hair': 'veil'}}
 SKIN, HAIR, BROW, SHOE, EYE, LIP, CLOTH = 0, 1, 2, 3, 4, 5, 6
 
 
@@ -169,7 +172,7 @@ def build(name, cfg):
     if cfg['hair'] == 'tonsure':
         hair *= 1 - ss(crown - 0.05, crown - 0.038, Vb[:, 1])          # the shaven crown
         hair *= 1 - ss(0.07, 0.085, y_) * ss(-0.06, -0.03, z_)          # an old man's high bare brow
-    else:
+    elif cfg['hair'] == 'crop':
         lowf = ss(-0.032, -0.05, y_) * ss(-0.115, -0.09, z_)          # the jaw and chin, round to the ears
         mouth = np.exp(-((x_ / 0.024) ** 2 + ((y_ + 0.071) / 0.008) ** 2)) * ss(-0.02, 0.0, z_)
         tache = ss(0.032, 0.02, np.abs(x_)) * ss(-0.064, -0.058, y_) * ss(-0.05, -0.056, y_) * ss(-0.01, 0.01, z_)
@@ -207,9 +210,10 @@ def build(name, cfg):
 def main():
     out = {'about': 'Townsfolk from the MakeHuman base mesh and low-poly eyes (CC0, makehumancommunity.org). Built by tools/build_person.py.',
            'joints': B.JOINTS, 'regions': ['skin', 'hair', 'brow', 'shoe', 'eye', 'lip', 'cloth'], 'variants': {}}
-    for name, cfg in VARIANTS.items(): out['variants'][name] = build(name, cfg)
+    lady = '--lady' in sys.argv
+    for name, cfg in (LADY if lady else VARIANTS).items(): out['variants'][name] = build(name, cfg)
     os.makedirs(OUTDIR, exist_ok=True)
-    fn = os.path.join(OUTDIR, 'people.json'); json.dump(out, open(fn, 'w'), separators=(',', ':'))
+    fn = os.path.join(OUTDIR, 'lady.json' if lady else 'people.json'); json.dump(out, open(fn, 'w'), separators=(',', ':'))
     shutil.copy(os.path.join(SRC, 'eyes', 'brown_eye.png'), os.path.join(OUTDIR, 'eye.png'))
     print('bytes', os.path.getsize(fn))
 

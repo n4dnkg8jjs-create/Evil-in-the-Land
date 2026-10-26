@@ -98,7 +98,11 @@ const dec = (b64, Type) => { const s = atob(b64); const u = new Uint8Array(s.len
 export async function loadPeople(url = 'models/people.json') {
   if (PEOPLE) return PEOPLE;
   try {
-    const j = await (await fetch(url)).json(); const out = {};
+    // the townsfolk, and Our Lady of the Fen (a separate file, so a failure there costs only the statue)
+    const ladyUrl = url.replace(/people\.json$/, 'lady.json');
+    const [j, jl] = await Promise.all([fetch(url).then((r) => r.json()), ladyUrl !== url ? fetch(ladyUrl).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null]);
+    const out = {};
+    if (jl) for (const [n, v] of Object.entries(jl.variants)) j.variants[n] = v;
     const map = j.joints.map((n) => JOINTS.indexOf(n));
     for (const [name, v] of Object.entries(j.variants)) {
       const geo = new THREE.BufferGeometry();
@@ -677,22 +681,42 @@ export function makePerson(kind, quality) {
     U.quaternion.copy(qu.slerp(U.quaternion, w)); F.quaternion.copy(qf.slerp(F.quaternion, w));
   };
 
-  // the blessing: he raises his right hand and makes the sign of the cross over the knight, head to breast, shoulder to shoulder
-  const bless = () => { if (mode === 'stand') act = { kind: 'bless', t: 0 }; };
+  // the blessing: he raises his right hand, palm open toward the knight, and traces the sign of the cross in the
+  // air over him: a stroke from above the brow down to the breast, then from his own left across to his right.
+  // The hand is carried along a path in front of him by the arm's IK, easing into and holding a moment at each
+  // point; the blend in and out of his idle is on the IK's weight, so nothing pops.
+  // path keys: [time, x (his left +), y (up), z (forward)], relative to his right shoulder, in his own frame
+  const BLESS = [[0.95, 0.13, 0.2, 0.4], [1.15, 0.13, 0.2, 0.4], [1.65, 0.13, -0.2, 0.38], [1.82, 0.13, -0.2, 0.38], [2.3, 0.33, -0.04, 0.43], [2.47, 0.33, -0.04, 0.43], [3.02, -0.1, -0.04, 0.42], [3.25, -0.1, -0.04, 0.42]];
+  const BLESS_D = 3.95;
+  const bless = () => { if (mode === 'stand') act = { kind: 'bless', t: 0, tgt: new V3(), w: 0 }; };
+  const blessKey = (T, o) => {
+    if (T <= BLESS[0][0]) return o.set(BLESS[0][1], BLESS[0][2], BLESS[0][3]);
+    for (let i = 0; i < BLESS.length - 1; i++) { const A = BLESS[i], Bk = BLESS[i + 1]; if (T <= Bk[0]) { const e = smoothstep01((T - A[0]) / Math.max(1e-3, Bk[0] - A[0]));
+      o.set(lerp(A[1], Bk[1], e), lerp(A[2], Bk[2], e), lerp(A[3], Bk[3], e));
+      if (A[1] !== Bk[1] && A[2] === Bk[2] && A === BLESS[3]) o.z += Math.sin(Math.PI * e) * 0.03;   // from the breast to his left shoulder: a little out and round
+      return o; } }
+    const L = BLESS[BLESS.length - 1]; return o.set(L[1], L[2], L[3]);
+  };
   const blessPose = (dt) => {
-    const T = (act.t += dt), D = 3.6;
-    const w = smoothstep01((T - 0.2) / 0.55) * (1 - smoothstep01((T - (D - 0.55)) / 0.55));
-    // the hand traces: up at the brow, down to the breast, then from his left shoulder across to his right
-    let ux = -78, uy = 8; const fx = -48;
-    if (T > 1.0 && T < 1.6) ux = lerp(-78, -42, smoothstep01((T - 1.0) / 0.6));
-    else if (T >= 1.6 && T < 1.95) ux = lerp(-42, -62, smoothstep01((T - 1.6) / 0.35));
-    if (T >= 1.95) { ux = -62; uy = lerp(30, -22, smoothstep01((T - 1.95) / 0.75)); }
-    over('uArmR', [ux, uy, -6], w); over('fArmR', [fx, 15, 0], w); over('handR', [-10, 0, -70], w);
-    over('uArmL', [-18, 0, 4], w); over('fArmL', [-100, -48, 0], w);   // the left hand to his breast
-    // he bows his head as he begins, looks up at the knight to bless him, and bows again at the end
-    const bow = smoothstep01(T / 0.4) * (1 - smoothstep01((T - 0.8) / 0.4)) + smoothstep01((T - (D - 0.7)) / 0.3) * (1 - smoothstep01((T - D) / 0.4));
-    over('head', [cur.head[0] + 22, 0, 0], bow); over('chest', [cur.chest[0] + 5, 0, 0], Math.max(bow, w * 0.6));
-    if (T > D + 0.4) act = null;
+    const T = (act.t += dt), D = BLESS_D;
+    act.w = smoothstep01((T - 0.25) / 0.7) * (1 - smoothstep01((T - (D - 0.7)) / 0.65));
+    const w = act.w;
+    // posed part: the hand open, palm forward and fingers up; the left hand laid on his breast; the shoulder lifted a touch
+    over('handR', [-8, 0, -62], w); over('uArmL', [-18, 0, 4], w); over('fArmL', [-100, -48, 0], w);
+    // he bows as he begins, lifts his eyes to the knight for the cross, and bows again at the end
+    const bow = smoothstep01(T / 0.45) * (1 - smoothstep01((T - 0.75) / 0.45)) + smoothstep01((T - (D - 0.8)) / 0.4) * (1 - smoothstep01((T - D - 0.1) / 0.45));
+    over('head', [cur.head[0] + 20, cur.head[1], cur.head[2]], bow); over('neck', [cur.neck[0] + 6, cur.neck[1], cur.neck[2]], bow);
+    over('chest', [cur.chest[0] + 4, cur.chest[1], cur.chest[2]], Math.max(bow, w * 0.5));
+    blessKey(T, act.key ||= new V3());
+    if (T > D + 0.6) act = null;
+  };
+  // after the body is posed: carry the right hand to the path point (world), blended in by the act's weight
+  const blessArm = () => {
+    if (!act || act.kind !== 'bless' || !act.key) return;
+    root.updateMatrixWorld(true); J.uArmR.getWorldPosition(_a);
+    const ry = yawOf(root), c = Math.cos(ry), sn = Math.sin(ry), k = act.key;
+    act.tgt.set(_a.x + k.x * c + k.z * sn, _a.y + k.y, _a.z - k.x * sn + k.z * c);
+    reachArm('R', -1, act.tgt, act.w);
   };
   // walking to a point (world space), turning at the end to face `face` (a world yaw) if given, then whatever comes next
   const walkTo = (target, done, gfn, face) => { if (gfn) ground = gfn; if (space) setSpace(null); mode = 'walk'; act = null; walk = { target: target.clone(), done, face, v: 0, settle: 0 }; };
@@ -831,6 +855,7 @@ export function makePerson(kind, quality) {
     for (const j of PJ) setE(j, cur[j][0], cur[j][1], cur[j][2]);
     // the legs, from the feet
     legs(dt, lift);
+    blessArm();
     // and the hands to whatever he is holding on to as he climbs
     if (script?.cur) {
       root.updateMatrixWorld(true); const W = script.wagon, C = script.cur;
@@ -852,7 +877,7 @@ export function makePerson(kind, quality) {
 // fallen beside him. Posed as men really lie dead (curled on the side, face down with an arm caught under him,
 // hunched sitting, slumped back against the rock), dirt and old blood in the cloth, and settled onto the ground
 // under them (tilted to the slope, the lowest flesh resting on it) with what they dropped lying round them.
-function frostMat(color, rough = 0.85, metal = 0, grime = 1) {
+function frostMat(color, rough = 0.85, metal = 0, grime = 1, { quilt = 0, weave = 0 } = {}) {
   const m = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uGrime = { value: grime };
@@ -864,15 +889,23 @@ float vn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(mix(fh(i), fh(i + vec3(1,0,0)), f.x), mix(fh(i + vec3(0,1,0)), fh(i + vec3(1,1,0)), f.x), f.y), mix(mix(fh(i + vec3(0,0,1)), fh(i + vec3(1,0,1)), f.x), mix(fh(i + vec3(0,1,1)), fh(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
       .replace('#include <map_fragment>', `#include <map_fragment>
 float n1 = vn(vFP * 7.0) * 0.6 + vn(vFP * 23.0) * 0.4;
+#if ${quilt ? 1 : 0}
+// quilted: stitched channels with the stuffing puffed between them
+{ float qa = abs(fract((vFP.x + vFP.z) * 16.0) - 0.5), qb = abs(fract((vFP.x - vFP.z) * 16.0 + vFP.y * 10.0) - 0.5); diffuseColor.rgb *= 0.5 + 0.5 * smoothstep(0.02, 0.1, min(qa, qb)) + 0.12 * (1.0 - 2.0 * max(qa, qb)); }
+#endif
+#if ${weave ? 1 : 0}
+// woven wool or linen: a fine twill and slubs in the yarn
+{ float tw = sin((vFP.x + vFP.y * 0.7 + vFP.z) * 900.0) * 0.5 + 0.5; diffuseColor.rgb *= 0.86 + 0.14 * tw + (vn(vFP * vec3(60.0, 400.0, 60.0)) - 0.5) * 0.12; }
+#endif
 // dirt worked into the cloth, darker low down, and old blood dried near-black in blotches
 diffuseColor.rgb *= mix(1.0, 0.55 + n1 * 0.35, uGrime);
 float bl = smoothstep(0.66, 0.74, vn(vFP * 3.1 + 7.3)) * uGrime;
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.13, 0.025, 0.02), bl * 0.85);
 float rime = smoothstep(0.25, 0.8, normalize(vFN).y + (fh(floor(vFP * 18.0)) - 0.5) * 0.35 + (n1 - 0.5) * 0.4);
-diffuseColor.rgb = mix(diffuseColor.rgb * 0.85, vec3(0.86, 0.9, 0.95), rime * 0.8) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.5;`)
+diffuseColor.rgb = mix(diffuseColor.rgb * 0.88, vec3(0.86, 0.9, 0.95), rime * ${metal > 0.3 ? '0.7' : '0.38'}) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.35;   // cloth takes a light rime only, so it still reads as cloth`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, rime);');
   };
-  m.customProgramCacheKey = () => 'frost2' + metal + grime;
+  m.customProgramCacheKey = () => 'frost3' + metal + grime + quilt + weave;
   return m;
 }
 // a garment round a bone, cut into panels with gaps (the slashes); the lining puffs out between them
@@ -897,74 +930,192 @@ function cabasset(iron) {   // tall almond-shaped skull with a little stalk on t
   const g = lathe([[0, 0.24], [0.012, 0.235], [0.02, 0.22], [0.06, 0.19], [0.1, 0.12], [0.118, 0.05], [0.12, 0.0], [0.13, -0.005], [0.165, -0.012], [0.168, -0.02]], 22, (v) => { v.z *= 1.18; });
   return new THREE.Mesh(g, iron);
 }
-export function makeFrozen(pose = 'sit', seed = 0) {
+// a garment fitted to his own body: every triangle of the chosen parts pushed out along its normal and skinned to
+// the same skeleton, so no skin shows through it at any bend (the old tubes let the calf and shoulder through)
+function skinLayer(body, pick, off, mat, smooth = 0) {
+  const g = body.geometry, P = g.attributes.position, N = g.attributes.normal, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, I = g.index;
+  const n = P.count, keep = new Uint8Array(n), v = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    let bi = SI.getX(i), bw = SW.getX(i); for (const [ii, ww] of [[SI.getY(i), SW.getY(i)], [SI.getZ(i), SW.getZ(i)], [SI.getW(i), SW.getW(i)]]) if (ww > bw) { bw = ww; bi = ii; }
+    v.fromBufferAttribute(P, i); keep[i] = pick(JOINTS[bi], v) ? 1 : 0;
+  }
+  const idx = [], A = I ? I.array : null, tri = I ? I.count : n;
+  for (let t = 0; t < tri; t += 3) { const a = A ? A[t] : t, b = A ? A[t + 1] : t + 1, c = A ? A[t + 2] : t + 2; if (keep[a] && keep[b] && keep[c]) idx.push(a, b, c); }
+  // normals of our own, made to point out of him (the stored ones cannot be trusted to): each checked against the
+  // direction from the bone it hangs on, and the whole set flipped if most point inward
+  const NN = skinLayer.nrm ||= new WeakMap(); let nrm = NN.get(g);
+  if (!nrm) {
+    const tmp = new THREE.BufferGeometry(); tmp.setAttribute('position', P); if (I) tmp.setIndex(I); tmp.computeVertexNormals(); nrm = tmp.attributes.normal.array.slice();
+    const sk = body.skeleton, jp = sk.boneInverses.map((m) => new THREE.Vector3().applyMatrix4(m.clone().invert())); let dot = 0;
+    for (let i = 0; i < n; i += 3) { v.fromBufferAttribute(P, i).sub(jp[SI.getX(i)]); dot += Math.sign(v.x * nrm[i * 3] + v.y * nrm[i * 3 + 1] + v.z * nrm[i * 3 + 2]); }
+    if (dot < 0) for (let i = 0; i < nrm.length; i++) nrm[i] = -nrm[i];
+    NN.set(g, nrm);
+  }
+  const pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { pos[i * 3] = P.getX(i) + nrm[i * 3] * off; pos[i * 3 + 1] = P.getY(i) + nrm[i * 3 + 1] * off; pos[i * 3 + 2] = P.getZ(i) + nrm[i * 3 + 2] * off; }
+  // cloth does not follow the body into every hollow: weld the seams, then smooth it (nipples, navel, the line of the
+  // muscles all go), and wherever smoothing pulled it in, push it back out to stand clear of the skin
+  if (smooth) {
+    const wid = new Int32Array(n).fill(-1), keyOf = new Map(); let nw = 0;
+    for (let i = 0; i < n; i++) { if (!keep[i]) continue; const k = Math.round(P.getX(i) * 2e4) + ',' + Math.round(P.getY(i) * 2e4) + ',' + Math.round(P.getZ(i) * 2e4); let w = keyOf.get(k); if (w === undefined) { w = nw++; keyOf.set(k, w); } wid[i] = w; }
+    const nb = Array.from({ length: nw }, () => new Set());
+    for (let t = 0; t < idx.length; t += 3) { const a = wid[idx[t]], b = wid[idx[t + 1]], c = wid[idx[t + 2]]; nb[a].add(b).add(c); nb[b].add(a).add(c); nb[c].add(a).add(b); }
+    let W = new Float32Array(nw * 3), cnt = new Float32Array(nw);
+    for (let i = 0; i < n; i++) if (wid[i] >= 0) { const w = wid[i]; W[w * 3] += pos[i * 3]; W[w * 3 + 1] += pos[i * 3 + 1]; W[w * 3 + 2] += pos[i * 3 + 2]; cnt[w]++; }
+    for (let w = 0; w < nw; w++) { W[w * 3] /= cnt[w]; W[w * 3 + 1] /= cnt[w]; W[w * 3 + 2] /= cnt[w]; }
+    for (let it = 0; it < smooth; it++) {
+      const W2 = new Float32Array(W);
+      for (let w = 0; w < nw; w++) { const S = nb[w]; if (S.size < 3) continue; let x = 0, y = 0, z = 0; for (const q of S) { x += W[q * 3]; y += W[q * 3 + 1]; z += W[q * 3 + 2]; } const k = 1 / S.size; W2[w * 3] = W[w * 3] * 0.4 + x * k * 0.6; W2[w * 3 + 1] = W[w * 3 + 1] * 0.4 + y * k * 0.6; W2[w * 3 + 2] = W[w * 3 + 2] * 0.4 + z * k * 0.6; }
+      W = W2;
+    }
+    // clear of the skin: against the nearest point of him (smoothing slides the cloth along a limb, so its own
+    // vertex is not the one to measure from), twice over
+    const HC = skinLayer.hash ||= new WeakMap(); let hash = HC.get(g); const cell = 0.025, ck = (x, y, z) => (Math.floor(x / cell) + 512) * 1048576 + (Math.floor(y / cell) + 512) * 1024 + (Math.floor(z / cell) + 512);
+    if (!hash) { hash = new Map(); for (let i = 0; i < n; i++) { const k = ck(P.getX(i), P.getY(i), P.getZ(i)); let A = hash.get(k); if (!A) hash.set(k, A = []); A.push(i); } HC.set(g, hash); }
+    const clear = off * 0.7;
+    for (let w = 0; w < nw; w++) for (let pass = 0; pass < 2; pass++) {
+      const x = W[w * 3], y = W[w * 3 + 1], z = W[w * 3 + 2]; let j = -1, bd = 1e9;
+      const cx = Math.floor(x / cell), cy = Math.floor(y / cell), cz = Math.floor(z / cell);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const A = hash.get((cx + dx + 512) * 1048576 + (cy + dy + 512) * 1024 + (cz + dz + 512)); if (!A) continue; for (const q of A) { const d = (P.getX(q) - x) ** 2 + (P.getY(q) - y) ** 2 + (P.getZ(q) - z) ** 2; if (d < bd) { bd = d; j = q; } } }
+      if (j < 0) break;
+      const d = (x - P.getX(j)) * nrm[j * 3] + (y - P.getY(j)) * nrm[j * 3 + 1] + (z - P.getZ(j)) * nrm[j * 3 + 2];
+      if (d >= clear) break; const k = clear - d; W[w * 3] += nrm[j * 3] * k; W[w * 3 + 1] += nrm[j * 3 + 1] * k; W[w * 3 + 2] += nrm[j * 3 + 2] * k;
+    }
+    for (let i = 0; i < n; i++) { if (wid[i] < 0) continue; const w = wid[i]; pos[i * 3] = W[w * 3]; pos[i * 3 + 1] = W[w * 3 + 1]; pos[i * 3 + 2] = W[w * 3 + 2]; }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);
+  if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(idx); if (smooth) geo.computeVertexNormals();
+  const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true;
+  body.parent.add(m); m.bind(body.skeleton, body.bindMatrix); return m;
+}
+// the Landsknecht's short sword, the katzbalger: a broad blade, an S-shaped guard, a short grip and a flat pommel
+function katzbalger(iron, leather) {
+  const g = new THREE.Group();
+  const bl = new THREE.Shape(); bl.moveTo(-0.024, 0); bl.lineTo(-0.021, 0.62); bl.quadraticCurveTo(-0.012, 0.69, 0, 0.72); bl.quadraticCurveTo(0.012, 0.69, 0.021, 0.62); bl.lineTo(0.024, 0); bl.lineTo(-0.024, 0);
+  const bg = new THREE.ExtrudeGeometry(bl, { depth: 0.004, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 1 }); bg.translate(0, 0, -0.002); g.add(new THREE.Mesh(bg, iron));
+  const sg = new THREE.TorusGeometry(0.045, 0.006, 6, 14, Math.PI); for (const sd of [-1, 1]) { const m = new THREE.Mesh(sg, iron); m.position.set(sd * 0.045, sd * 0.0, 0); m.rotation.z = sd > 0 ? -Math.PI / 2 * 0 : Math.PI; g.add(m); }
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.017, 0.11, 10).translate(0, -0.06, 0), leather); g.add(grip);
+  const pm = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.02, 0.02, 12).rotateZ(Math.PI / 2).scale(1, 1, 0.6).translate(0, -0.125, 0), iron); g.add(pm);
+  return g;
+}
+// a soft drift of snow: a low dome that feathers out to nothing at its edge (sunk a little so no edge stands proud)
+function drift(L, W, H, sd) {
+  const RN = 9, SN = 32, pos = [], idx = [];
+  for (let r = 0; r <= RN; r++) for (let a = 0; a < SN; a++) {
+    const t = r / RN, ang = (a / SN) * Math.PI * 2, wob = 1 + 0.14 * Math.sin(ang * 3 + sd) + 0.07 * Math.sin(ang * 5 + sd * 1.7);
+    const h = H * Math.pow(1 - t * t, 1.6) * (1 + 0.1 * Math.sin(ang * 4 + t * 6 + sd)) - 0.025;
+    pos.push(Math.cos(ang) * t * L * wob, h, Math.sin(ang) * t * W * wob);
+  }
+  for (let r = 0; r < RN; r++) for (let a = 0; a < SN; a++) { const i0 = r * SN + a, i1 = r * SN + (a + 1) % SN, j0 = i0 + SN, j1 = i1 + SN; idx.push(i0, i1, j0, i1, j1, j0); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals(); return g;
+}
+// opts: snow (drifts and rime; false in the cave), lean (+1/-1: huddled against a man on that side), cross (a crucifix and
+// rosary held in his hands), sword (his katzbalger under his hand where it fell)
+export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   if (pose === 'kneel') pose = 'prone';   // no one dies kneeling neatly
   const kind = seed % 2 ? 'sutler' : 'priest', P = PEOPLE?.[kind];
   if (!P) return null;
+  const snow = opts.snow !== false;
   let rs = (seed * 9301 + 49297) % 233280; const rnd = () => { rs = (rs * 9301 + 49297) % 233280; return rs / 233280; };
   const pick = (a) => a[Math.floor(rnd() * a.length) % a.length], jit = (d) => (rnd() - 0.5) * 2 * d;
-  const rig = new Rig(1), J = rig.j;
+  const rig = new Rig(0.96 + rnd() * 0.08), J = rig.j;
   const hose = pick(HOSE);
   const body = personMesh(rig, P, { skin: 0x9aa0a6, hair: [0x2a2420, 0x4a3420, 0x1c1814, 0x6a5038][seed % 4], cloth: hose, eyes: P.eyes, frozen: 1, dead: 1 });
-  const iron = frostMat(0x4a4540, 0.6, 0.65, 0.6), parts = [];
+  const iron = frostMat(0x4a4540, 0.6, 0.65, 0.6), leather = frostMat(0x2a1e16, 0.75, 0, 0.6);
+  // where his joints sit in the body's own (bind) space, to divide it into garments
+  const bindAt = (n) => new THREE.Vector3().applyMatrix4(body.skeleton.boneInverses[JOINTS.indexOf(n)].clone().invert());
+  const headY = bindAt('head').y, hipsY = bindAt('hips').y;
+  const LEGS = new Set(['thighR', 'thighL', 'shinR', 'shinL', 'footR', 'footL']), TORSO = new Set(['spine', 'chest', 'clavR', 'clavL']), ARMS = new Set(['uArmR', 'uArmL', 'fArmR', 'fArmL']);
+  // under everything: his hose (feet stockinged, the shoes over them) and a linen shirt to the throat and wrists
+  skinLayer(body, (b, v) => LEGS.has(b) || (b === 'hips' && v.y < hipsY + 0.06), 0.004, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 4);
+  const shirt = frostMat(pick([0x8e8676, 0x9a9282, 0x7e7666]), 0.95, 0, 1, { weave: 1 });
+  skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y >= hipsY - 0.01) || (b === 'neck' && v.y < headY - 0.012), 0.006, shirt, 2);   // over the top of the hose at the waist, no gap between
   const gambeson = seed % 3 === 1, plate = seed % 3 === 0 || seed % 5 === 0;
   const [cO, cI] = pick(DOUBLET);
-  if (gambeson) {   // quilted linen, stitched in vertical channels, stained
-    const q = frostMat(pick([0x8a7f66, 0x6e6450, 0x7a6a50]), 0.95);
-    J.chest.add(new THREE.Mesh(lathe([[0.09, 0.21], [0.19, 0.17], [0.225, 0.07], [0.215, -0.12], [0.2, -0.3], [0.215, -0.5]], 36, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.abs(Math.sin(a * 12)) * 0.03); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.012; }), q));
-    for (const k of ['R', 'L']) { J['uArm' + k].add(new THREE.Mesh(lathe([[0.08, 0.03], [0.088, -0.12], [0.078, -0.3]], 18, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.abs(Math.sin(v.y * 40)) * 0.04); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), q)); J['fArm' + k].add(new THREE.Mesh(lathe([[0.068, 0.02], [0.062, -0.2]], 14, () => {}), q)); }
-  } else {          // a doublet; the sleeves puffed and slashed to show the lining
+  if (gambeson) {   // quilted linen over him, body and sleeves, down over the hips
+    const q = frostMat(pick([0x7a6440, 0x5a6068, 0x7a4a32, 0x6a6250]), 0.95, 0, 1, { quilt: 1 });
+    skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y > hipsY - 0.1) || (b === 'neck' && v.y < headY - 0.06), 0.024, q, 30);
+  } else {          // a doublet fitted to him; the sleeves puffed and slashed to show the shirt and lining
     const o = frostMat(cO, 0.9), i = frostMat(cI, 0.9);
-    J.chest.add(new THREE.Mesh(lathe([[0.08, 0.2], [0.18, 0.165], [0.215, 0.07], [0.2, -0.12], [0.185, -0.3], [0.2, -0.42]], 28, (v, a) => { const r = Math.hypot(v.x, v.z); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.8 + 0.012; }), o));
-    for (const k of ['R', 'L']) { slashed(J, 'uArm' + k, [[0.07, 0.03], [0.1, -0.06], [0.105, -0.16], [0.085, -0.3]], o, i, 7); slashed(J, 'fArm' + k, [[0.07, 0.02], [0.075, -0.08], [0.062, -0.2]], o, i, 6); }
+    skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24);
+    for (const k of ['R', 'L']) { slashed(J, 'uArm' + k, [[0.088, 0.03], [0.108, -0.06], [0.11, -0.16], [0.09, -0.3]], o, i, 7); slashed(J, 'fArm' + k, [[0.07, 0.02], [0.074, -0.08], [0.058, -0.2]], o, i, 6); }
   }
   // the upper hose: puffed and slashed to above the knee (the Landsknecht's pluderhose)
   { const o = frostMat(hose, 0.92), i = frostMat(pick([0x8a2a20, 0xa89878, 0x5a5a62]), 0.9);
-    for (const k of ['R', 'L']) slashed(J, 'thigh' + k, [[0.1, 0.06], [0.125, -0.08], [0.122, -0.26], [0.09, -0.4]], o, i, 6);
-    // and the close nether-hose below, wrinkled at the ankle
-    const lo = frostMat(hose, 0.92); for (const k of ['R', 'L']) J['shin' + k].add(new THREE.Mesh(lathe([[0.066, 0.04], [0.064, -0.06], [0.058, -0.2], [0.042, -0.36], [0.04, -0.42]], 14, () => {}), lo)); }
+    for (const k of ['R', 'L']) slashed(J, 'thigh' + k, [[0.112, 0.06], [0.132, -0.08], [0.126, -0.26], [0.09, -0.42]], o, i, 6); }
   // shoes: plain leather, broad at the toe
-  { const lea = frostMat(0x2a1e16, 0.75, 0, 0.6);
-    for (const k of ['R', 'L']) { const g = new THREE.SphereGeometry(0.06, 14, 10).scale(0.95, 0.75, 2.0).translate(0, -0.055, 0.075); J['foot' + k].add(new THREE.Mesh(g, lea)); } }
+  for (const k of ['R', 'L']) { const g = new THREE.SphereGeometry(0.06, 14, 10).scale(0.95, 0.75, 2.0).translate(0, -0.055, 0.075); J['foot' + k].add(new THREE.Mesh(g, leather)); }
   // a belt
-  J.hips.add(new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.016, 6, 24).rotateX(Math.PI / 2).scale(1, 1, 0.82).translate(0, 0.06, 0.012), frostMat(0x2a2018, 0.7)));
+  J.hips.add(new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.016, 6, 24).rotateX(Math.PI / 2).scale(1, 1, 0.82).translate(0, 0.06, 0.012), frostMat(0x2a2018, 0.7)));
   // a breastplate over the doublet on some: a rounded peascod front, strapped at the back
   if (plate) {
-    const bg = new THREE.LatheGeometry([[0.1, 0.16], [0.17, 0.13], [0.215, 0.04], [0.22, -0.1], [0.21, -0.24], [0.225, -0.3]].map(([r, y]) => new THREE.Vector2(r, y)), 26, -Math.PI * 0.55, Math.PI * 1.1);
+    const bg = new THREE.LatheGeometry([[0.1, 0.16], [0.17, 0.13], [0.215, 0.04], [0.22, -0.1], [0.21, -0.24], [0.225, -0.3]].map(([r, y]) => new THREE.Vector2(r * 1.12, y)), 26, -Math.PI * 0.55, Math.PI * 1.1);
     { const p = bg.attributes.position, v = new THREE.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); const r = Math.hypot(v.x, v.z), a = Math.atan2(v.x, v.z), c = Math.cos(a); v.x = Math.sin(a) * r * 1.03; v.z = c * r * 0.84 + 0.03 + Math.max(0, c) * Math.max(0, -v.y - 0.08) * 0.12; p.setXYZ(i, v.x, v.y, v.z); } bg.computeVertexNormals(); }
     J.chest.add(new THREE.Mesh(bg, iron));
   }
+  // a woollen scarf wound round the throat and up over the mouth on some, against the cold
+  if (seed % 4 === 3) { const wool = frostMat(pick([0x5a4a3a, 0x3e3a36, 0x6a3a2a]), 1); skinLayer(body, (b, v) => (b === 'neck' && v.y < headY + 0.01) || (b === 'chest' && v.y > headY - 0.2), 0.028, wool, 10); }
   // head: kettle hat, cabasset, or bare
   const lying = pose === 'prone' || pose === 'lie';
   const hatKind = seed % 4 === 2 ? 0 : seed % 4 === 1 || seed % 4 === 3 ? 2 : 1;
   const hat = lying || !hatKind ? null : hatKind === 2 ? cabasset(iron) : kettleHat(iron);
   if (hat) { seatOnCrown(hat, body, rig, 0.075); hat.rotation.x += jit(0.12); hat.rotation.z += jit(0.1); J.head.add(hat); }
+  // ice: icicles hanging in his beard from the chin, and the frost of his last breaths round the mouth and nostrils
+  if (snow) {
+    const hi = JOINTS.indexOf('head'), inv = body.skeleton.boneInverses[hi], g = body.geometry, PP = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, v = new THREE.Vector3();
+    const ey = (P.eyes?.[0]?.[1] ?? 0) * 0.5 + (P.eyes?.[1]?.[1] ?? 0) * 0.5;
+    let chin = null, mouth = null;
+    for (let i = 0; i < PP.count; i++) {
+      if (SI.getX(i) !== hi || SW.getX(i) < 0.6) continue; v.fromBufferAttribute(PP, i);
+      if (Math.abs(v.x) < 0.012 && v.y < ey - 0.05 && v.y > ey - 0.085 && (!mouth || v.z > mouth.z)) mouth = v.clone();
+      if (Math.abs(v.x) < 0.02 && v.y < ey - 0.09 && (!chin || v.z - v.y * 0.6 > chin.z - chin.y * 0.6)) chin = v.clone();
+    }
+    const ice = new THREE.MeshStandardMaterial({ color: 0xdfeaf4, roughness: 0.08, metalness: 0, transparent: true, opacity: 0.82 });
+    const rime = new THREE.MeshStandardMaterial({ color: 0xf2f6fa, roughness: 0.9 });
+    const grp = new THREE.Group(); J.head.add(grp);
+    if (chin) { const c = chin.applyMatrix4(inv); for (let k = 0; k < 7; k++) { const L = 0.012 + rnd() * 0.026; const m = new THREE.Mesh(new THREE.ConeGeometry(0.0025 + rnd() * 0.002, L, 5).rotateX(Math.PI).translate(0, -L / 2, 0), ice); m.position.set(c.x + jit(0.024), c.y + 0.004, c.z - 0.006 - rnd() * 0.014); m.rotation.z = jit(0.2); grp.add(m); } }
+    if (mouth) { const c = mouth.applyMatrix4(inv); for (let k = 0; k < 14; k++) { const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.0022 + rnd() * 0.002, 0), rnd() < 0.6 ? rime : ice); m.position.set(c.x + jit(0.022), c.y + jit(0.012) + 0.008, c.z - 0.002 + jit(0.003)); grp.add(m); } }
+  }
   const e = (j, x, y, z) => J[j].rotation.set((x + jit(4)) * D2R, (y + jit(4)) * D2R, (z + jit(4)) * D2R, 'YXZ');
   const lr = (fn) => { fn('R', -1); fn('L', 1); };
-  if (pose === 'sit') {   // hunched on the ground, knees drawn up, arms round them, head down on them
-    e('spine', 32, 0, jit(8)); e('chest', 22, 0, 0); e('neck', 28, 0, jit(10)); e('head', 22, jit(15), jit(10));
+  const lean = opts.lean || 0;
+  if (pose === 'sit') {   // hunched on the ground, knees drawn up, arms round them, head down on them (or on the next man's shoulder)
+    e('spine', 30, 0, -lean * 10 + jit(6)); e('chest', 20, 0, -lean * 6); e('neck', 26, 0, -lean * 22 + jit(8)); e('head', 20, jit(15), -lean * 16 + jit(8));
     lr((k, s) => { e('thigh' + k, -112, 0, s * 10); e('shin' + k, 130, 0, 0); e('foot' + k, -15, 0, s * 8); e('uArm' + k, -58, 0, s * 20); e('fArm' + k, -82, -s * 48, 0); e('hand' + k, 15, 0, s * 10); });
-  } else if (pose === 'slump') {   // sat against the rock where he stopped, legs out unevenly, head fallen onto his shoulder
-    const lean = jit(1) > 0 ? 1 : -1;
-    e('spine', -4, 0, lean * 4); e('chest', 6, 0, lean * 3); e('neck', 22, 0, lean * 26); e('head', 18, lean * 10, lean * 22);
-    lr((k, s) => { const bent = (s === lean); e('thigh' + k, bent ? -110 : -84, s * 10, s * 14); e('shin' + k, bent ? 70 : 10, 0, 0); e('foot' + k, -20, 0, s * 20); e('uArm' + k, 6, 0, s * 10); e('fArm' + k, -18, 0, 0); e('hand' + k, 10, 0, s * 20); });
-  } else if (pose === 'prone') {   // face down where he fell forward, one arm under him, the other flung out past his head; his cheek on the ground
+    if (opts.cross) { lr((k, s) => { e('uArm' + k, -40, 0, s * 12); e('fArm' + k, -100, -s * 62, 0); e('hand' + k, 0, 0, s * 20); }); }
+  } else if (pose === 'slump') {   // sat where he stopped, legs out unevenly, head fallen onto his shoulder, hands down at his sides
+    const ln = jit(1) > 0 ? 1 : -1;
+    e('spine', -4, 0, ln * 4); e('chest', 6, 0, ln * 3); e('neck', 22, 0, ln * 26); e('head', 18, ln * 10, ln * 22);
+    lr((k, s) => { const bent = (s === ln); e('thigh' + k, bent ? -110 : -84, s * 10, s * 14); e('shin' + k, bent ? 70 : 10, 0, 0); e('foot' + k, -20, 0, s * 20); e('uArm' + k, 8, 0, s * 18); e('fArm' + k, -18, 0, 0); e('hand' + k, 10, 0, s * 20); });
+  } else if (pose === 'prone') {   // face down where he fell forward, one arm flung out past his head; one knee drawn up and out to the side, the shin flat
     rig.root.rotation.x = Math.PI / 2;
     const s0 = rnd() < 0.5 ? 1 : -1;
     e('spine', -4, 0, s0 * 5); e('chest', -4, 0, 0); e('neck', 12, s0 * 35, -s0 * 10); e('head', 6, s0 * 45, -s0 * 12);
     lr((k, s) => {
-      if (s === s0) { e('uArm' + k, -125, 0, s * 40); e('fArm' + k, -20, 0, 0); e('hand' + k, 0, 0, s * 10); }   // flung up beside the head
-      else { e('uArm' + k, 6, 0, s * 4); e('fArm' + k, -8, 0, 0); e('hand' + k, 0, 0, 0); }   // down his side, the hand under his hip
-      e('thigh' + k, s === s0 ? -18 : 0, 0, s * (s === s0 ? 34 : 6)); e('shin' + k, s === s0 ? 40 : 4, 0, 0); e('foot' + k, 30, s * 30, 0);
+      if (s === s0) { e('uArm' + k, -125, 0, s * 40); e('fArm' + k, -20, 0, 0); e('hand' + k, 0, 0, s * 10); }
+      else { e('uArm' + k, 6, 0, s * 6); e('fArm' + k, -8, 0, 0); e('hand' + k, 0, 0, 0); }
+      if (s === s0) { e('thigh' + k, -12, s * 40, s * 42); e('shin' + k, 55, 0, 0); } else { e('thigh' + k, 0, 0, s * 6); e('shin' + k, 4, 0, 0); }
+      e('foot' + k, 40, 0, 0);
     });
-  } else {   // curled on his side as men lie when the cold takes them
+  } else {   // curled on his right side as men lie when the cold takes them, knees drawn up, hands under his chin
     rig.root.rotation.z = Math.PI / 2 * 0.98;
-    e('spine', 26, 0, 0); e('chest', 20, 0, 0); e('neck', 22, 0, -8); e('head', 26, 0, -10);
-    lr((k, s) => { e('thigh' + k, s < 0 ? -78 : -64, 0, s * 4); e('shin' + k, s < 0 ? 96 : 80, 0, 0); e('foot' + k, 15, 0, 0); e('uArm' + k, s < 0 ? -55 : -80, 0, s * 8); e('fArm' + k, -95, -s * 35, 0); e('hand' + k, 20, 0, 0); });
+    e('spine', 24, 0, -8); e('chest', 18, 0, -6); e('neck', 22, 0, -8); e('head', 24, 0, -12);
+    lr((k, s) => { e('thigh' + k, s < 0 ? -78 : -64, 0, s * 4); e('shin' + k, s < 0 ? 96 : 80, 0, 0); e('foot' + k, 15, 0, 0); e('uArm' + k, s < 0 ? -92 : -80, 0, s * 8); e('fArm' + k, s < 0 ? -70 : -95, -s * 35, 0); e('hand' + k, 20, 0, 0); });
+    e('clavR', 22, 0, -26);   // the shoulder he lies on rolled forward and in under him
   }
   const wrap = new THREE.Group(); wrap.add(rig.root);
   wrap.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  // what he dropped: his helmet if it is not on him, a pike broken in two, his sword-belt's purse; and a dark pool on some
+  // a crucifix in his hands, the rosary hanging from them
+  if (opts.cross) {
+    const wood = frostMat(0x4a3420, 0.7, 0, 0.3), cx = new THREE.Group();
+    cx.add(new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.12, 0.01), wood)); const arm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.013, 0.01), wood); arm.position.y = 0.025; cx.add(arm);
+    const cor = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.045, 0.006), frostMat(0x8a7a50, 0.4, 0.6, 0.2)); cor.position.set(0, 0.005, 0.007); cx.add(cor);
+    cx.position.set(0.0, -0.075, 0.03); cx.rotation.set(-1.2, 0, 0.2); J.handR.add(cx);
+    const bead = new THREE.SphereGeometry(0.0055, 6, 4), bm = frostMat(0x2a1a12, 0.4, 0, 0.2);
+    for (let k = 0; k < 22; k++) { const t = k / 21, m = new THREE.Mesh(bead, bm); m.position.set(0.02 * Math.sin(t * Math.PI * 2), -0.06 - Math.sin(t * Math.PI) * 0.11, 0.02 + 0.03 * Math.cos(t * Math.PI)); J.handR.add(m); }
+  }
+  // what he dropped: his helmet if it is not on him, a pike broken in two, his sword; and a dark pool on some
   const gear = [];
   const wood = frostMat(0x4a3826, 0.85, 0, 0.5);
   if (!hat && (hatKind || rnd() < 0.5)) gear.push({ obj: hatKind === 2 ? cabasset(iron) : kettleHat(iron), at: [jit(0.7) + 0.6, jit(0.5) - 0.2], lift: 0.04, tilt: [jit(0.5) + Math.PI * (rnd() < 0.4 ? 1 : 0), 0, jit(0.4) + 0.35] });
@@ -974,84 +1125,132 @@ export function makeFrozen(pose = 'sit', seed = 0) {
     gear.push({ obj: a, at: [jit(0.5) - 0.9, jit(1.0)], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
     gear.push({ obj: new THREE.Mesh(sh(L2), wood), at: [jit(0.6) + 0.5, jit(1.2) + 0.6], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
   }
-  if (seed % 3 !== 1) {
+  if (seed % 3 !== 1 && snow) {
     const pg = new THREE.CircleGeometry(0.5, 40), pp = pg.attributes.position, ph = [rnd() * 6, rnd() * 6, rnd() * 6]; for (let i = 1; i < pp.count; i++) { const a = Math.atan2(pp.getY(i), pp.getX(i)), f = 0.8 + 0.18 * Math.sin(a * 2 + ph[0]) + 0.1 * Math.sin(a * 3 + ph[1]) + 0.05 * Math.sin(a * 7 + ph[2]); pp.setXY(i, pp.getX(i) * f * 1.25, pp.getY(i) * f); }
-    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x220405, roughness: 0.35, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.92 }));
+    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3a0a0c, roughness: 0.55, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.7 }));
     pool.receiveShadow = true; gear.push({ obj: pool, at: [jit(0.15), 0.1], lift: 0.012, tilt: [0, jit(Math.PI), 0], flat: true });
   }
   // lay him on the ground at x,z facing yaw. The body comes to rest as a dead weight would: dropped until it touches,
-  // then turned about what it touches until the parts that bear his weight are all down; then each limb that
-  // should lie on the ground is let down onto it (or lifted out of it) at its shoulder, hip or neck.
+  // turned about what it touches until every part that bears his weight is down; then each limb (and, lying on his
+  // side, his spine) is bent at its joints until the parts that should lie on the ground do, and nothing is in it.
   const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _qy = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
   const SI = body.geometry.attributes.skinIndex, SW = body.geometry.attributes.skinWeight, PC = body.geometry.attributes.position.count, byBone = {};
   for (let i = 0; i < PC; i++) if (SW.getX(i) > 0.6) (byBone[JOINTS[SI.getX(i)]] ||= []).push(i);
   const all = []; for (let i = 0; i < PC; i += 4) all.push(i);
-  // the lowest point (relative to the ground) among some vertices
   const lowOf = (ground, ids, out) => { let best = 1e9; for (const i of ids) { body.getVertexPosition(i, _v); _v.applyMatrix4(body.matrixWorld); const d = _v.y - ground(_v.x, _v.z); if (d < best) { best = d; out?.copy(_v); } } return best; };
-  const CONTACT = { sit: { rest: ['hips', 'footR', 'footL'], limb: [] }, slump: { rest: ['hips', 'footR', 'footL'], limb: ['handR', 'handL'] },
-    prone: { rest: ['chest', 'hips', 'thighR', 'thighL'], limb: ['head', 'handR', 'handL', 'footR', 'footL', 'shinR', 'shinL', 'fArmR', 'fArmL'] },
-    lie: { rest: ['chest', 'hips', 'thighR', 'thighL', 'shinR', 'shinL'], limb: ['head', 'handR', 'handL', 'fArmR', 'fArmL'] } }[pose];
-  const LIMB = { handR: 'uArmR', handL: 'uArmL', fArmR: 'uArmR', fArmL: 'uArmL', footR: 'thighR', footL: 'thighL', shinR: 'thighR', shinL: 'thighL', head: 'neck' };
-  const settle = (ground, x, z, yaw, sink = 0.012) => {
+  const CONTACT = { sit: { rest: ['hips'], must: ['footR', 'footL'] },
+    slump: { rest: ['thighR', 'thighL', 'hips'], must: ['footR', 'footL', 'handR', 'handL'] },
+    prone: { rest: ['chest', 'hips'], must: ['thighR', 'thighL', 'shinR', 'shinL', 'footR', 'footL', 'fArmR', 'fArmL', 'handR', 'handL', 'head'] },
+    lie: { rest: ['thighR', 'uArmR'], must: ['chest', 'shinR', 'fArmR', 'head'] } }[pose];
+  // the chains that may bend, each with the parts in it that must come to rest
+  const CHAINS = [['spine', ['spine', 'chest']], ['thighR', ['thighR', 'shinR', 'footR']], ['thighL', ['thighL', 'shinL', 'footL']], ['clavR', ['uArmR', 'fArmR', 'handR']], ['clavL', ['uArmL', 'fArmL', 'handL']], ['neck', ['neck', 'head']]];
+  const SUB = { spine: ['spine', 'chest'], thighR: ['thighR', 'shinR', 'footR'], thighL: ['thighL', 'shinL', 'footL'], clavR: ['uArmR', 'fArmR', 'handR'], clavL: ['uArmL', 'fArmL', 'handL'], neck: ['neck', 'head'] };
+  const SUBPEN = { spine: ['spine', 'chest', 'clavR', 'clavL', 'neck'], thighR: SUB.thighR, thighL: SUB.thighL, clavR: SUB.clavR, clavL: SUB.clavL, neck: SUB.neck };
+  const thin = (ids, k) => (ids || []).filter((_, i) => i % k === 0);
+  const settle = (ground, x, z, yaw, sink = 0.01) => {
     wrap.position.set(x, 0, z); _qy.setFromAxisAngle(UP, yaw); wrap.quaternion.copy(_qy);
-    const restIds = CONTACT.rest.flatMap((n) => byBone[n] || []).concat(['spine', 'chest', 'hips'].flatMap((n) => (byBone[n] || []).filter((_, k) => k % 2 === 0)));
+    const restIds = [...new Set([...CONTACT.rest, 'hips'])].flatMap((n) => byBone[n] || []);
     const drop = (ids = restIds) => { wrap.updateMatrixWorld(true); wrap.position.y -= lowOf(ground, ids) + sink; wrap.updateMatrixWorld(true); };
     drop();
-    // rigid rest: turn about the lowest bearing point to bring the highest one down, a few times over
-    const piv = new THREE.Vector3(), far = new THREE.Vector3(), q = new THREE.Quaternion(), ax = new THREE.Vector3();
-    for (let it = 0; it < 14; it++) {
-      let lo = 1e9, hi = -1e9; for (const b of CONTACT.rest) { const d = lowOf(ground, byBone[b] || [], _w); if (d < lo) { lo = d; piv.copy(_w); } if (d > hi) { hi = d; far.copy(_w); } }
-      if (hi - lo < 0.01) break;
-      const arm = far.clone().sub(piv); arm.y = 0; const L = arm.length(); if (L < 0.05) break;
-      ax.crossVectors(arm, UP).normalize(); const ang = -Math.min(0.25, Math.atan2(hi - lo, L) * 0.9);
-      q.setFromAxisAngle(ax, ang);
-      // never tip him past lying flat on the slope
-      const nq = q.clone().multiply(wrap.quaternion); if (UP.clone().applyQuaternion(nq.clone().multiply(_qy.clone().invert())).y < Math.cos(0.85)) break;
-      wrap.position.sub(piv).applyQuaternion(q).add(piv); wrap.quaternion.premultiply(q); drop();
+    // rigid rest: tilt him (about two level axes through his middle) until every part that bears his weight is down together
+    if (CONTACT.rest.length > 1) {
+      const sets = CONTACT.rest.map((bn) => thin(byBone[bn], 3)), dropIds = thin(restIds, 2);
+      const base = wrap.quaternion.clone(), c = new THREE.Vector3(); J.hips.getWorldPosition(c);
+      const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), XA = new THREE.Vector3(1, 0, 0), ZA = new THREE.Vector3(0, 0, 1);
+      const tilt = (u, v) => { qa.setFromAxisAngle(XA, u); qb.setFromAxisAngle(ZA, v); const q = qa.multiply(qb); wrap.quaternion.copy(q).multiply(base); wrap.position.set(x, 0, z).sub(c).applyQuaternion(q).add(c); wrap.position.y = 0; drop(dropIds); };
+      const spread = (u, v) => { tilt(u, v); let lo = 1e9, hi = -1e9; for (const S of sets) { const d = lowOf(ground, S); lo = Math.min(lo, d); hi = Math.max(hi, d); } return hi - lo + (Math.abs(u) + Math.abs(v)) * 0.004; };
+      let bu = 0, bv = 0, bs = spread(0, 0);
+      for (const [R, st] of [[0.5, 0.1], [0.1, 0.025], [0.025, 0.008]]) { const cu = bu, cv = bv; for (let u = cu - R; u <= cu + R + 1e-6; u += st) for (let v = cv - R; v <= cv + R + 1e-6; v += st) { const sc = spread(u, v); if (sc < bs) { bs = sc; bu = u; bv = v; } } }
+      tilt(bu, bv); drop();
     }
-    // the limbs onto the ground: a little at a time about the joint's own axes, whichever way brings the part to rest
-    const DESC = { uArmR: ['uArmR', 'fArmR', 'handR'], uArmL: ['uArmL', 'fArmL', 'handL'], thighR: ['thighR', 'shinR', 'footR'], thighL: ['thighL', 'shinL', 'footL'], neck: ['neck', 'head'], head: ['head'] };
-    const touch = new Set(CONTACT.limb), todo = [...CONTACT.limb, ...['handR', 'handL', 'footR', 'footL', 'head'].filter((b) => !touch.has(b))];
-    for (const b of todo) {
-      for (const jn of b === 'head' ? ['neck', 'head'] : [LIMB[b]]) {
-      const j = J[jn], ids = byBone[b], must = touch.has(b); if (!ids) continue;
-      const chain = DESC[jn].flatMap((n) => (byBone[n] || []).filter((_, k) => k % 3 === 0)), r0 = j.rotation.clone();
-      // how far from resting: the part's own distance from the ground, and anything of the limb pushed into it
-      const cost = () => { wrap.updateMatrixWorld(true); const d = lowOf(ground, ids), c = lowOf(ground, chain); return (must ? Math.max(0, d - 0.005) : 0) + Math.max(0, -0.02 - d) + Math.max(0, -0.025 - c) * 3; };
-      for (let it = 0; it < 16; it++) {
-        const c0 = cost(); if (c0 < 0.012) break;
-        let best = null, bc = c0 - 0.002;
-        for (const [axis, sgn] of [['x', 1], ['x', -1], ['z', 1], ['z', -1]]) {
-          if (Math.abs(j.rotation[axis] + sgn * 0.05 - r0[axis]) > 0.6) continue;
-          j.rotation[axis] += sgn * 0.05; const c = cost(); j.rotation[axis] -= sgn * 0.05;
-          if (c < bc) { bc = c; best = [axis, sgn]; }
+    if (opts.debug) (settle.log = []).push('rest ' + [...CONTACT.rest, ...CONTACT.must].map((b) => b + ':' + lowOf(ground, byBone[b] || []).toFixed(3)).join(' '));
+    // bend each chain at its joints until its parts rest on the ground and none of it is in it. Each vertex is moved
+    // rigidly with its main bone here (cheap enough to try pairs of joint moves together: elbow down with wrist up)
+    const must = new Set(CONTACT.must), bm = body.bindMatrix, _m4 = new THREE.Matrix4(), _p = new THREE.Vector3();
+    const fastSet = (bones, k) => { const B = [], L = []; for (const bn of bones) { const bi = JOINTS.indexOf(bn); _m4.multiplyMatrices(body.skeleton.boneInverses[bi], bm); for (const i of thin(byBone[bn], k)) { body.getVertexPosition; _p.fromBufferAttribute(body.geometry.attributes.position, i).applyMatrix4(_m4); B.push(J[bn]); L.push(_p.x, _p.y, _p.z); } } return { B, L: Float32Array.from(L) }; };
+    const fastLow = (S) => { let best = 1e9; const L = S.L; for (let i = 0; i < S.B.length; i++) { const e = S.B[i].matrixWorld.elements, x = L[i * 3], y = L[i * 3 + 1], z = L[i * 3 + 2];
+      const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14]; const d = wy - ground(wx, wz); if (d < best) best = d; } return best; };
+    for (const [root, joints] of CHAINS) {
+      const parts = SUB[root].filter((b) => must.has(b));
+      const PS = parts.map((b) => fastSet([b], 2)), PEN = fastSet(SUBPEN[root], 4);
+      if (root === 'spine') for (const side of ['R', 'L']) {   // the shoulders go with the spine: they must not be driven into the ground either
+        const sh = bindAt('uArm' + side), bi = JOINTS.indexOf('uArm' + side), PA = body.geometry.attributes.position; _m4.multiplyMatrices(body.skeleton.boneInverses[bi], bm);
+        const L = [...PEN.L]; for (const i of byBone['uArm' + side] || []) { _p.fromBufferAttribute(PA, i); if (_p.distanceTo(sh) > 0.11) continue; _p.applyMatrix4(_m4); PEN.B.push(J['uArm' + side]); L.push(_p.x, _p.y, _p.z); } PEN.L = Float32Array.from(L);
+      }
+      const top = J[root];
+      const cost = () => { top.updateMatrixWorld(true); let c = 0; for (const S of PS) { const d = fastLow(S); c += Math.max(0, d - 0.004) + Math.max(0, -0.012 - d) * 2; } return c + Math.max(0, -0.015 - fastLow(PEN)) * 3; };
+      let c0 = cost(); if (c0 < 0.004) continue;
+      const jl = root.startsWith('clav') ? [...joints, 'hand' + root.slice(-1)] : joints;
+      const r0 = Object.fromEntries(jl.map((j) => [j, J[j].rotation.clone()]));
+      const moves = []; for (const j of jl) for (const a of (j.startsWith('thigh') || j.startsWith('uArm') ? ['x', 'y', 'z'] : ['x', 'z'])) moves.push([j, a]);
+      const lim = (j) => (j === 'spine' || j === 'chest' ? 0.55 : j.startsWith('clav') ? 0.45 : j.startsWith('hand') || j.startsWith('foot') ? 0.7 : 1.1);
+      const ok = (j, a, d) => Math.abs(J[j].rotation[a] + d - r0[j][a]) <= lim(j);
+      for (const step of [0.1, 0.05, 0.025]) for (let it = 0; it < 40 && c0 > 0.004; it++) {
+        let best = null, bc = c0 - 0.0003;
+        for (let m = 0; m < moves.length; m++) for (const sg of [1, -1]) {
+          const [j, a] = moves[m]; if (!ok(j, a, sg * step)) continue;
+          J[j].rotation[a] += sg * step; let c = cost(); if (c < bc) { bc = c; best = [[j, a, sg * step]]; }
+          // and paired with each later move
+          for (let n = m + 1; n < moves.length; n++) for (const sg2 of [1, -1]) { const [j2, a2] = moves[n]; if (j2 === j || !ok(j2, a2, sg2 * step)) continue; J[j2].rotation[a2] += sg2 * step; c = cost(); J[j2].rotation[a2] -= sg2 * step; if (c < bc) { bc = c; best = [[j, a, sg * step], [j2, a2, sg2 * step]]; } }
+          J[j].rotation[a] -= sg * step;
         }
-        if (!best) break; j.rotation[best[0]] += best[1] * 0.05;
+        if (!best) break; for (const [j, a, d] of best) J[j].rotation[a] += d; c0 = bc;
       }
-      }
+      top.updateMatrixWorld(true);
+      if (opts.debug) (settle.log ||= []).push(root + ' ' + c0.toFixed(3) + ' ' + parts.map((b) => b + ':' + lowOf(ground, byBone[b] || []).toFixed(3)).join(' '));
     }
-    drop(all);
-    // what he dropped, each on the ground where it fell
+    // settle onto what bears his weight again; only if some part is still well into the ground lift him out of it
+    if (opts.debug) { drop(); settle.log.push('prelift ' + Object.keys(byBone).map((bn) => [bn, lowOf(ground, byBone[bn])]).sort((p, q) => p[1] - q[1]).slice(0, 4).map(([bn, d]) => bn + ':' + d.toFixed(3)).join(' ')); }
+    drop(); { const lo = lowOf(ground, all); if (lo < -0.025) { wrap.position.y -= lo + 0.025; wrap.updateMatrixWorld(true); } }
+    if (opts.debug) settle.log.push('worst ' + Object.keys(byBone).map((bn) => [bn, lowOf(ground, byBone[bn])]).sort((p, q) => p[1] - q[1]).slice(0, 4).map(([bn, d]) => bn + ':' + d.toFixed(3)).join(' '));
+    if (opts.debug) settle.log.push('final ' + [...CONTACT.rest, ...CONTACT.must].map((b) => b + ':' + lowOf(ground, byBone[b] || []).toFixed(3)).join(' ') + ' all:' + lowOf(ground, all).toFixed(3));
     const cy = Math.cos(yaw), sy = Math.sin(yaw), inv = wrap.quaternion.clone().invert();
-    for (const G of gear) {
-      if (G.obj.parent !== wrap) wrap.add(G.obj);
-      const wx = x + G.at[0] * cy + G.at[1] * sy, wz = z - G.at[0] * sy + G.at[1] * cy, wy = ground(wx, wz);
-      const gx = (ground(wx + 0.3, wz) - ground(wx - 0.3, wz)) / 0.6, gz = (ground(wx, wz + 0.3) - ground(wx, wz - 0.3)) / 0.6;
+    const place = (obj, wx, wz, lift, tilt, flat) => {
+      if (obj.parent !== wrap) wrap.add(obj);
+      const wy = ground(wx, wz), gx = (ground(wx + 0.3, wz) - ground(wx - 0.3, wz)) / 0.6, gz = (ground(wx, wz + 0.3) - ground(wx, wz - 0.3)) / 0.6;
       const qN = new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(-gx, 1, -gz).normalize());
-      const qw = qN.multiply(new THREE.Quaternion().setFromAxisAngle(UP, yaw)).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...G.tilt)));
-      G.obj.quaternion.copy(inv).multiply(qw);
-      G.obj.position.copy(wrap.worldToLocal(new THREE.Vector3(wx, wy + G.lift, wz)));
-      G.obj.castShadow = !G.flat; G.obj.receiveShadow = true;
+      const qw = qN.multiply(new THREE.Quaternion().setFromAxisAngle(UP, yaw)).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...tilt)));
+      obj.quaternion.copy(inv).multiply(qw); obj.position.copy(wrap.worldToLocal(new THREE.Vector3(wx, wy + lift, wz)));
+      obj.castShadow = !flat; obj.receiveShadow = true;
+    };
+    for (const G of gear) place(G.obj, x + G.at[0] * cy + G.at[1] * sy, z - G.at[0] * sy + G.at[1] * cy, G.lift, G.tilt, G.flat);
+    // his sword where it fell, the grip under his right hand and the blade out away from him across the ground
+    if (opts.sword) {
+      const hand = new THREE.Vector3(); J.handR.getWorldPosition(hand); const hp = new THREE.Vector3(); J.hips.getWorldPosition(hp);
+      let dx = hand.x - hp.x, dz = hand.z - hp.z; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
+      const phi = Math.atan2(-dz, dx) + jit(0.35), sw = new THREE.Group(), kb = katzbalger(iron, leather); kb.rotation.set(-Math.PI / 2, 0, -Math.PI / 2); sw.add(kb);   // blade along +x, lying flat
+      place(sw, hand.x + Math.cos(phi) * 0.06, hand.z - Math.sin(phi) * 0.06, 0.02, [0, phi - yaw, 0], false);
+    }
+    // the snow: drifted against him on the windward side and over his legs, half burying him, with a dusting on top
+    if (snow) {
+      if (!settle.drifts) { settle.drifts = new THREE.Group(); wrap.add(settle.drifts); }
+      const D = settle.drifts; for (const c of [...D.children]) { D.remove(c); c.geometry.dispose(); }
+      const wd = new THREE.Vector3(-0.6, 0, -0.8), sm = settle.snowMat ||= new THREE.MeshStandardMaterial({ color: 0xe9eef3, roughness: 0.92 });
+      const bones = { sit: ['hips', 'thighR', 'thighL', 'shinR'], slump: ['hips', 'shinR', 'shinL', 'spine'], prone: ['hips', 'chest', 'thighR', 'shinL'], lie: ['hips', 'chest', 'thighL', 'shinR'] }[pose];
+      let k = 0;
+      // lying on his side the snow is packed in under the hollow of his waist too
+      if (pose === 'lie') { const p = new THREE.Vector3(); J.spine.getWorldPosition(p); const g = drift(0.34, 0.24, 0.15, seed);
+        const m = new THREE.Mesh(g, sm); m.receiveShadow = true; D.add(m); m.quaternion.copy(inv).multiply(_qy); m.position.copy(wrap.worldToLocal(new THREE.Vector3(p.x, ground(p.x, p.z), p.z))); }
+      for (const b of bones) {
+        const p = new THREE.Vector3(); J[b].getWorldPosition(p); p.addScaledVector(wd, -(0.16 + rnd() * 0.1));
+        const L = 0.32 + rnd() * 0.22, W2 = 0.2 + rnd() * 0.12, H = 0.09 + rnd() * 0.1 + (pose === 'sit' && k === 0 ? 0.08 : 0);
+        const g = drift(L, W2, H, k + seed * 3);
+        const m = new THREE.Mesh(g, sm); m.receiveShadow = true; m.castShadow = false;
+        // its base below the lowest ground under it so no edge floats on a slope
+        let gmin = 1e9; for (const [dx, dz] of [[0, 0], [L, 0], [-L, 0], [0, W2], [0, -W2]]) gmin = Math.min(gmin, ground(p.x + dx, p.z + dz));
+        D.add(m); m.quaternion.copy(inv).multiply(new THREE.Quaternion().setFromAxisAngle(UP, Math.atan2(-wd.z, wd.x) + jit(0.5)));
+        m.position.copy(wrap.worldToLocal(new THREE.Vector3(p.x, gmin, p.z)));
+        k++;
+      }
     }
     wrap.updateMatrixWorld(true);
     return wrap;
   };
   // for a check: how far the lowest of him is above (+) or below (-) the ground, overall and at each part that should bear on it
   const gaps = (ground) => {
-    wrap.updateMatrixWorld(true); const per = {}; for (const b of [...CONTACT.rest, ...CONTACT.limb]) per[b] = lowOf(ground, byBone[b] || []);
+    wrap.updateMatrixWorld(true); const per = {}; for (const b of [...CONTACT.rest, ...CONTACT.must]) per[b] = lowOf(ground, byBone[b] || []);
     return { low: lowOf(ground, all), per };
   };
-  // he settles on flat ground until placed
   settle(() => 0, 0, 0, 0);
-  return { root: wrap, rig, head: J.head, settle, gaps, pose };
+  return { root: wrap, rig, head: J.head, settle, gaps, pose, log: () => settle.log };
 }

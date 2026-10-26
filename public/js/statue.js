@@ -1,9 +1,10 @@
-// Our Lady of the Fen: a weathered limestone Virgin in a drowned wayside shrine.
-// Her face and hands are carved from the MakeHuman body (CC0) posed with hands folded at the breast and frozen
-// into stone; the rain has worn the face nearly smooth. Over the body: a gown with deep vertical folds pooling on
-// the plinth, sleeves, a mantle hanging from the shoulders, a veil framing the face, a cracked crown. One hand has
-// lost its fingers. She stands on a moulded plinth carved AVE MARIA (and scratched by Raoul) under a broken
-// canopy, on two cracked steps with votive candles, dead flowers, a rosary and coins left for her.
+// Our Lady of the Fen: a weathered limestone Madonna in a drowned wayside shrine.
+// She is carved from MakeHuman's young woman (CC0, models/lady.json): head and face with every feature kept,
+// only softened by the rain, and real hands joined palm to palm in prayer before her breast. Over the body: a
+// high-girdled gown with a narrow waist and long folds pooling on the plinth, a wide bell sleeve to each arm, a
+// mantle hanging from the shoulders, a veil framing her face. She stands on a moulded plinth carved AVE MARIA
+// (and scratched by Raoul) under a gabled canopy, on two cracked steps with votive candles, dead flowers, a
+// rosary and coins left for her.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { humanBody, headBox } from './people.js';
@@ -27,28 +28,30 @@ function stoneMaterial(tint = 0xffffff) {
   const m = new THREE.MeshStandardMaterial({ color: tint, roughness: 0.93, metalness: 0, side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float cavity;\nattribute float stain;\nvarying float vCav;\nvarying float vStain;\nvarying vec3 vSP;\nvarying vec3 vSN;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCav = cavity; vStain = stain; vSP = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+      .replace('#include <common>', '#include <common>\nattribute float cavity;\nattribute float stain;\nattribute float polish;\nvarying float vCav;\nvarying float vStain;\nvarying float vPol;\nvarying vec3 vSP;\nvarying vec3 vSN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCav = cavity; vStain = stain; vPol = polish; vSP = (modelMatrix * vec4(transformed, 1.0)).xyz;')
       .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvSN = normalize(mat3(modelMatrix) * objectNormal);');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vCav;\nvarying float vStain;\nvarying vec3 vSP;\nvarying vec3 vSN;\n' + NOISE)
+      .replace('#include <common>', '#include <common>\nvarying float vCav;\nvarying float vStain;\nvarying float vPol;\nvarying vec3 vSP;\nvarying vec3 vSN;\n' + NOISE)
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec3 p = vSP;
         float n1 = sfbm(p * vec3(1.6, 5.0, 1.6)), n2 = sfbm(p * 11.0);
+        float wx = 1.0 - clamp(vPol, 0.0, 1.0);
         vec3 c = mix(vec3(0.60, 0.58, 0.53), vec3(0.74, 0.72, 0.66), n1) * (0.86 + 0.28 * n2);
+        c = mix(c, vec3(0.80, 0.78, 0.73) * (0.97 + 0.04 * n1), 1.0 - wx);
         float up = clamp(vSN.y, -1.0, 1.0);
         // rain: dark streaks running down from every ledge
         float st = sfbm(vec3(p.x * 19.0, p.y * 0.9, p.z * 19.0));
-        c *= 1.0 - 0.5 * smoothstep(0.5, 0.78, st) * (1.0 - max(up, 0.0));
+        c *= 1.0 - 0.5 * wx * smoothstep(0.5, 0.78, st) * (1.0 - max(up, 0.0));
         // grime in the hollows of the folds
-        c *= mix(1.0, 0.42, clamp(vCav, 0.0, 1.0));
+        c *= mix(1.0, mix(0.72, 0.34, wx), clamp(vCav, 0.0, 1.0));
         // moss: in the crevices and on what faces the sky
         float ms = sfbm(p * 6.0 + 3.0) + vCav * 0.28 + max(up, 0.0) * 0.45 - 0.86;
-        c = mix(c, mix(vec3(0.13, 0.19, 0.06), vec3(0.24, 0.29, 0.09), n2), smoothstep(0.0, 0.14, ms) * 0.85);
+        c = mix(c, mix(vec3(0.13, 0.19, 0.06), vec3(0.24, 0.29, 0.09), n2), smoothstep(0.0, 0.14, ms) * 0.85 * wx);
         // lichen: crusts of mustard yellow and grey-green
         float lc = sfbm(p * 8.0 + 11.0);
-        c = mix(c, vec3(0.70, 0.58, 0.26), smoothstep(0.66, 0.7, lc) * 0.75 * step(-0.4, up));
-        c = mix(c, vec3(0.56, 0.60, 0.50), smoothstep(0.68, 0.71, sfbm(p * 13.0 - 5.0)) * 0.6);
+        c = mix(c, vec3(0.70, 0.58, 0.26), smoothstep(0.66, 0.7, lc) * 0.75 * step(-0.4, up) * wx);
+        c = mix(c, vec3(0.56, 0.60, 0.50), smoothstep(0.68, 0.71, sfbm(p * 13.0 - 5.0)) * 0.6 * wx);
         // what runs from her eyes
         c = mix(c, vec3(0.09, 0.08, 0.07), clamp(vStain, 0.0, 1.0) * 0.85);
         diffuseColor.rgb *= c;`)
@@ -56,7 +59,7 @@ function stoneMaterial(tint = 0xffffff) {
         { float h = sfbm(vSP * 34.0) * 0.6 + sfbm(vSP * 9.0) * 0.4;
           vec3 dX = dFdx(-vViewPosition), dY = dFdy(-vViewPosition); float hx = dFdx(h), hy = dFdy(h);
           vec3 r1 = cross(dY, normal), r2 = cross(normal, dX); float det = dot(dX, r1);
-          vec3 grad = sign(det) * (hx * r1 + hy * r2); normal = normalize(abs(det) * normal - grad * 0.012); }`);
+          vec3 grad = sign(det) * (hx * r1 + hy * r2); normal = normalize(abs(det) * normal - grad * 0.012 * (1.0 - 0.94 * clamp(vPol, 0.0, 1.0))); }`);
   };
   m.customProgramCacheKey = () => 'ladyStone';
   return m;
@@ -87,12 +90,13 @@ function carvedText(lines, w, h, { font = 'bold 54px serif', scratch = false } =
 // strip to position/normal/uv, add cavity and stain, make indexed, so everything can be merged into one mesh
 function prep(g, cav = 0.15, stain = null) {
   if (!g.index) { const n = g.attributes.position.count, a = new Uint32Array(n); for (let i = 0; i < n; i++) a[i] = i; g.setIndex(new THREE.BufferAttribute(a, 1)); }
-  for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'cavity', 'stain'].includes(k)) g.deleteAttribute(k);
+  for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'cavity', 'stain', 'polish'].includes(k)) g.deleteAttribute(k);
   const n = g.attributes.position.count;
   if (!g.attributes.normal) g.computeVertexNormals();
   if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2));
   if (!g.attributes.cavity) g.setAttribute('cavity', new THREE.BufferAttribute(new Float32Array(n).fill(cav), 1));
   if (!g.attributes.stain) g.setAttribute('stain', new THREE.BufferAttribute(stain || new Float32Array(n), 1));
+  if (!g.attributes.polish) g.setAttribute('polish', new THREE.BufferAttribute(new Float32Array(n), 1));
   return g;
 }
 const at = (g, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) => { g.applyMatrix4(new THREE.Matrix4().compose(V3(...p), new THREE.Quaternion().setFromEuler(new THREE.Euler(r[0], r[1], r[2], 'YXZ')), V3(...s))); return g; };
@@ -127,13 +131,16 @@ function prof(tab, y) { if (y <= tab[0][0]) return tab[0].slice(1); for (let i =
 // ---------------------------------------------------------------- the figure
 function buildFigure(seed) {
   const r = rng(seed);
-  const hb = humanBody({}, 'priest'); if (!hb) return null;
+  const hb = humanBody({}, 'lady') || humanBody({}, 'priest'); if (!hb) return null;
   const { rig, mesh, P } = hb, J = rig.j, root = rig.root;
-  // pose: hands folded at her breast, head bowed and tilted a little, as if listening
+  // pose: at prayer, palms together before her breast, fingers straight up; her head bowed, eyes cast down
   const set = (j, x, y = 0, z = 0) => J[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
-  set('spine', 2); set('chest', 4); set('neck', 6, 0, -3); set('head', 7, 8, -8);
-  for (const [k, s] of [['R', -1], ['L', 1]]) { set('clav' + k, 0, 0, s * -4); set('uArm' + k, -16, 0, s * 6); set('fArm' + k, -92, -s * 36, 0); set('hand' + k, 4, -s * 18, s * 4); }
+  set('spine', 1); set('chest', 3); set('neck', 8, 0, -3); set('head', 14, 4, -6);
   root.updateMatrixWorld(true);
+  { const up = V3(0, 1, 0.22).normalize(), X = V3(1, 0, 0), Y = up.clone().negate(), Z = new THREE.Vector3().crossVectors(X, Y).normalize();
+    const hq = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+    const ch = J.chest.getWorldPosition(new THREE.Vector3());
+    for (const [k, s] of [['R', -1], ['L', 1]]) { rig.solveArm(k, V3(s * 0.016, ch.y - 0.06, ch.z + 0.2), V3(s * 0.7, -1, -0.25), hq); root.updateMatrixWorld(true); } }
   const g = P.geo, PA = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, RG = g.attributes.region, idx = g.index.array;
   const ji = (n) => JOINTS.indexOf(n), HEAD = ji('head'), NECK = ji('neck'), HR = ji('handR'), HL = ji('handL'), FR = ji('fArmR'), FL = ji('fArmL');
   // bind-pose joint positions
@@ -145,7 +152,6 @@ function buildFigure(seed) {
     const d = dom(v);
     if (d === HEAD || d === NECK) return true;
     if (d === HR || d === HL) {
-      if (d === HL) { tmp.fromBufferAttribute(PA, v); if (tmp.distanceTo(bindPos[HL]) > 0.115) return false; }   // her left hand's fingers are broken off
       return true;
     }
     if (d === FR || d === FL) { tmp.fromBufferAttribute(PA, v); return tmp.distanceTo(bindPos[d === FR ? HR : HL]) < 0.07; }
@@ -159,13 +165,34 @@ function buildFigure(seed) {
   const tris = [];
   for (let i = 0; i < idx.length; i += 3) { const a = idx[i], b = idx[i + 1], c = idx[i + 2]; if (!keep[a] || !keep[b] || !keep[c]) continue; tris.push(a, b, c);
     const A = wid[a], B = wid[b], C = wid[c]; nb[A].add(B).add(C); nb[B].add(A).add(C); nb[C].add(A).add(B); }
-  // smoothing: the face most (nose, lips and eyes worn nearly away), the rest a little, the hands softened
+  // the rain has only softened her: a light, even wear over face and hands, every feature kept
   const eyes = (P.eyes || []).map((e) => V3(...e)), fc = eyes.length ? eyes[0].clone().add(eyes[1]).multiplyScalar(0.5) : V3(0, 1.65, 0.12);
+  // soften toward a young woman's face: a smaller, finer nose; fuller lips; smooth cheeks; a narrower jaw and a
+  // rounder chin (all in the bind pose, about the eyes' midpoint)
+  { const sm = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+    for (let i = 0; i < nW; i++) {
+      const p = wp[i], dx = p.x - fc.x, dy = p.y - fc.y, dz = p.z - fc.z; if (p.y < fc.y - 0.2 || dz < -0.09) continue;
+      const front = sm(-0.05, -0.01, dz);
+      // nose: from between the eyes to its tip, drawn back and narrowed
+      const nose = (1 - sm(0.016, 0.03, Math.abs(dx))) * sm(-0.07, -0.05, dy) * (1 - sm(0.0, 0.012, dy)) * sm(-0.005, 0.02, dz);
+      p.z -= nose * Math.max(0, dz + 0.005) * 0.32; p.x = fc.x + dx * (1 - 0.14 * nose);
+      // lips: a little fuller and forward, the mouth a touch wider
+      const lip = (1 - sm(0.022, 0.034, Math.abs(dx))) * Math.exp(-(((dy + 0.072) / 0.014) ** 2)) * front;
+      p.z += lip * 0.0035; p.y = p.y + (dy + 0.072) * 0.18 * lip; p.x = fc.x + (p.x - fc.x) * (1 + 0.06 * lip);
+      // jaw and chin: narrower jaw, a softer, rounder chin
+      const jaw = sm(-0.06, -0.11, dy) * sm(0.03, 0.06, Math.abs(dx));
+      p.x = fc.x + (p.x - fc.x) * (1 - 0.07 * jaw);
+      const chin = sm(-0.09, -0.12, dy) * (1 - sm(0.02, 0.04, Math.abs(dx))) * front;
+      p.z -= chin * 0.004; p.y += chin * 0.004;
+      // cheeks a little fuller under the cheekbones (not gaunt)
+      const cheek = Math.exp(-(((Math.abs(dx) - 0.042) / 0.016) ** 2) - ((dy + 0.045) / 0.022) ** 2) * front;
+      p.x = fc.x + (p.x - fc.x) * (1 + 0.035 * cheek); p.z += cheek * 0.004;
+    } }
   const lam = new Float32Array(nW);
-  for (let i = 0; i < nW; i++) { const p = wp[i]; const face = p.z > fc.z - 0.07 && p.y > fc.y - 0.13 && p.y < fc.y + 0.05 && Math.abs(p.x) < 0.07 && p.y > 1.3; lam[i] = face ? 0.62 : 0.3; }
+  for (let i = 0; i < nW; i++) { const p = wp[i]; const face = p.z > fc.z - 0.07 && p.y > fc.y - 0.13 && p.y < fc.y + 0.05 && Math.abs(p.x) < 0.07 && p.y > 1.3; lam[i] = face ? 0.22 : 0.2; }
   const cur = wp.map((p) => p.clone()), nxt = wp.map((p) => p.clone());
-  for (let it = 0; it < 7; it++) {
-    for (let i = 0; i < nW; i++) { if (!nb[i].size) continue; if (it >= 3 && lam[i] < 0.5) { nxt[i].copy(cur[i]); continue; }
+  for (let it = 0; it < 2; it++) {
+    for (let i = 0; i < nW; i++) { if (!nb[i].size) continue;
       tmp.set(0, 0, 0); for (const j of nb[i]) tmp.add(cur[j]); tmp.multiplyScalar(1 / nb[i].size); nxt[i].copy(cur[i]).lerp(tmp, lam[i]); }
     for (let i = 0; i < nW; i++) cur[i].copy(nxt[i]);
   }
@@ -175,16 +202,16 @@ function buildFigure(seed) {
   const UV = g.attributes.uv;
   used.forEach((v, i) => {
     const b = cur[wid[v]];
-    // a little fuller and softer at the cheek and jaw, a narrower neck: a woman's face under the wear
     tmp.copy(b); mesh.applyBoneTransform(v, tmp); pos.set([tmp.x, tmp.y, tmp.z], i * 3);
     uvs.set([UV.getX(v), UV.getY(v)], i * 2);
     // grime gathers round the eyes and under the chin
     const d = Math.min(...eyes.map((e) => e.distanceTo(b)));
-    cav[i] = 0.18 + (d < 0.03 ? 0.45 * (1 - d / 0.03) : 0) + (b.z > fc.z - 0.02 && b.y < fc.y - 0.1 && b.y > fc.y - 0.16 ? 0.25 : 0);
+    cav[i] = 0.12 + (d < 0.025 ? 0.3 * (1 - d / 0.025) : 0) + (b.z > fc.z - 0.02 && b.y < fc.y - 0.1 && b.y > fc.y - 0.16 ? 0.25 : 0);
     // the tears: two dark runs from the inner corners of the eyes down the cheeks
-    for (const e of eyes) { const dx = Math.abs(b.x - e.x * 0.75), dy = e.y - b.y; if (dy > -0.008 && dy < 0.13 && dx < 0.007 + dy * 0.03 && b.z > e.z - 0.04) stain[i] = Math.max(stain[i], (1 - dx / (0.007 + dy * 0.03)) * (1 - dy / 0.13)); }
+    for (const e of eyes) { const dx = Math.abs(b.x - e.x * 0.75), dy = e.y - b.y; if (dy > -0.008 && dy < 0.13 && dx < 0.007 + dy * 0.03 && b.z > e.z - 0.04) stain[i] = Math.max(stain[i], 0.55 * (1 - dx / (0.007 + dy * 0.03)) * (1 - dy / 0.13)); }
   });
-  const fig = new THREE.BufferGeometry();
+  const pol = new Float32Array(used.length).fill(1);
+  const fig = new THREE.BufferGeometry(); fig.setAttribute('polish', new THREE.BufferAttribute(pol, 1));
   fig.setAttribute('position', new THREE.BufferAttribute(pos, 3)); fig.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   fig.setAttribute('cavity', new THREE.BufferAttribute(cav, 1)); fig.setAttribute('stain', new THREE.BufferAttribute(stain, 1));
   fig.setIndex(tris.map((v) => remap.get(v))); fig.computeVertexNormals();
@@ -193,33 +220,55 @@ function buildFigure(seed) {
   // where the bones are now
   const wpos = (n) => J[n].getWorldPosition(new THREE.Vector3());
   const head = J.head, hm = head.matrixWorld;
-  // ---- the gown: from the ground to the neck, deep vertical folds, a full skirt pooling on the plinth
-  const GOWN = [[0.0, 0.3, 0.27], [0.035, 0.27, 0.245], [0.1, 0.225, 0.2], [0.45, 0.2, 0.165], [0.9, 0.19, 0.145], [1.04, 0.165, 0.125], [1.18, 0.16, 0.13], [1.3, 0.175, 0.14], [1.4, 0.175, 0.12], [1.47, 0.12, 0.085], [1.53, 0.068, 0.07]];
+  // ---- the gown: high-girdled under the bust, a narrow waist, sloping shoulders; the skirt falls from the girdle
+  // in long folds that deepen toward the hem and pool on the plinth
+  const GY = 1.19;   // the girdle
+  const GOWN = [[0.0, 0.3, 0.27], [0.035, 0.27, 0.245], [0.1, 0.235, 0.205], [0.5, 0.205, 0.165], [0.85, 0.175, 0.14], [1.02, 0.15, 0.12], [GY - 0.03, 0.128, 0.105], [GY, 0.124, 0.102], [GY + 0.03, 0.13, 0.108], [1.27, 0.145, 0.12], [1.35, 0.148, 0.112], [1.42, 0.138, 0.098], [1.48, 0.095, 0.072], [1.53, 0.06, 0.058]];
   const fph = Array.from({ length: 5 }, () => r() * PI * 2), ffr = [5, 7, 9, 12, 17];
   const fold = (a, y, depth) => { let f = 0; for (let k = 0; k < 5; k++) f += Math.pow(Math.abs(Math.sin(a * ffr[k] * 0.5 + fph[k] + y * 0.12 * k)), 0.6) / (k + 1.2); return -f * depth; };
   parts.push(grid(64, 46, (u, v) => {
     const y = v * 1.53, a = u * PI * 2; let [rx, rz] = prof(GOWN, y);
-    const depth = 0.036 * Math.max(0, 1 - y / 1.05) + 0.006 + (y > 1.1 && y < 1.42 ? 0.004 : 0);
+    const depth = y < GY ? 0.05 * Math.pow(Math.max(0, 1 - y / GY), 0.7) + 0.005 : 0.006 * Math.exp(-((y - GY - 0.05) ** 2) / 0.003);   // folds from the girdle; a few soft gathers above it
     const f = fold(a, y, depth); rx += f; rz += f;
-    rz += 0.024 * Math.exp(-((y - 1.27) ** 2) / 0.004) * Math.max(0, Math.cos(a)) ** 3;   // the breast under the cloth
+    rz += 0.03 * Math.exp(-((y - 1.285) ** 2) / 0.0028) * Math.pow(Math.max(0, Math.cos(a)), 2.5) * (0.6 + 0.4 * Math.pow(Math.abs(Math.sin(a * 1.0)) + 0.0, 0.5));   // the bust, gently
+    rz += 0.012 * Math.exp(-((y - 0.95) ** 2) / 0.02) * Math.max(0, Math.cos(a));   // the cloth falling forward over her belly
+    // contrapposto: her weight on the right leg, the left knee forward pressing the cloth, a fold falling from it
+    const kn = Math.exp(-((y - 0.52) ** 2) / 0.03) * Math.pow(Math.max(0, Math.cos(a - 0.38)), 5);
+    rz += 0.045 * kn; rx += 0.02 * kn * Math.sin(a);
+    const fall = Math.pow(Math.max(0, Math.cos(a - 0.38)), 30) * Math.max(0, 1 - y / 0.5) * 0.03; rz += fall;
     let yy = y; if (y < 0.06) { yy = y + Math.sin(a * 9 + fph[0]) * 0.012 * (1 - y / 0.06); const pool = 1 + 0.12 * (1 - y / 0.06) * (0.5 + 0.5 * Math.sin(a * 5 + fph[1])); rx *= pool; rz *= pool; }
-    return [V3(Math.sin(a) * rx, Math.max(0, yy), Math.cos(a) * rz), Math.min(1, -f / depth * 0.9)];
+    return [V3(Math.sin(a) * rx, Math.max(0, yy), Math.cos(a) * rz), Math.min(1, Math.pow(-f / depth, 1.6) * 1.1)];
   }, { closeU: true }));
   // the hem's underside, so it sits down onto the plinth
   parts.push(prep(at(new THREE.CircleGeometry(1, 40), [0, 0.004, 0], [PI / 2, 0, 0], [0.33, 0.29, 1]), 0.6));
-  // ---- the sleeves: wide, falling from the elbow, the cloth ending in a turned cuff at the wrist
+  // ---- the sleeves: one to each arm, close on the upper arm, opening from the elbow into a wide bell whose
+  // lower side hangs heavy below the forearm; the wrist and hand come out of its mouth
   for (const k of ['R', 'L']) {
     const s0 = wpos('uArm' + k), e = wpos('fArm' + k), w = wpos('hand' + k);
-    const pts = [s0.clone().lerp(e, 0.02), s0.clone().lerp(e, 0.5), e, e.clone().lerp(w, 0.5), w.clone().lerp(e, 0.04)];
-    parts.push(tube(pts, (t) => 0.058 + 0.016 * t + Math.sin(t * 19) * 0.003, 12, 0.3));
-    // the hanging drape under the forearm
-    const dn = V3(0, -1, 0); const hang = [e.clone().addScaledVector(dn, 0.02), e.clone().lerp(w, 0.45).addScaledVector(dn, 0.07), w.clone().lerp(e, 0.12).addScaledVector(dn, 0.1)];
-    parts.push(tube(hang, (t) => 0.05 + 0.03 * Math.sin(t * PI), 10, 0.45));
-    parts.push(tube([w.clone().lerp(e, 0.09), w.clone().lerp(e, 0.02)], () => 0.077, 14, 0.25));
+    const curve = new THREE.CatmullRomCurve3([s0.clone().lerp(e, 0.03), s0.clone().lerp(e, 0.55), e, e.clone().lerp(w, 0.45), w.clone().lerp(e, 0.3)]);
+    const steps = 40, fr = curve.computeFrenetFrames(steps, false), dn = V3(0, -1, 0), o = new THREE.Vector3();
+    parts.push(grid(28, steps, (u, v) => {
+      const i = Math.round(v * steps), P = curve.getPointAt(v), a = u * PI * 2, N = fr.normals[i], B = fr.binormals[i];
+      o.copy(N).multiplyScalar(Math.cos(a)).addScaledVector(B, Math.sin(a));
+      const bell = Math.max(0, (v - 0.45) / 0.55), down = Math.max(0, o.dot(dn));
+      const rr = 0.054 + 0.008 * v + bell * bell * 0.016 + down * bell * 0.07 + Math.sin(a * 6 + v * 3) * 0.004 * bell;
+      return [P.clone().addScaledVector(o, rr), 0.25 + 0.4 * Math.max(0, Math.sin(a * 6 + v * 3)) * bell];
+    }, { closeU: true }));
+    // a hemmed edge round the sleeve's mouth
+    const rim = []; for (let q = 0; q <= 28; q++) { const a = (q / 28) * PI * 2, N = fr.normals[steps], B = fr.binormals[steps], P = curve.getPointAt(1); o.copy(N).multiplyScalar(Math.cos(a)).addScaledVector(B, Math.sin(a)); const down = Math.max(0, o.dot(dn)); rim.push(P.clone().addScaledVector(o, 0.054 + 0.008 + 0.016 + down * 0.07 + Math.sin(a * 6 + 3) * 0.004)); }
+    parts.push(tube(rim, () => 0.006, 5, 0.3));
   }
+  // the girdle: a cord tied under the bust, its ends hanging down the front of the skirt
+  { const ring = []; for (let q = 0; q <= 40; q++) { const a = (q / 40) * PI * 2, [rx, rz] = prof(GOWN, GY); ring.push(V3(Math.sin(a) * (rx + 0.006), GY, Math.cos(a) * (rz + 0.006))); }
+    // a flat band, not a cord: a short strip of cloth all round, its edges standing proud
+    parts.push(grid(64, 3, (u, v) => { const a = u * PI * 2, [rx, rz] = prof(GOWN, GY), y = GY - 0.018 + v * 0.036, out = 0.008 + (v === 0 || v === 1 ? 0.0 : 0.004); return [V3(Math.sin(a) * (rx + out), y, Math.cos(a) * (rz + out)), 0.25]; }, { closeU: true }));
+    for (const yy of [GY - 0.018, GY + 0.018]) { const rr = []; for (let q = 0; q <= 64; q++) { const a = (q / 64) * PI * 2, [rx, rz] = prof(GOWN, GY); rr.push(V3(Math.sin(a) * (rx + 0.01), yy, Math.cos(a) * (rz + 0.01))); } parts.push(tube(rr, () => 0.003, 4, 0.5)); }
+    const kn = V3(0.03, GY - 0.005, prof(GOWN, GY)[1] + 0.012);
+    parts.push(prep(at(new THREE.SphereGeometry(0.016, 10, 8), [kn.x, kn.y, kn.z], [0, 0, 0], [1, 0.8, 0.7]), 0.3));
+    for (const [dx, L] of [[-0.01, 0.42], [0.02, 0.5]]) { const pts = []; for (let q = 0; q <= 8; q++) { const t = q / 8, y = kn.y - t * L; pts.push(V3(kn.x + dx * t + Math.sin(t * 5 + dx * 40) * 0.008, y, prof(GOWN, y)[1] + 0.012 + 0.01 * t)); } parts.push(tube(pts, (t) => 0.0055 + (t > 0.92 ? 0.004 : 0), 5, 0.35)); } }
   // ---- the mantle: from the shoulders round the back and sides, open in front, heavy folds, a rolled hem
-  const MANT = [[0.12, 0.29, 0.21], [0.5, 0.26, 0.205], [0.9, 0.27, 0.205], [1.1, 0.285, 0.2], [1.3, 0.275, 0.185], [1.4, 0.23, 0.16], [1.46, 0.15, 0.125]];
-  const A0 = 0.36 * PI, A1 = 1.64 * PI;   // round the back, from her left front to her right front
+  const MANT = [[0.12, 0.28, 0.21], [0.5, 0.245, 0.2], [0.9, 0.235, 0.185], [1.1, 0.24, 0.17], [1.3, 0.235, 0.165], [1.4, 0.2, 0.145], [1.46, 0.14, 0.115]];
+  const A0 = 0.44 * PI, A1 = 1.56 * PI;   // round the back, from her left front to her right front
   const mph = Array.from({ length: 4 }, () => r() * PI * 2);
   const mfold = (a, y) => { let f = 0; for (let k = 0; k < 4; k++) f += Math.pow(Math.abs(Math.sin(a * (4 + k * 2.7) * 0.5 + mph[k])), 0.55) / (k + 1); return -f * (0.04 * Math.max(0.15, 1 - y / 1.3)); };
   const mantlePt = (u, v) => { const y = 0.12 + (1 - v) * (1.46 - 0.12), a = A0 + u * (A1 - A0); let [rx, rz] = prof(MANT, y); const f = mfold(a, y); rx += f; rz += f;
@@ -233,7 +282,7 @@ function buildFigure(seed) {
   parts.push(tube(hemPts, () => 0.011, 6, 0.35));
   // ---- the veil: a cap over the crown, framing the face, falling to the shoulders where it meets the mantle
   const hbx = headBox(mesh), hc = hbx.getCenter(new THREE.Vector3()), hs = hbx.getSize(new THREE.Vector3());
-  const RX = hs.x / 2 + 0.018, RY = hs.y / 2 + 0.014, RZ = hs.z / 2 + 0.016, brow = hc.y + 0.01;
+  const RX = hs.x / 2 + 0.034, RY = hs.y / 2 + 0.04, RZ = hs.z / 2 + 0.032, brow = hc.y + 0.01;
   const inv = new THREE.Matrix4().copy(hm).invert(), shoulderL = V3(0, 1.43, -0.01).applyMatrix4(inv);   // the shoulders, in the head's frame
   const NU = 48, NV = 30, gapA = 52 * D2R;
   const veilPt = (u, v) => {
@@ -244,10 +293,12 @@ function buildFigure(seed) {
     } else {          // the drape, widening and falling to the shoulders, a few soft folds
       const t = (v - 0.55) / 0.45, s = t * t * (3 - 2 * t); const ph = PI / 2 + 0.5;
       const top = V3(Math.sin(a) * Math.sin(ph) * RX, hc.y + Math.cos(ph) * RY + 0.006, hc.z + Math.cos(a) * Math.sin(ph) * RZ - 0.008);
-      const rx = RX * Math.sin(ph) + s * 0.075, rz = RZ * Math.sin(ph) + s * 0.03, fl = 1 + Math.sin(a * 8 + 1.3) * 0.05 * t;
-      p = V3(Math.sin(a) * rx * fl, top.y + (shoulderL.y - top.y) * s, hc.z - 0.01 * s + Math.cos(a) * rz * fl);
+      const back = Math.max(0, -Math.cos(a)), side = Math.abs(Math.sin(a));
+      const rx = RX * Math.sin(ph) + s * 0.11 + 0.015 * t, rz = RZ * Math.sin(ph) + s * 0.05, fl = 1 + (Math.pow(Math.abs(Math.sin(a * 5 + 1.3)), 0.6) - 0.5) * 0.16 * t;
+      const drop = (shoulderL.y - top.y) * s - back * 0.3 * t * t - side * 0.06 * t * t;   // past the shoulders, longest down her back
+      p = V3(Math.sin(a) * rx * fl, top.y + drop, hc.z - 0.01 * s - back * 0.04 * t + Math.cos(a) * rz * fl);
     }
-    return [p.applyMatrix4(hm), v > 0.55 ? 0.3 : 0.15];
+    return [p.applyMatrix4(hm), v > 0.55 ? 0.15 + 0.5 * Math.pow(Math.abs(Math.sin(a * 5 + 1.3)), 6) : 0.1];
   };
   const inGap = (a) => { const d = Math.atan2(Math.sin(a), Math.cos(a)); return Math.abs(d) < gapA; };
   const browV = 0.3;   // the face opening starts at the forehead
@@ -257,17 +308,13 @@ function buildFigure(seed) {
   for (let j = NV; j >= j0; j--) edge.push(veilPt(iL / NU, j / NV)[0]);
   for (let i = iL - 1; i >= -iL + 1; i--) edge.push(veilPt(((i + NU) % NU) / NU, j0 / NV)[0]);
   for (let j = j0; j <= NV; j++) edge.push(veilPt(iR / NU, j / NV)[0]);
-  parts.push(tube(edge, () => 0.0075, 6, 0.3));
-  // ---- the crown: a band of small lilies round her head, one side broken away, set a little askew
-  const crown = []; const cy = hc.y + RY * 0.62, cR = [RX * 0.86, RZ * 0.86];
-  const tilt = new THREE.Matrix4().makeRotationZ(0.08);
-  const cpt = (a, y) => V3(Math.sin(a) * cR[0], y, hc.z - 0.008 + Math.cos(a) * cR[1]).applyMatrix4(tilt).applyMatrix4(hm);
-  const band = []; for (let i = 0; i <= 26; i++) { const a = -2.5 + (i / 26) * 4.6; band.push(cpt(a, cy)); }   // broken off over her right ear
-  crown.push(tube(band, () => 0.007, 6, 0.3)); crown.push(tube(band.map((p) => p.clone().add(V3(0, 0.012, 0).applyMatrix3(new THREE.Matrix3().setFromMatrix4(hm)))), () => 0.0045, 6, 0.3));
-  for (let i = 0; i < 7; i++) { const a = -2.3 + (i / 6) * 4.2; const base = cpt(a, cy + 0.01), tip = cpt(a, cy + 0.045 + (i % 2) * 0.012);
-    crown.push(tube([base, base.clone().lerp(tip, 0.5).add(V3(0, 0, 0)), tip], (t) => 0.0075 * (1 - t * 0.85) + 0.0015, 5, 0.2));
-    for (const s of [-1, 1]) { const lp = cpt(a + s * 0.12, cy + 0.03); crown.push(tube([base.clone().lerp(tip, 0.25), lp], (t) => 0.0045 * (1 - t * 0.6), 4, 0.2)); } }
-  parts.push(...crown);
+  // hair beneath the veil's edge: parted at the brow, two soft waves swept to the sides
+  { const hp = (x, y, z) => V3(x, y, z).applyMatrix4(hm), hy = veilPt(0, browV)[0].clone().applyMatrix4(new THREE.Matrix4().copy(hm).invert()).y - 0.006;
+    for (const sd of [-1, 1]) for (let k = 0; k < 2; k++) {
+      // from the parting, down over the temple and under the veil: a soft lock, the second tucked a little behind
+      const pts = []; for (let q = 0; q <= 8; q++) { const t = q / 8, ang = sd * (0.04 + k * 0.05 + t * 0.85), y = hy + 0.004 - t * t * 0.075 - k * 0.004;
+        pts.push(hp(Math.sin(ang) * (RX - 0.026 - k * 0.003 + t * 0.004), y, hc.z - 0.008 + Math.cos(ang) * (RZ - 0.026 - k * 0.003))); }
+      parts.push(tube(pts, (t) => (0.0085 - k * 0.002) * (1 - t * 0.35), 7, 0.4)); } }
   // her feet are hidden; the toes of one shoe peep from under the hem
   parts.push(prep(at(new THREE.SphereGeometry(0.045, 12, 8), [0.06, 0.02, 0.24], [0, 0.15, 0], [0.8, 0.45, 1.3]), 0.3));
   for (const p of parts) prep(p);
@@ -297,18 +344,18 @@ export function buildLadyShrine(seed = 7) {
   const top = 0.34;
   // the plinth: moulded foot and cap, the panel between carved AVE MARIA, Raoul's scratching on its side
   add(moulding([[0.36, 0], [0.36, 0.06], [0.33, 0.09], [0.31, 0.12], [0.3, 0.12]], 1, 0.85)).translate(0, top, 0);
-  add(at(new THREE.BoxGeometry(0.56, 0.62, 0.48, 2, 4, 2), [0, top + 0.43, 0]));
-  add(moulding([[0.3, 0], [0.31, 0.03], [0.34, 0.07], [0.36, 0.09], [0.36, 0.13], [0.0, 0.13]], 1, 0.85)).translate(0, top + 0.74, 0);
-  const pTop = top + 0.87;
+  add(at(new THREE.BoxGeometry(0.56, 0.46, 0.48, 2, 4, 2), [0, top + 0.35, 0]));
+  add(moulding([[0.3, 0], [0.31, 0.03], [0.34, 0.07], [0.36, 0.09], [0.36, 0.13], [0.0, 0.13]], 1, 0.85)).translate(0, top + 0.58, 0);
+  const pTop = top + 0.71;
   const ave = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.2), carvedText(['AVE MARIA', 'GRATIA PLENA'], 512, 210, { font: 'bold 70px serif' }));
-  ave.position.set(0, top + 0.52, 0.2405); g.add(ave);
-  const raoul = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.3), carvedText(['SHE WEEPS AT NIGHT', 'I HAVE HEARD HER', 'SHE IS NOT WEEPING', 'FOR US'], 512, 360, { font: '44px serif', scratch: true }));
-  raoul.position.set(0.2805, top + 0.42, 0); raoul.rotation.y = PI / 2; g.add(raoul);
+  ave.position.set(0, top + 0.4, 0.2405); g.add(ave);
+  const raoul = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.26), carvedText(['SHE WEEPS AT NIGHT', 'I HAVE HEARD HER', 'SHE IS NOT WEEPING', 'FOR US'], 512, 360, { font: '44px serif', scratch: true }));
+  raoul.position.set(0.2805, top + 0.34, 0); raoul.rotation.y = PI / 2; g.add(raoul);
   // the niche wall behind her: a pointed arch with a moulded frame
-  const wall = new THREE.Shape(); const W = 0.62, H0 = 1.55, H1 = 2.05;
+  const wall = new THREE.Shape(); const W = 0.62, H0 = 1.06, H1 = 1.42;
   wall.moveTo(-W, 0); wall.lineTo(W, 0); wall.lineTo(W, H0); wall.quadraticCurveTo(W * 0.95, H1 * 0.95, 0, H1 + 0.12); wall.quadraticCurveTo(-W * 0.95, H1 * 0.95, -W, H0); wall.lineTo(-W, 0);
   add(at(new THREE.ExtrudeGeometry(wall, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2, curveSegments: 16 }), [0, pTop - 0.02, -0.5]));
-  const arch = []; const aw = 0.46, ah0 = 1.35, ah1 = 1.82;
+  const arch = []; const aw = 0.46, ah0 = 0.98, ah1 = 1.36;
   for (let i = 0; i <= 10; i++) arch.push(V3(-aw, pTop + (i / 10) * ah0, -0.32));
   for (let i = 1; i <= 16; i++) { const t = i / 16, a = PI - t * PI; arch.push(V3(Math.cos(a) * aw * (1 - 0.15 * Math.sin(t * PI)), pTop + ah0 + Math.sin(a) * (ah1 - ah0) * (t < 0.5 ? t * 2 : (1 - t) * 2) ** 0.6 * 1.0, -0.32)); }
   for (let i = 9; i >= 0; i--) arch.push(V3(aw, pTop + (i / 10) * ah0, -0.32));
@@ -316,21 +363,24 @@ export function buildLadyShrine(seed = 7) {
   // two little columns at the front corners, with bases and capitals
   for (const s of [-1, 1]) {
     const x = s * 0.6, z = 0.32;
-    add(moulding([[0.08, 0], [0.08, 0.04], [0.06, 0.07], [0.0, 0.07]]).translate(x, top, z));
-    add(prep(at(new THREE.CylinderGeometry(0.05, 0.055, 2.9, 12, 8), [x, top + 0.07 + 1.45, z]), 0.15));
-    add(moulding([[0.05, 0], [0.07, 0.05], [0.085, 0.08], [0.085, 0.11], [0, 0.11]]).translate(x, top + 2.97, z));
+    add(moulding([[0.12, 0], [0.12, 0.05], [0.095, 0.09], [0.0, 0.09]]).translate(x, top, z));
+    add(prep(at(new THREE.CylinderGeometry(0.08, 0.088, 1.95, 16, 8), [x, top + 0.09 + 0.975, z]), 0.15));
+    add(moulding([[0.08, 0], [0.105, 0.06], [0.125, 0.1], [0.125, 0.14], [0, 0.14]]).translate(x, top + 2.04, z));
   }
   // the canopy roof: its left slab still up, the right one fallen and lying against the steps, the ridge broken
-  const roofY = top + 3.08;
+  const roofY = top + 2.2;
   add(at(new THREE.BoxGeometry(1.42, 0.08, 1.08), [0, roofY + 0.02, -0.1]));   // the lintel slab
-  const slab = () => new THREE.BoxGeometry(0.82, 0.07, 1.14, 4, 1, 4);
-  add(at(slab(), [-0.34, roofY + 0.26, -0.1], [0, 0, 0.6]));
-  add(at(slab(), [0.98, 0.24, 0.55], [0.12, 0.6, -0.42]));                       // the fallen slab
-  add(at(new THREE.DodecahedronGeometry(0.11, 0), [0.75, 0.42, 0.62], [0.4, 0.2, 0.1], [1, 0.7, 1.2]));   // a broken piece of the ridge
+  // a level gabled roof of two stone slabs meeting at a ridge, a little cross on the gable
+  { const L = 0.8, th = 0.5, len = L / Math.cos(th), cy = roofY + 0.06 + (L / 2) * Math.tan(th);
+    for (const sd of [-1, 1]) add(at(new THREE.BoxGeometry(len, 0.07, 1.22, 4, 1, 4), [sd * L / 2, cy, -0.1], [0, 0, -sd * th]));
+    add(prep(at(new THREE.CylinderGeometry(0.045, 0.045, 1.26, 10), [0, roofY + 0.06 + L * Math.tan(th) + 0.02, -0.1], [PI / 2, 0, 0]), 0.2));
+    const gy = roofY + 0.06 + L * Math.tan(th) + 0.05;
+    add(at(new THREE.BoxGeometry(0.05, 0.3, 0.05), [0, gy + 0.15, 0.48])); add(at(new THREE.BoxGeometry(0.2, 0.05, 0.05), [0, gy + 0.2, 0.48])); }
+  add(at(new THREE.DodecahedronGeometry(0.1, 0), [1.15, 0.06, 0.62], [0.4, 0.2, 0.1], [1, 0.6, 1.2]));   // fallen stones, lying in the grass
   add(at(new THREE.DodecahedronGeometry(0.07, 0), [-0.82, 0.18, 0.75], [0.2, 0.9, 0.4]));
-  add(at(new THREE.DodecahedronGeometry(0.05, 0), [0.55, 0.38, 0.5], [0.7, 0.1, 0.3]));
+  add(at(new THREE.DodecahedronGeometry(0.05, 0), [0.55, top + 0.03, 0.5], [0.7, 0.1, 0.3], [1, 0.6, 1]));
   // her figure on the plinth, turned away from the road toward the mountain, as Raoul found her
-  fig.applyMatrix4(new THREE.Matrix4().compose(V3(0, pTop, -0.04), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.75, 0)), V3(0.8, 0.8, 0.8)));
+  fig.applyMatrix4(new THREE.Matrix4().compose(V3(0, pTop, -0.04), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.45, 0)), V3(0.74, 0.74, 0.74)));
   S.push(fig);
   const stoneMesh = new THREE.Mesh(mergeGeometries(S), stone); stoneMesh.castShadow = true; stoneMesh.receiveShadow = true; g.add(stoneMesh);
   // ---- what was left for her: candles, dead flowers, a rosary, coins, a little wooden cross
