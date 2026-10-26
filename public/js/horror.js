@@ -477,7 +477,19 @@ function robeMat(sway, top, DU) {
   m.customProgramCacheKey = () => 'devilRobe';   // sway and top are uniforms: one shader for every garment
   return dissolvable(m, DU);
 }
-export function tickRobes(time) { ROBE_U.uTime.value = time; }
+// the hoods' springy middle: a damped spring chasing the head's turn, a little overshoot, then still
+const HOODS = new Set();
+export function tickRobes(time) {
+  ROBE_U.uTime.value = time;
+  for (const h of HOODS) {
+    if (!h.head.parent) { HOODS.delete(h); continue; }
+    const dt = h.t < 0 ? 0 : Math.min(0.05, Math.max(0, time - h.t)); h.t = time;
+    const r = h.head.rotation; h.lag.position.copy(h.head.position);
+    if (!h.init || dt <= 0) { if (!h.init) { h.y = r.y; h.x = r.x; h.z = r.z; h.init = true; } }
+    else for (const k of ['y', 'x', 'z']) { const v = 'v' + k; h[v] += (r[k] - h[k]) * 140 * dt; h[v] *= Math.exp(-15 * dt); h[k] += h[v] * dt; }
+    h.lag.rotation.set(h.x, h.y, h.z, 'YXZ');
+  }
+}
 // The robe hangs. Whatever the body inside it is doing, the cloth falls from the collar toward the ground and its hem
 // lies there, gathered a little (sink), rather than swinging stiffly with the chest and lifting off the earth behind
 // him. Up to a slight stoop it hangs plumb; when he bows deeply it goes partway with him (bent forward from the collar,
@@ -584,7 +596,26 @@ function dressDevil(B, K, def, DU) {
   hood.setIndex(idx); hood.computeVertexNormals();
   const hg = new THREE.Group(); B.head.add(hg);
   if (def.headFit) { hg.scale.setScalar(def.headFit.s); hg.position.copy(def.headFit.off); }
-  const hm = new THREE.Mesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; hg.add(hm);
+  // One garment with the robe: the crown and the face opening go with the head, the cowl below the jaw belongs to
+  // the shoulders (the robe's collar), and between them the cloth follows a slow, springy copy of the head, so when
+  // he turns the hood twists down into the robe, lags a moment and settles, and never parts from it.
+  const lag = new THREE.Object3D(); lag.position.copy(B.head.position); lag.quaternion.copy(B.head.quaternion); lag.rotation.order = 'YXZ'; B.head.parent.add(lag);
+  const SI = [], SW = [], NP = pos.length / 3;
+  for (let k = 0; k < NP; k++) {
+    const j = Math.floor(k / (NU + 1)), i = k % (NU + 1), t = j / NV, a = (i / NU) * Math.PI * 2 - Math.PI;
+    const front = Math.max(0, Math.cos(a));
+    const sm = (e0, e1, x) => { const u = clamp((x - e0) / (e1 - e0), 0, 1); return u * u * (3 - 2 * u); };
+    const wC = sm(0.6, 0.97, t) * (1 - 0.35 * front * (1 - sm(0.8, 1, t)));    // the face's edge stays with the face a little longer
+    const rest = 1 - wC, wL = rest * sm(0.28, 0.66, t) * (1 - 0.6 * front * sm(0.45, 0.7, t)), wH = rest - wL;
+    SI.push(0, 1, 2, 0); SW.push(wH, wL, wC, 0);
+  }
+  hood.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); hood.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+  const hm = new THREE.SkinnedMesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; hm.frustumCulled = false; hg.add(hm);
+  { let top = hg; while (top.parent) top = top.parent; top.updateMatrixWorld(true); lag.updateMatrixWorld(true);
+    const bones = [B.head, lag, B.chest];
+    const sk = new THREE.Skeleton(bones, bones.map((b) => b.matrixWorld.clone().invert()));
+    hm.bind(sk, hm.matrixWorld.clone()); }
+  HOODS.add({ head: B.head, lag, y: 0, x: 0, z: 0, vy: 0, vx: 0, vz: 0, t: -1, init: false });
   // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
   if (def.horns) for (const s of [-1, 1]) {
     const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true;
