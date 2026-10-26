@@ -6,6 +6,10 @@
 import * as THREE from 'three';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _p = new THREE.Vector3(), _d = new THREE.Vector3();
+// what the camera can see this frame (set by the game); cloth out of view is not simulated, and catches up when seen
+const VIEW = { frustum: new THREE.Frustum(), m: new THREE.Matrix4(), set: false }, _s = new THREE.Sphere();
+export function setViewFrustum(cam) { VIEW.m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse); VIEW.frustum.setFromProjectionMatrix(VIEW.m); VIEW.set = true; }
+export function inView(p, r = 2.5) { if (!VIEW.set) return true; _s.center.copy(p); _s.radius = r; return VIEW.frustum.intersectsSphere(_s); }
 
 export class Cloth {
   // pins(i) -> { bone, local: Vector3 } for each column i of the top row; ring: true joins the last column to the first
@@ -135,8 +139,12 @@ export class Cloth {
       }
     }
   }
+  // not seen this frame: remember how long, so it can catch up before it is next drawn
+  idle(dt) { this.idleT = (this.idleT || 0) + dt; }
   update(dt) {
     if (!this.inited) this.init();
+    if (this.idleT > 0.2) { const n = Math.min(40, Math.round(this.idleT * 30)); for (let i = 0; i < n; i++) { this.step(1 / 60); this.step(1 / 60); } }
+    this.idleT = 0;
     const h = Math.min(dt, 1 / 30); this.step(h / 2); this.step(h / 2);
     this.geo.attributes.position.needsUpdate = true; this.geo.computeVertexNormals();
   }

@@ -6,7 +6,8 @@ import { Rig, JOINTS } from './rig.js';
 import { dressBody } from './body.js';
 import { clothTextures } from './textures.js';
 import { lerp } from './util.js';
-import { Cloth } from './cloth.js';
+import { Cloth, inView } from './cloth.js';
+const _clothP = new THREE.Vector3();
 
 const D2R = Math.PI / 180;
 const smoothstep01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
@@ -547,7 +548,7 @@ export function makePerson(kind, quality) {
         let a = Math.atan2(watch.x - p.x, watch.z - p.z) - ry; a = Math.atan2(Math.sin(a), Math.cos(a)); if (Math.hypot(watch.x - p.x, watch.z - p.z) < 14) want = Math.max(-1.1, Math.min(1.1, a)); }
       look += (want - look) * Math.min(1, dt * 2);
       J.head.rotation.y = base.head.y + look * 0.65; J.neck.rotation.y = base.neck.y + look * 0.35;
-      if (!camPos || rig.root.getWorldPosition(new THREE.Vector3()).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
+      { const rp = rig.root.getWorldPosition(_clothP); if (!camPos || (rp.distanceTo(camPos) < 70 && inView(rp))) for (const c of cloths) c.update(dt); else for (const c of cloths) c.idle?.(dt); }
     };
     return { rig, root: rig.root, hipsY: rig.j.hips.position.y, groundOffset, kind, cloths, update, bless() {}, sit() {}, busy: false, dispose };
   }
@@ -864,7 +865,7 @@ export function makePerson(kind, quality) {
     }
     if (finished) seated();
     prev.sub(root.position).multiplyScalar(-1 / Math.max(dt, 1e-3)); vel.lerp(prev.setY(0), Math.min(1, dt * 6)); prev.copy(root.position);
-    if (!camPos || root.getWorldPosition(_a).distanceTo(camPos) < 70) for (const c of cloths) c.update(dt);
+    { const rp = root.getWorldPosition(_clothP); if (!camPos || (rp.distanceTo(camPos) < 70 && inView(rp))) for (const c of cloths) c.update(dt); else for (const c of cloths) c.idle?.(dt); }
   };
   return { rig, root, hipsY: J.hips.position.y, groundOffset, kind, cloths, update, bless, walkTo, board, seatNow, sit: () => {}, setGround: (f) => { ground = f; }, get busy() { return !!act || mode !== 'stand'; }, get mode() { return mode; }, feet, rest, dispose };
 }
@@ -932,8 +933,18 @@ function cabasset(iron) {   // tall almond-shaped skull with a little stalk on t
 }
 // a garment fitted to his own body: every triangle of the chosen parts pushed out along its normal and skinned to
 // the same skeleton, so no skin shows through it at any bend (the old tubes let the calf and shoulder through)
-function skinLayer(body, pick, off, mat, smooth = 0) {
+const SETTLE_MEMO = new Map();   // frozen men's settled poses, by man, place and ground (see makeFrozen)
+function skinLayer(body, pick, off, mat, smooth = 0, key = null) {
   const g = body.geometry, P = g.attributes.position, N = g.attributes.normal, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, I = g.index;
+  // the same garment on the same body model comes out the same every time: fit it once, then share it
+  const LC = skinLayer.cache ||= new Map(), ck0 = key && (g.uuid + '|' + key + '|' + off + '|' + smooth), hit = ck0 && LC.get(ck0);
+  if (hit) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', hit.pos); geo.setAttribute('normal', hit.nrm); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);
+    if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(hit.idx);
+    const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true;
+    body.parent.add(m); m.bind(body.skeleton, body.bindMatrix); return m;
+  }
   const n = P.count, keep = new Uint8Array(n), v = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
     let bi = SI.getX(i), bw = SW.getX(i); for (const [ii, ww] of [[SI.getY(i), SW.getY(i)], [SI.getZ(i), SW.getZ(i)], [SI.getW(i), SW.getW(i)]]) if (ww > bw) { bw = ww; bi = ii; }
@@ -986,6 +997,7 @@ function skinLayer(body, pick, off, mat, smooth = 0) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);
   if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(idx); if (smooth) geo.computeVertexNormals();
+  if (ck0) LC.set(ck0, { pos: geo.attributes.position, nrm: geo.attributes.normal, idx: geo.index });
   const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true;
   body.parent.add(m); m.bind(body.skeleton, body.bindMatrix); return m;
 }
@@ -1028,17 +1040,17 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const headY = bindAt('head').y, hipsY = bindAt('hips').y;
   const LEGS = new Set(['thighR', 'thighL', 'shinR', 'shinL', 'footR', 'footL']), TORSO = new Set(['spine', 'chest', 'clavR', 'clavL']), ARMS = new Set(['uArmR', 'uArmL', 'fArmR', 'fArmL']);
   // under everything: his hose (feet stockinged, the shoes over them) and a linen shirt to the throat and wrists
-  skinLayer(body, (b, v) => LEGS.has(b) || (b === 'hips' && v.y < hipsY + 0.06), 0.004, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 4);
+  skinLayer(body, (b, v) => LEGS.has(b) || (b === 'hips' && v.y < hipsY + 0.06), 0.004, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 4, 'hose|' + hipsY);
   const shirt = frostMat(pick([0x8e8676, 0x9a9282, 0x7e7666]), 0.95, 0, 1, { weave: 1 });
-  skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y >= hipsY - 0.01) || (b === 'neck' && v.y < headY - 0.012), 0.006, shirt, 2);   // over the top of the hose at the waist, no gap between
+  skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y >= hipsY - 0.01) || (b === 'neck' && v.y < headY - 0.012), 0.006, shirt, 2, 'shirt|' + hipsY + '|' + headY);   // over the top of the hose at the waist, no gap between
   const gambeson = seed % 3 === 1, plate = seed % 3 === 0 || seed % 5 === 0;
   const [cO, cI] = pick(DOUBLET);
   if (gambeson) {   // quilted linen over him, body and sleeves, down over the hips
     const q = frostMat(pick([0x7a6440, 0x5a6068, 0x7a4a32, 0x6a6250]), 0.95, 0, 1, { quilt: 1 });
-    skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y > hipsY - 0.1) || (b === 'neck' && v.y < headY - 0.06), 0.024, q, 30);
+    skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y > hipsY - 0.1) || (b === 'neck' && v.y < headY - 0.06), 0.024, q, 30, 'gambeson|' + hipsY + '|' + headY);
   } else {          // a doublet fitted to him; the sleeves puffed and slashed to show the shirt and lining
     const o = frostMat(cO, 0.9), i = frostMat(cI, 0.9);
-    skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24);
+    skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24, 'doublet|' + hipsY + '|' + headY);
     for (const k of ['R', 'L']) { slashed(J, 'uArm' + k, [[0.088, 0.03], [0.108, -0.06], [0.11, -0.16], [0.09, -0.3]], o, i, 7); slashed(J, 'fArm' + k, [[0.07, 0.02], [0.074, -0.08], [0.058, -0.2]], o, i, 6); }
   }
   // the upper hose: puffed and slashed to above the knee (the Landsknecht's pluderhose)
@@ -1055,7 +1067,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     J.chest.add(new THREE.Mesh(bg, iron));
   }
   // a woollen scarf wound round the throat and up over the mouth on some, against the cold
-  if (seed % 4 === 3) { const wool = frostMat(pick([0x5a4a3a, 0x3e3a36, 0x6a3a2a]), 1); skinLayer(body, (b, v) => (b === 'neck' && v.y < headY + 0.01) || (b === 'chest' && v.y > headY - 0.2), 0.028, wool, 10); }
+  if (seed % 4 === 3) { const wool = frostMat(pick([0x5a4a3a, 0x3e3a36, 0x6a3a2a]), 1); skinLayer(body, (b, v) => (b === 'neck' && v.y < headY + 0.01) || (b === 'chest' && v.y > headY - 0.2), 0.028, wool, 10, 'scarf|' + headY); }
   // head: kettle hat, cabasset, or bare
   const lying = pose === 'prone' || pose === 'lie';
   const hatKind = seed % 4 === 2 ? 0 : seed % 4 === 1 || seed % 4 === 3 ? 2 : 1;
@@ -1148,6 +1160,15 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const SUBPEN = { spine: ['spine', 'chest', 'clavR', 'clavL', 'neck'], thighR: SUB.thighR, thighL: SUB.thighL, clavR: SUB.clavR, clavL: SUB.clavL, neck: SUB.neck };
   const thin = (ids, k) => (ids || []).filter((_, i) => i % k === 0);
   const settle = (ground, x, z, yaw, sink = 0.01) => {
+    // the search below always gives the same answer for the same man on the same ground: remember it, so reloading
+    // the chapter (after a wipe, say) need not search again
+    const memo = !opts.debug && SETTLE_MEMO, gk = [0, 0.5, -0.5].map((d) => ground(x + d, z - d).toFixed(4)).join(',');
+    const mk = memo && `${seed}|${pose}|${JSON.stringify(opts)}|${settle.n || 0}|${x.toFixed(4)},${z.toFixed(4)},${yaw.toFixed(5)},${sink}|${gk}`, hit = mk && memo.get(mk);
+    settle.n = (settle.n || 0) + 1;
+    if (hit) {
+      _qy.setFromAxisAngle(UP, yaw); wrap.position.fromArray(hit.p); wrap.quaternion.fromArray(hit.q); for (const n in hit.j) J[n].rotation.fromArray(hit.j[n]);
+      wrap.updateMatrixWorld(true);
+    } else {
     wrap.position.set(x, 0, z); _qy.setFromAxisAngle(UP, yaw); wrap.quaternion.copy(_qy);
     const restIds = [...new Set([...CONTACT.rest, 'hips'])].flatMap((n) => byBone[n] || []);
     const drop = (ids = restIds) => { wrap.updateMatrixWorld(true); wrap.position.y -= lowOf(ground, ids) + sink; wrap.updateMatrixWorld(true); };
@@ -1204,6 +1225,8 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     drop(); { const lo = lowOf(ground, all); if (lo < -0.025) { wrap.position.y -= lo + 0.025; wrap.updateMatrixWorld(true); } }
     if (opts.debug) settle.log.push('worst ' + Object.keys(byBone).map((bn) => [bn, lowOf(ground, byBone[bn])]).sort((p, q) => p[1] - q[1]).slice(0, 4).map(([bn, d]) => bn + ':' + d.toFixed(3)).join(' '));
     if (opts.debug) settle.log.push('final ' + [...CONTACT.rest, ...CONTACT.must].map((b) => b + ':' + lowOf(ground, byBone[b] || []).toFixed(3)).join(' ') + ' all:' + lowOf(ground, all).toFixed(3));
+    if (mk) { const jr = {}; for (const n of JOINTS) if (J[n]) jr[n] = J[n].rotation.toArray(); memo.set(mk, { p: wrap.position.toArray(), q: wrap.quaternion.toArray(), j: jr }); }
+    }
     const cy = Math.cos(yaw), sy = Math.sin(yaw), inv = wrap.quaternion.clone().invert();
     const place = (obj, wx, wz, lift, tilt, flat) => {
       if (obj.parent !== wrap) wrap.add(obj);

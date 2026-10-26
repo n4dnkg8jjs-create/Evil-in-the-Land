@@ -339,8 +339,8 @@ export function dragonHideMaterial() {
 // overlapping scales, tiling seamlessly: R = height (keel 1, gaps 0), G = each scale's own shade
 function dragonScales() {
   const S = 512, cols = 10, rows = 16, w = S / cols, h = S / rows * 1.9;
-  const hc = document.createElement('canvas'); hc.width = hc.height = S; const hx = hc.getContext('2d');
-  const tc = document.createElement('canvas'); tc.width = tc.height = S; const tx = tc.getContext('2d');
+  const hc = document.createElement('canvas'); hc.width = hc.height = S; const hx = hc.getContext('2d', { willReadFrequently: true });
+  const tc = document.createElement('canvas'); tc.width = tc.height = S; const tx = tc.getContext('2d', { willReadFrequently: true });
   hx.fillStyle = '#000'; hx.fillRect(0, 0, S, S); tx.fillStyle = '#808080'; tx.fillRect(0, 0, S, S);
   const r = rng(31);
   for (let row = rows + 1; row >= -1; row--) for (let col = -1; col <= cols; col++) {

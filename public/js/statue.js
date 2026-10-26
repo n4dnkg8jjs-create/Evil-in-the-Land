@@ -67,7 +67,7 @@ function stoneMaterial(tint = 0xffffff) {
 
 // carved letters: a height field drawn on a canvas, turned into colour and normal maps
 function carvedText(lines, w, h, { font = 'bold 54px serif', scratch = false } = {}) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d', { willReadFrequently: true });
   x.fillStyle = '#fff'; x.fillRect(0, 0, w, h);
   x.fillStyle = '#000'; x.strokeStyle = '#000'; x.textAlign = 'center'; x.textBaseline = 'middle';
   if (scratch) {   // Raoul's knife: thin, uneven, shaky strokes

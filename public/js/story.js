@@ -92,7 +92,7 @@ const cloth = new THREE.MeshStandardMaterial({ color: 0x1a1612, roughness: 0.95,
 let RELIEF = null;
 function reliefMat() {
   if (RELIEF) return RELIEF;
-  const S = 256, c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d');
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d', { willReadFrequently: true });
   x.fillStyle = '#404040'; x.fillRect(0, 0, S, S); x.strokeStyle = '#d0d0d0'; x.fillStyle = '#b0b0b0'; x.lineCap = 'round';
   x.beginPath(); x.moveTo(30, 220); x.lineTo(128, 70); x.lineTo(226, 220); x.closePath(); x.fill();             // the mountain
   x.fillStyle = '#e8e8e8'; for (let i = 0; i < 9; i++) { x.beginPath(); x.moveTo(40 + i * 22, 236); x.quadraticCurveTo(48 + i * 22, 214, 52 + i * 22, 236); x.fill(); }   // the fire under its roots

@@ -2,6 +2,7 @@
 // waits at the start of each road with steel to sell, for the silver the knights
 // win: from the demons they cut down, the altars they hallow, the pages they find.
 // What a knight owns and has had tempered is kept between pilgrimages.
+import { mergeTree } from './batch.js';
 import { account } from './account.js';
 import * as THREE from 'three';
 import { WEAPONS, buildWeapon } from './weapons.js';
@@ -116,6 +117,8 @@ function wagonModel(quality) {
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(4), toneMapped: false }));
   lamp.position.set(0.75, 2.15, -2.22); g.add(lamp);
   const light = new THREE.PointLight(0xffb060, 6, 9, 2); light.position.copy(lamp.position); g.add(light);
+  // the wagon's planks, posts, spokes and irons drawn together, a call or two per material (the horses stay their own)
+  mergeTree(g, (o) => g.userData.horses.some((h) => h.root === o));
   return g;
 }
 

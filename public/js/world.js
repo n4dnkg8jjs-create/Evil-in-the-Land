@@ -1,5 +1,6 @@
 // Deterministic world generation per chapter: heightfield, the blight / life
 // terrain shader, props, altars, colliders, water and the healing of the land.
+import { bakeClusters } from './batch.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { icoSmooth } from './demons.js';
@@ -395,6 +396,7 @@ export class World {
     engine.setAtmosphere(this.ch.atmos);
     this.baseAtmos = this.ch.atmos;
     this.vista = new Vista(engine, chapterIdx, this.ch, (x, z) => this.groundAt(x, z));
+    bakeClusters(this.group, 24);   // the houses and the church drawn a few calls per material and quarter, not each on its own
   }
 
   // ---------------------------------------------------------------- layout
@@ -1811,7 +1813,7 @@ export class World {
       [glass, B.glass, 0.8], [iron, B.iron, 0.6], [thatch, B.thatch, 2.4], [slate, roofKind === 'shingle' ? B.shingle : B.slate, 2.0], [cloth, B.sacking, 1.0], [hay, B.hay, 1.6], [water, B.water, 1], [lamp, B.lamp, 1]]) {
       if (!list.length) continue; const geo = boxUV(merge(list), tile); const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.lamp && m !== B.water; mesh.receiveShadow = true; g.add(mesh);
     }
-    this.group.add(g);
+    g.userData.bake = true; this.group.add(g);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
   }
 
@@ -2036,7 +2038,7 @@ export class World {
     }
     parts.push(xf(new THREE.BoxGeometry(2.4, 1.05, 1.0), [0, 0.52, -L / 2 + 1.6]));
     const tm = new THREE.Mesh(boxUV(merge(trusses), 1.1), charMat); tm.castShadow = true; g.add(tm);
-    this.group.add(g);
+    g.userData.bake = true; this.group.add(g);
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     for (let k = 0; k < 10; k++) for (const s of [-1, 1]) { if (k === 4 && s > 0) continue; const [cx, cz] = toW(s * W / 2, -L / 2 + 1 + k * 2); this.addCollider(cx, cz, 1.0); }

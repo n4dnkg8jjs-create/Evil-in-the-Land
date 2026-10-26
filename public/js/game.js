@@ -9,6 +9,7 @@ import { robeWind } from './horror.js';
 import { Cave } from './cave.js';
 import { Weather } from './weather.js';
 import { FX, bloodyWeapon } from './fx.js';
+import { setViewFrustum } from './cloth.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
 import { CHAPTERS, PRAYERS, HEALED as HEALED_LOW, HEALED_HIGH } from './chapters.js';
@@ -256,6 +257,7 @@ export class Game {
     if (this.world && this.world.fires.length && R() < 0.8) { const f = this.world.fires[Math.floor(R() * this.world.fires.length)]; if ((f.x - camPos.x) ** 2 + (f.z - camPos.z) ** 2 < 80 * 80) { this.fx.glow.emit({ x: f.x + (R() - 0.5) * f.s, y: f.y + 0.2, z: f.z + (R() - 0.5) * f.s, vy: 1.5 + R() * 2, color: [1, 0.45, 0.1], size: 0.5 * f.s, grow: 0.8, life: 0.6 + R() * 0.5, cell: 3, spin: 2 }); if (R() < 0.3) this.fx.smoke.emit({ x: f.x, y: f.y + 1.2, z: f.z, vy: 1.4, color: [0.06, 0.05, 0.05], a: 0.5, size: 0.9, grow: 1.5, life: 3, drag: 0.4, cell: 0 }); } }
     // ---- camera
     if (!this.cinema.update(rawDt)) this.updateCamera(rawDt, myInput);
+    this.engine.camera.updateMatrixWorld(); setViewFrustum(this.engine.camera);   // off-screen cloth rests until it is seen
     this.engine.focusShadows(this.cinema.active ? this.cam.look : me.pos);
     // ---- net send
     this.netT -= rawDt;

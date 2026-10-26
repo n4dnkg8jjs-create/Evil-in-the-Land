@@ -670,5 +670,52 @@ export function dressRig(rig, style, finish, quality, colors) {
     if (handOpen[side] === open) return; handOpen[side] = open;
     for (const m of handSets[side].grip) m.visible = !open; for (const m of handSets[side].open) m.visible = open;
   }
-  return { mats, meshes, updateFollowers, setHandOpen };
+  // Draw the harness in a handful of calls instead of one per joint and material: every rigid piece that shares a
+  // material (and shadow flags) becomes one SkinnedMesh whose vertices are each bound wholly to the joint (or
+  // follower node) they hung from, so every piece moves exactly as before. The gauntlets' grip/open variants (whose
+  // visibility is switched) and the plume (its own shadow material) stay as they are. Called once, after anything
+  // that needs the separate pieces (the coif is fitted to them).
+  const handMeshes = new Set([...handSets.R.grip, ...handSets.R.open, ...handSets.L.grip, ...handSets.L.open]);
+  function consolidate() {
+    const root = rig.root; root.updateMatrixWorld(true);
+    const rootInv = root.matrixWorld.clone().invert();
+    const groupsBy = new Map();
+    for (const m of meshes) {
+      if (handMeshes.has(m) || m.customDepthMaterial || !m.visible || m.children.length || !m.parent) continue;
+      const k = m.material.uuid + '|' + m.castShadow + '|' + m.receiveShadow;
+      (groupsBy.get(k) || groupsBy.set(k, []).get(k)).push(m);
+    }
+    const bones = [], inv = [], boneIdx = new Map();
+    const boneOf = (node) => { let i = boneIdx.get(node); if (i === undefined) { i = bones.length; boneIdx.set(node, i); bones.push(node); inv.push(node.matrixWorld.clone().invert()); } return i; };
+    const made = [];
+    for (const list of groupsBy.values()) {
+      if (list.length < 2) continue;
+      const geos = [];
+      for (const m of list) {
+        const g = m.geometry.clone(); g.applyMatrix4(_mw.multiplyMatrices(rootInv, m.matrixWorld));
+        for (const n in g.attributes) if (!['position', 'normal', 'uv'].includes(n)) g.deleteAttribute(n);
+        const n = g.attributes.position.count, b = boneOf(m.parent), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+        for (let i = 0; i < n; i++) { si[i * 4] = b; sw[i * 4] = 1; }
+        g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+        geos.push(g);
+      }
+      const merged = (() => { try { return mergeGeometries(geos, false); } catch { return null; } })();
+      for (const g of geos) g.dispose();
+      if (!merged) continue;
+      made.push({ list, merged });
+    }
+    if (!made.length) return;
+    const skel = new THREE.Skeleton(bones, inv);
+    for (const { list, merged } of made) {
+      const sm = new THREE.SkinnedMesh(merged, list[0].material);
+      sm.castShadow = list[0].castShadow; sm.receiveShadow = list[0].receiveShadow;
+      root.add(sm); sm.updateMatrixWorld(true); sm.bind(skel, root.matrixWorld);
+      // a bound that holds whatever the limbs do (computed once from the bind pose, then widened)
+      sm.computeBoundingSphere(); sm.boundingSphere.radius += 0.6;
+      for (const m of list) { m.removeFromParent(); m.geometry.dispose(); const i = meshes.indexOf(m); if (i >= 0) meshes.splice(i, 1); }
+      meshes.push(sm);
+    }
+  }
+  return { mats, meshes, updateFollowers, setHandOpen, consolidate };
 }
+const _mw = new THREE.Matrix4();

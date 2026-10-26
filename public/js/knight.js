@@ -309,6 +309,7 @@ export class Knight {
       // under the helmet: a quilted wool arming cap and a mail coif over it, so no bare neck shows behind or below the steel
       else { const M = this.dress.mats, steel = this.dress.meshes.filter((m) => [M.plate, M.trim, M.brass, M.dark].includes(m.material));
         this.coif = dressCoif(this.rig, this.face, steel, variant + '|' + loadout.style); } }
+    this.dress.consolidate?.();   // the harness in a few draw calls (after the coif has been fitted to its pieces)
     scene.add(this.group);
     this.weapon = buildWeapon(loadout.weapon, quality);
     scene.add(this.weapon);

@@ -30,7 +30,7 @@ function readHeight(c) {
 
 // Sobel normal map from heightfield (wrapping) -> canvas
 export function normalFromHeight(h, w, hh, strength = 2) {
-  const c = canvas(w, hh); const ctx = c.getContext('2d');
+  const c = canvas(w, hh); const ctx = c.getContext('2d', { willReadFrequently: true });
   const img = ctx.createImageData(w, hh); const o = img.data;
   const at = (x, y) => h[((y + hh) % hh) * w + ((x + w) % w)];
   for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) {
@@ -138,13 +138,13 @@ export function armorTextures(finishKey, size = 1024) {
   for (let i = 0; i < 30; i++) dimple(hx, s, s, r() * s, r() * s, s * (0.04 + r() * 0.08), 0.05, r() < 0.4);
   // etched bands: borders along v edges + a central vertical band
   const bandH = s * 0.055;
-  const etchMask = canvas(s); const ex = etchMask.getContext('2d');
+  const etchMask = canvas(s); const ex = etchMask.getContext('2d', { willReadFrequently: true });
   ex.fillStyle = '#000'; ex.fillRect(0, 0, s, s);
   etchPattern(ex, 0, s * 0.012, s, bandH, 5, '#fff');
   etchPattern(ex, 0, s - bandH - s * 0.012, s, bandH, 6, '#fff');
   etchPattern(ex, s * 0.47, 0, s * 0.06, s, 7, '#fff');
   // scratches
-  const scr = canvas(s); const sx = scr.getContext('2d');
+  const scr = canvas(s); const sx = scr.getContext('2d', { willReadFrequently: true });
   sx.fillStyle = '#000'; sx.fillRect(0, 0, s, s);
   for (let i = 0; i < 260; i++) {
     const x = r() * s, y = r() * s, a = r() * Math.PI, l = s * (0.01 + r() * 0.08);
@@ -218,7 +218,7 @@ export function mailTextures(size = 512) {
   }
   const H = readHeight(hc);
   const nC = normalFromHeight(H, s, s, 4);
-  const aC = canvas(s); const ax = aC.getContext('2d'); ax.drawImage(hc, 0, 0);
+  const aC = canvas(s); const ax = aC.getContext('2d', { willReadFrequently: true }); ax.drawImage(hc, 0, 0);
   const img = ax.getImageData(0, 0, s, s); const d = img.data;
   for (let i = 0; i < d.length; i += 4) { const h = d[i] / 255; d[i] = 20 + h * 140; d[i + 1] = 20 + h * 138; d[i + 2] = 22 + h * 135; }
   ax.putImageData(img, 0, 0);
@@ -568,9 +568,9 @@ export function plasterTextures(size = 512) {
   const k = 'plaster' + size; if (cache.has(k)) return cache.get(k);
   const s = size, r = rng(3131), H = new Float32Array(s * s), A = new Float32Array(s * s * 3);
   // crack lines: random walks drawn into a mask
-  const cc = canvas(s); const cx = cc.getContext('2d'); cx.fillStyle = '#000'; cx.fillRect(0, 0, s, s); cx.strokeStyle = '#fff';
+  const cc = canvas(s); const cx = cc.getContext('2d', { willReadFrequently: true }); cx.fillStyle = '#000'; cx.fillRect(0, 0, s, s); cx.strokeStyle = '#fff';
   for (let i = 0; i < 26; i++) { let x = r() * s, y = r() * s, a = r() * TAU0; cx.lineWidth = 0.6 + r() * 1.6; cx.beginPath(); cx.moveTo(x, y); for (let j = 0; j < 30; j++) { a += (r() - 0.5) * 1.1; x += Math.cos(a) * 6; y += Math.sin(a) * 6; cx.lineTo(x, y); if (r() < 0.07) { cx.stroke(); cx.beginPath(); cx.moveTo(x, y); a += (r() < 0.5 ? 1 : -1) * 0.9; } } cx.stroke(); }
-  const crack = cc.getContext('2d').getImageData(0, 0, s, s).data;
+  const crack = cx.getImageData(0, 0, s, s).data;
   for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
     const u = x / s, v = y / s, i = y * s + x;
     const n = tn.fbm(u, v, 8, 5), fine = tn.fbm(u, v, 48, 3);
@@ -596,7 +596,7 @@ export function thatchTextures(size = 512) {
   const k = 'thatch' + size; if (cache.has(k)) return cache.get(k);
   const s = size, r = rng(77), H = new Float32Array(s * s), A = new Float32Array(s * s * 3);
   const strands = new Float32Array(s * s);
-  const sc = canvas(s); const sx = sc.getContext('2d'); sx.fillStyle = '#000'; sx.fillRect(0, 0, s, s);
+  const sc = canvas(s); const sx = sc.getContext('2d', { willReadFrequently: true }); sx.fillStyle = '#000'; sx.fillRect(0, 0, s, s);
   for (let i = 0; i < 5200; i++) { const x = r() * s, y = r() * s, l = 18 + r() * 40, a = Math.PI / 2 + (r() - 0.5) * 0.25; sx.strokeStyle = `rgba(255,255,255,${0.25 + r() * 0.5})`; sx.lineWidth = 0.6 + r() * 1.4; sx.beginPath(); sx.moveTo(x, y); sx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); sx.stroke(); }
   const sd = sx.getImageData(0, 0, s, s).data; for (let i = 0; i < s * s; i++) strands[i] = sd[i * 4] / 255;
   for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {

@@ -112,6 +112,10 @@ export class Engine {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     const r = this.renderer;
+    // three's shader-error check reads every program's log the moment it is linked, which makes the browser wait for each
+    // shader to finish compiling (a long hitch at every chapter start). Off unless asked for with ?glcheck; shaders then
+    // compile in the background (KHR_parallel_shader_compile) while the chapter fades in.
+    r.debug.checkShaderErrors = /[?&]glcheck\b/.test(location.search);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping;
     r.toneMappingExposure = 1.0;
