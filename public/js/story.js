@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { clamp, rng, TAU } from './util.js';
 import { normalFromHeight } from './textures.js';
 import { CHAPTERS } from './chapters.js';
+import { buildLadyShrine } from './statue.js';
 
 export const PAGES = [
   // the Vale
@@ -114,6 +115,10 @@ function loreModel(kind, r) {
     add(new THREE.BoxGeometry(0.9, 0.35, 0.6), stone2, [0, 0.17, 0]); add(new THREE.BoxGeometry(0.28, 1.9, 0.2), stone2, [0, 1.3, 0]); add(new THREE.BoxGeometry(1.0, 0.24, 0.18), stone2, [0, 1.75, 0]);
     add(new THREE.TorusGeometry(0.3, 0.05, 6, 20), stone2, [0, 1.75, 0]);
     for (let i = 0; i < 8; i++) add(new THREE.BoxGeometry(0.16 - (i === 7 ? 0.08 : 0), 0.018, 0.01), new THREE.MeshStandardMaterial({ color: 0x1a1816 }), [i === 7 ? -0.04 : 0, 0.55 + i * 0.09, 0.103]);
+  } else if (kind === 'shrine' && (page = buildLadyShrine(Math.floor(r() * 1e4)))) {   // Our Lady of the Fen (statue.js)
+    const lady = page; page = null; g.add(lady); g.userData.update = lady.userData.update;
+    const pg = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.28), parch); pg.rotation.set(-Math.PI / 2, 0, r() * 2); pg.position.set(...lady.userData.pageAt); g.add(pg);
+    return { g, page: pg };
   } else if (kind === 'shrine' || kind === 'relief') {   // a wayside shrine: pillar, gabled niche; the relief panel, or a worn statue
     add(new THREE.BoxGeometry(0.7, 1.3, 0.55), stone2, [0, 0.65, 0]); add(new THREE.BoxGeometry(1.0, 1.0, 0.55), stone2, [0, 1.8, -0.05]);
     const roof = new THREE.CylinderGeometry(0.01, 0.82, 0.5, 4, 1); roof.rotateY(Math.PI / 4); roof.scale(1, 1, 0.7); add(roof, stone2, [0, 2.55, -0.05]);
@@ -180,7 +185,7 @@ export class Story {
       }
       const { g, page } = loreModel(L.kind, r);
       g.position.set(x, world.heightAt(x, z) - 0.05, z); g.rotation.y = this.loreYaw ?? 0; this.group.add(g);   // faces the road
-      this.spots.push({ x, y: g.position.y, z, lore: L, loreKey: chIdx + ':' + k, page, taken: false, yaw: g.rotation.y });
+      this.spots.push({ x, y: g.position.y, z, lore: L, loreKey: chIdx + ':' + k, page, taken: false, yaw: g.rotation.y, g });
     });
   }
   update(dt, time) {
@@ -188,6 +193,7 @@ export class Story {
     const g = this.game, me = g.me;
     for (const s of this.spots) {
       // a faint gleam of motes, so the eye finds it in the dusk
+      if (s.g?.userData.update) s.g.userData.update(time);
       if (!s.taken && Math.random() < dt * 2.5) g.fx.holyMotes(new THREE.Vector3(s.x, s.y + 0.3, s.z), 0.6, 1, [1, 0.8, 0.5]);
       if (s.taken || me.downed) continue;
       const d = Math.hypot(me.pos.x - s.x, me.pos.z - s.z);
