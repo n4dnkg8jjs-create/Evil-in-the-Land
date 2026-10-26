@@ -69,7 +69,14 @@ async function boot() {
   app.audio = new AudioEngine(); app.audio.vol = { master: app.settings.vol, music: app.settings.music, sfx: app.settings.sfx };
   app.net = new Net();
   app.input = new Input(canvas);
-  app.input.onLockChange = (l) => { if (app.game && !l && !app.paused && !app.game.cinema.active && !app.game.shop?.open) $('clickToPlay').hidden = false; if (l) $('clickToPlay').hidden = true; };
+  // Esc while the mouse is captured is swallowed by the browser (it only releases the mouse), so losing the
+  // mouse in play is itself the pause; during a cutscene or at the sutler it just asks for a click to carry on
+  app.input.onLockChange = (l) => {
+    if (l) { $('clickToPlay').hidden = true; return; }
+    if (!app.game || app.paused) return;
+    if (app.game.cinema.active || app.game.shop?.open) { if (!app.game.shop?.open) $('clickToPlay').hidden = false; return; }
+    pause();
+  };
   const step = async (frac, msg, fn) => { ui.boot(frac, msg); window.__bootProgress = frac; await new Promise((r) => setTimeout(r, 30)); fn && fn(); };
   ui.boot(0.08, 'Measuring the knight…'); window.__bootProgress = 0.08;
   await Promise.all([loadBody(), loadDemonBodies(), loadPeople()]);
@@ -219,7 +226,11 @@ function setupMenus() {
   $('clickToPlay').onclick = () => { app.input.lock(); };
   $('view').addEventListener('click', () => { if (app.game && !app.paused) app.input.lock(); });
   addEventListener('keydown', (e) => {
-    if (e.code === 'Escape' && app.game) { if (app.game.shop?.open) { app.game.shop.close(); return; } if (app.paused) resume(); else pause(); }
+    if ((e.code === 'Escape' || e.code === 'KeyP') && app.game && !e.repeat) {
+      if (app.game.shop?.open) { if (e.code === 'Escape') app.game.shop.close(); return; }
+      if (performance.now() - (app.pausedAt || 0) < 350) return;   // the same Esc that released the mouse
+      if (app.paused) { if (app.ui.current === 'pause') resume(); } else pause();
+    }
   });
   // networking: lobby + lifecycle
   app.net.on('k:lobbySelf', (m) => { if (app.lobby?.host) { const p = app.lobby.players.get(m.from); if (p) { p.loadout = m.loadout; p.ready = m.ready; broadcastLobby(); } } });
@@ -468,7 +479,8 @@ app.endGame = (victory, toTitle = false) => {
   else { app.lobby.ready = false; app.ui.show('lobby'); if (app.lobby.host) { const unlocked = store.get('evil.progress', 0); fillSelect('optChapter', chapterOptions(), Math.min(unlocked, CHAPTERS.length - 1)); broadcastLobby(); } else pushLobbySelf(); }
 };
 function pause() {
-  app.paused = true; app.input.unlock();
+  if (app.paused) return;
+  app.paused = true; app.pausedAt = performance.now(); app.input.unlock(); $('clickToPlay').hidden = true;
   const solo = app.lobby?.solo;
   if (app.game && solo) app.game.paused = true;
   $('pauseNote').textContent = solo ? '' : 'The game continues for the rest of the company.';

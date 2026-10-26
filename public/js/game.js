@@ -385,7 +385,7 @@ export class Game {
     this.horde.simulate(dt, C);
     if (this.boss) this.boss.simulate(dt, C);
     // the watcher on the hills
-    if (this.watcher) { const r = this.watcher.hostUpdate(dt, this.world, this.knightList, o.ph); if (r) this.bcast('watcher', { s: r }); }
+    if (this.watcher && !(this.watcher.holdNet > performance.now())) { const r = this.watcher.hostUpdate(dt, this.world, this.knightList, o.ph); if (r) this.bcast('watcher', { s: r }); }
     // prayer & waves
     if (o.ph === 'travel' && !ch.boss) {
       const a = this.world.altars[o.a];
@@ -396,7 +396,7 @@ export class Game {
     if (o.ph === 'pray') {
       const a = this.world.altars[o.a];
       const pk = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - a.x, k.pos.z - a.z) < ALTAR_R + 0.5);
-      const n = pk.length, faith = n ? pk.reduce((m, k) => Math.max(m, k.prayMul || 1), 1) : 1;
+      const n = pk.length, faith = n ? pk.reduce((m, k) => Math.max(m, k.prayMul || 1), 1) : 1; o.n = n;
       let rate = n ? (1 + (n - 1) * 0.55) * faith : 0;
       for (const d of this.horde.list) if (d.alive && d.type === 'wraith' && d.pos.distanceTo(a) < 10) { rate *= 0.5; break; }
       o.p[o.a] = Math.min(1, o.p[o.a] + dt * rate / (ch.prayer * this.diff.prayer));
@@ -410,7 +410,7 @@ export class Game {
       const ward = this.activeWard();
       if (ward) {
         const i = this.world.altars.indexOf(ward);
-        const n = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - ward.x, k.pos.z - ward.z) < ALTAR_R + 0.5).length;
+        const n = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - ward.x, k.pos.z - ward.z) < ALTAR_R + 0.5).length; o.n = n;
         if (ward.state === 'blighted') { ward.state = 'active'; o.s[i] = 'active'; }
         o.p[i] = Math.min(1, o.p[i] + dt * (n ? 1 + (n - 1) * 0.55 : 0) / (ch.prayer * this.diff.prayer)); ward.progress = o.p[i];
         o.waveT -= dt; if (o.waveT <= 0) { o.waveT = 9; this.spawnWave(ward, 0.6); }
@@ -424,7 +424,7 @@ export class Game {
     if (this.snapT <= 0 && !this.opts.solo) {
       this.snapT = 1 / 15;
       this.net.send('snap', {
-        d: this.horde.snapshot(), o: { ch: o.ch, ph: o.ph, a: o.a, p: o.p.map((x) => +x.toFixed(3)), s: o.s, wards: o.wards },
+        d: this.horde.snapshot(), o: { ch: o.ch, ph: o.ph, a: o.a, p: o.p.map((x) => +x.toFixed(3)), s: o.s, wards: o.wards, n: o.n || 0 },
         ai: this.companions.map((c) => [c.k.id, c.k.netState()]), w: this.watcher ? this.watcher.netState() : null, b: this.boss ? this.boss.snap() : null,
       });
     }
@@ -433,10 +433,10 @@ export class Game {
     if (!this.world || m.o.ch !== this.chapterIdx) return;
     this.horde.applySnapshot(m.d, dt, this.world);
     const o = this.obj;
-    o.ph = m.o.ph; o.a = m.o.a; o.wards = m.o.wards;
+    o.ph = m.o.ph; o.a = m.o.a; o.wards = m.o.wards; o.n = m.o.n || 0;
     m.o.p.forEach((p, i) => { o.p[i] = p; const a = this.world.altars[i]; if (a) { a.progress = p; if (m.o.s[i] === 'active' && a.state === 'blighted') a.state = 'active'; } });
     for (const [id, s] of m.ai) { const k = this.knights.get(id); if (k) k.netS = s; }
-    if (m.w && this.watcher) this.watcher.applyNet(m.w);
+    if (m.w && this.watcher && !(this.watcher.holdNet > performance.now())) this.watcher.applyNet(m.w);
     if (m.b) { if (!this.boss) this.createBoss(m.b[0], V(m.b[1], m.b[2], m.b[3])); if (this.boss) this.boss.applySnap(m.b, dt, this.world); }
     this.lastSnap = null;
   }
@@ -1014,6 +1014,32 @@ export class Game {
   // The first time He shows himself in a chapter: the camera finds Him on the ridge and closes in on that face
   // where his face really is (the head bone, a little forward of it), whatever he is standing on
   devilFace(off = 0.12) { const D = this.watcher; if (!D || !D.B?.head) return null; D.mesh.updateMatrixWorld(true); return D.B.head.localToWorld(new THREE.Vector3(0, 0.02, off)); }
+  // is the straight line from a to b clear of the ground (with a little margin)?
+  terrainClear(a, b, margin = 0.4) {
+    const w = this.world, n = Math.ceil(a.distanceTo(b) / 1.5);
+    for (let i = 1; i < n; i++) { const t = i / n, x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t, z = a.z + (b.z - a.z) * t; if (w.heightAt(x, z) > y - margin) return false; }
+    return true;
+  }
+  // if a hill hides Him from where the camera will be, set Him on open high ground that can be seen
+  placeDevilInView(eye) {
+    const W = this.watcher, w = this.world, faceUp = 1.75;
+    const face = (x, z) => V(x, w.heightAt(x, z) + faceUp, z);
+    if (this.terrainClear(eye, face(W.pos.x, W.pos.z))) return true;
+    const a0 = Math.atan2(W.pos.x - eye.x, W.pos.z - eye.z);
+    let best = null, bs = -1e9;
+    for (let i = 0; i < 60; i++) {
+      const a = a0 + ((i % 15) - 7) * 0.16, r = 45 + Math.floor(i / 15) * 18;
+      const x = eye.x + Math.sin(a) * r, z = eye.z + Math.cos(a) * r;
+      if (!w.inBounds(x, z) || w.normalAt(x, z).y < 0.8 || !w.okSpot(x, z, 3, 8)) continue;
+      const f = face(x, z); if (!this.terrainClear(eye, f)) continue;
+      const sc = (f.y - eye.y) * 1.5 - Math.abs(a - a0) * 12 - Math.abs(r - 70) * 0.2;   // high ground, near where He was
+      if (sc > bs) { bs = sc; best = { x, z }; }
+    }
+    if (!best) return false;
+    W.pos.set(best.x, w.heightAt(best.x, best.z), best.z); W.yaw = Math.atan2(eye.x - best.x, eye.z - best.z);
+    W.mesh.position.copy(W.pos); W.mesh.rotation.y = W.yaw; W.holdNet = performance.now() + 9000;
+    return true;
+  }
   checkDevilReveal() {
     const W = this.watcher, o = this.obj; if (!W || !o || o.ph !== 'travel' || this.cinema.active || this.boss || this.paused) return;
     if (W.state !== 'watch' || !W.mesh.visible) return;
@@ -1022,12 +1048,15 @@ export class Game {
     const seen = { ...account.get('evil.devilReveal', {}) };
     const key = CHAPTERS[this.chapterIdx].id; if (seen[key]) return;
     for (const dm of this.horde.list) if (dm.alive && dm.pos.distanceTo(me.pos) < 25) return;
+    // from the camera's place at your shoulder, He must not be behind a hill: move Him into view, or wait
+    { const dir0 = V(W.pos.x - me.pos.x, 0, W.pos.z - me.pos.z).normalize(); const eye = V(me.pos.x - dir0.x * 2.5 + dir0.z * 0.8, me.pos.y + 2.0, me.pos.z - dir0.z * 2.5 - dir0.x * 0.8);
+      if (!this.placeDevilInView(eye)) return; }
     seen[key] = 1; account.set('evil.devilReveal', seen);
     const LINES = { vale: ['Ecce, adversarius vester.', 'Behold your adversary.'], village: ['Circuit, quaerens quem devoret.', 'He walks about, seeking whom he may devour.'], fen: ['Vidit vos. Semper vidit.', 'He has seen you. He has always seen you.'], wood: ['Princeps huius mundi.', 'The prince of this world.'], field: ['Legio nomen mihi est.', 'My name is Legion.'], ascent: ['Venite. Exspecto.', 'Come. I am waiting.'] };
     const p = W.pos, m = me.pos; const face = this.devilFace() || V(p.x, p.y + 3.1, p.z), hy = face.y;
     const gnd = (x, z) => this.world.heightAt(x, z), trk = () => this.devilFace();
     const dir = V(p.x - m.x, 0, p.z - m.z).normalize();
-    const near = V(face.x - dir.x * 9, hy + 0.3, face.z - dir.z * 9);
+    const near = V(face.x - dir.x * 9, hy + 0.3, face.z - dir.z * 9); for (let i = 0; i < 12 && !this.terrainClear(near, face, 0.25); i++) near.y += 0.5;
     this.audio.stinger?.('drone', 0.5); this.audio.heartbeat?.(0.5);
     this.dread && (this.dread.level = Math.min(1, this.dread.level + 0.1));
     this.cinema.play([
@@ -1057,6 +1086,9 @@ export class Game {
         const a = (k / 24) * Math.PI * 2, r = 26 + (k % 3) * 8, x = last.x + Math.cos(a) * r, z = last.z + Math.sin(a) * r;
         if (!w.inBounds(x, z)) continue;
         const n = w.normalAt(x, z); let crag = 1e9; for (const d of w.devilSpots) crag = Math.min(crag, Math.hypot(d.x - x, d.z - z));
+        // the camera stands 4.4 m in front of Him, between Him and the altar: it must see His face over the ground
+        { const fx0 = Math.sin(a + Math.PI), fz0 = Math.cos(a + Math.PI), gy0 = w.heightAt(x, z), cx0 = x + fx0 * 4.4, cz0 = z + fz0 * 4.4;
+          if (!this.terrainClear(V(cx0, Math.max(gy0, w.heightAt(cx0, cz0)) + 1.2, cz0), V(x, gy0 + 1.75, z), 0.2)) continue; }
         const sc = n.y * 40 + Math.min(crag, 40) + (w.okSpot(x, z, 3, 6) ? 30 : 0);
         if (sc > bs) { bs = sc; best = { x, z, a }; }
       }
@@ -1161,7 +1193,7 @@ export class Game {
     ui.objective(objText);
     const showPrayer = (o.ph === 'pray' && a && a.state === 'active') || (o.wards && this.activeWard());
     const pa = o.wards ? this.activeWard() : a;
-    if (showPrayer && pa) { const n = this.knightList.filter((k) => k.praying && Math.hypot(k.pos.x - pa.x, k.pos.z - pa.z) < ALTAR_R + 0.5).length; ui.prayer(true, pa.progress || 0, n); } else ui.prayer(false);
+    if (showPrayer && pa) { ui.prayer(true, pa.progress || 0, o.n || 0); } else ui.prayer(false);
     // prompt
     let pr = '';
     if (!me.downed && !this.cinema.active) {
