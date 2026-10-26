@@ -103,3 +103,8 @@ export const HEALED = {
   skyTop: 0x3a5a8a, skyMid: 0x8a96a2, skyBottom: 0x4a5444, sunColor: 0xffe0a0, cloud: 0x8a8c94, cloudLit: 0xffe8c8, glow: 0xffc890,
   sunLight: 0xfff0d8, hemiSky: 0xb8c8e0, hemiGround: 0x4a5a30, fog: 0x66707a,
 };
+// on the mountain the healed sky is clear and pale and the light warm, and nothing green comes up off the stone
+export const HEALED_HIGH = {
+  skyTop: 0x4a6a96, skyMid: 0xa8b2bc, skyBottom: 0x8a8c90, sunColor: 0xffe6b8, cloud: 0x9a9ca4, cloudLit: 0xfff0dc, glow: 0xffd8a8,
+  sunLight: 0xfff4e4, hemiSky: 0xc8d4e6, hemiGround: 0x6a6662, fog: 0x8a929c,
+};

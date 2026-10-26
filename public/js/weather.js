@@ -299,6 +299,11 @@ export class Weather {
     // ease toward it (a front comes in over half a minute)
     for (const k of ['rain', 'cover', 'dark']) this.cur[k] += (this.target[k] - this.cur[k]) * Math.min(1, dt / 25);
     let rain = this.cur.rain;
+    // on the mountain, healed ground is calm ground: round a cleansed altar the snow and rain thin and the wind drops
+    const kd = g.world.ch.terrain.kind, high = kd === 'mountain' || kd === 'peak';
+    const lifeHere = high && g.world.lifeAt ? g.world.lifeAt(cam.x, cam.z) : 0;
+    this.calm = (this.calm ?? 0) + (lifeHere - (this.calm ?? 0)) * Math.min(1, dt / 3);
+    rain *= 1 - 0.75 * this.calm;
     // on the Ascent the snow comes with height: down in the valley it falls as rain
     let snow = this.cl.snow ? 1 : 0;
     if (this.cl.byHeight) { const k = Math.min(1, Math.max(0, (cam.y - 30) / 40)); snow = k; }
@@ -313,17 +318,17 @@ export class Weather {
     if (isSnow) WX.uSnowAcc.value = Math.min(1, WX.uSnowAcc.value + dt * rain * 0.004); else WX.uSnowAcc.value = Math.max(0, WX.uSnowAcc.value - dt * 0.002);
     // the falling stuff
     const F = this.fall.U; F.uCam.value.copy(cam); F.uTime.value = time; F.uSnow.value = isSnow ? 1 : 0; F.uAmt.value = rain * (isSnow ? 0.7 : 1);
-    const wind = g.world.ch.wind || [1, 0.3]; F.uWind.value.set(wind[0] * (0.6 + rain), wind[1] * (0.6 + rain));
+    const wind = g.world.ch.wind || [1, 0.3], wk = (0.6 + rain) * (1 - 0.6 * (this.calm || 0)); F.uWind.value.set(wind[0] * wk, wind[1] * wk);
     const lit = 0.35 + 0.65 * Math.min(1, e.hemi.intensity / 0.8); F.uLight.value.setScalar(lit); this.spl.U.uLight.value.setScalar(lit);
     this.fall.mesh.visible = F.uAmt.value > 0.002;
     const S = this.spl.U; S.uCam.value.copy(cam); S.uTime.value = time; S.uAmt.value = isSnow ? 0 : rain; this.spl.mesh.visible = !isSnow && rain > 0.02;
     // the sky closes in: more cloud, a little less light (tracked, so the chapter's own sky changes still come through)
     const u = e.sky.uniforms;
     if (this.coverSet === undefined || Math.abs(u.uCover.value - this.coverSet) > 1e-4) this.coverBase = u.uCover.value;
-    this.coverSet = Math.min(0.98, this.coverBase + this.cur.cover * (1 - this.coverBase)); u.uCover.value = this.coverSet;
+    this.coverSet = Math.min(0.98, this.coverBase + this.cur.cover * (1 - 0.7 * (this.calm || 0)) * (1 - this.coverBase)); u.uCover.value = this.coverSet;
     const ex = e.renderer.toneMappingExposure;
     if (this.expSet === undefined || Math.abs(ex - this.expSet) > 1e-4) this.expBase = ex;
-    this.expSet = this.expBase * (1 - this.cur.dark * (1 - under)); e.renderer.toneMappingExposure = this.expSet;
+    this.expSet = this.expBase * (1 - this.cur.dark * (1 - 0.7 * (this.calm || 0)) * (1 - under)) * (1 + 0.12 * (this.calm || 0)); e.renderer.toneMappingExposure = this.expSet;
     // the sound of it
     this.sound(isSnow ? 0 : rain, dt);
     if (!isSnow && this.cur.rain > 0.8 && R() < dt / 40) g.audio.thunder?.(0.5 + R() * 0.4, 1 + R() * 4);

@@ -11,7 +11,7 @@ import { Weather } from './weather.js';
 import { FX } from './fx.js';
 import { Companion } from './ai.js';
 import { Cinema, V, orbitShot } from './cinema.js';
-import { CHAPTERS, PRAYERS, HEALED } from './chapters.js';
+import { CHAPTERS, PRAYERS, HEALED as HEALED_LOW, HEALED_HIGH } from './chapters.js';
 import { Story } from './story.js';
 import { Dread } from './dread.js';
 import { fallenKnightSpots } from './battlefield.js';
@@ -987,7 +987,7 @@ export class Game {
     this.atmosEnvF = -1;
   }
   blendAtmosphere(f, env = true) {
-    const base = CHAPTERS[this.chapterIdx].atmos; const mix = {};
+    const base = CHAPTERS[this.chapterIdx].atmos; const mix = {}; const kd = CHAPTERS[this.chapterIdx].terrain.kind, HEALED = kd === 'mountain' || kd === 'peak' ? HEALED_HIGH : HEALED_LOW;
     for (const key in base) {
       if (HEALED[key] !== undefined && typeof base[key] === 'number' && key !== 'cover' && key !== 'sunIntensity' && key !== 'hemiIntensity' && key !== 'fogDensity' && key !== 'exposure' && key !== 'fillIntensity' && key !== 'sunSize') mix[key] = new THREE.Color(base[key]).lerp(new THREE.Color(HEALED[key]), f).getHex();
       else mix[key] = base[key];
