@@ -1012,6 +1012,8 @@ export class Game {
     return { tick, cleanup: () => { d.dispose(); } };
   }
   // The first time He shows himself in a chapter: the camera finds Him on the ridge and closes in on that face
+  // where his face really is (the head bone, a little forward of it), whatever he is standing on
+  devilFace(off = 0.12) { const D = this.watcher; if (!D || !D.B?.head) return null; D.mesh.updateMatrixWorld(true); return D.B.head.localToWorld(new THREE.Vector3(0, 0.02, off)); }
   checkDevilReveal() {
     const W = this.watcher, o = this.obj; if (!W || !o || o.ph !== 'travel' || this.cinema.active || this.boss || this.paused) return;
     if (W.state !== 'watch' || !W.mesh.visible) return;
@@ -1022,14 +1024,15 @@ export class Game {
     for (const dm of this.horde.list) if (dm.alive && dm.pos.distanceTo(me.pos) < 25) return;
     seen[key] = 1; account.set('evil.devilReveal', seen);
     const LINES = { vale: ['Ecce, adversarius vester.', 'Behold your adversary.'], village: ['Circuit, quaerens quem devoret.', 'He walks about, seeking whom he may devour.'], fen: ['Vidit vos. Semper vidit.', 'He has seen you. He has always seen you.'], wood: ['Princeps huius mundi.', 'The prince of this world.'], field: ['Legio nomen mihi est.', 'My name is Legion.'], ascent: ['Venite. Exspecto.', 'Come. I am waiting.'] };
-    const p = W.pos, hy = p.y + 3.1, m = me.pos;
+    const p = W.pos, m = me.pos; const face = this.devilFace() || V(p.x, p.y + 3.1, p.z), hy = face.y;
+    const gnd = (x, z) => this.world.heightAt(x, z), trk = () => this.devilFace();
     const dir = V(p.x - m.x, 0, p.z - m.z).normalize();
-    const near = V(p.x - dir.x * 9, hy + 0.3, p.z - dir.z * 9);
+    const near = V(face.x - dir.x * 9, hy + 0.3, face.z - dir.z * 9);
     this.audio.stinger?.('drone', 0.5); this.audio.heartbeat?.(0.5);
     this.dread && (this.dread.level = Math.min(1, this.dread.level + 0.1));
     this.cinema.play([
-      { dur: 3.2, from: { pos: V(m.x - dir.x * 2.5 + dir.z * 0.8, m.y + 2.0, m.z - dir.z * 2.5 - dir.x * 0.8), look: V(p.x, hy, p.z) }, to: { pos: V(m.x - dir.x * 2.2 + dir.z * 0.7, m.y + 1.9, m.z - dir.z * 2.2 - dir.x * 0.7), look: V(p.x, hy, p.z) }, fov: 40, fovTo: 22, text: LINES[key] || LINES.vale },
-      { dur: 3.4, from: { pos: near, look: V(p.x, hy, p.z) }, to: { pos: V(p.x - dir.x * 6, hy + 0.15, p.z - dir.z * 6), look: V(p.x, hy - 0.05, p.z) }, fov: 30, fovTo: 18, text: '', at: () => this.audio.whisper?.(V(p.x, hy, p.z), 2.6, 0.7) },
+      { dur: 3.2, from: { pos: V(m.x - dir.x * 2.5 + dir.z * 0.8, m.y + 2.0, m.z - dir.z * 2.5 - dir.x * 0.8), look: face.clone() }, to: { pos: V(m.x - dir.x * 2.2 + dir.z * 0.7, m.y + 1.9, m.z - dir.z * 2.2 - dir.x * 0.7), look: face.clone() }, fov: 40, fovTo: 22, text: LINES[key] || LINES.vale, trackLook: true, track: trk, anchor: face.clone(), ground: gnd },
+      { dur: 3.4, from: { pos: near, look: face.clone() }, to: { pos: V(face.x - dir.x * 6, hy + 0.15, face.z - dir.z * 6), look: face.clone().setY(hy - 0.05) }, fov: 30, fovTo: 18, text: '', at: () => this.audio.whisper?.(V(p.x, hy, p.z), 2.6, 0.7), track: trk, anchor: face.clone(), ground: gnd },
     ], null, { skippable: true });
   }
   playOutro(n) {
@@ -1062,9 +1065,11 @@ export class Game {
         const fx = Math.sin(yaw), fz = Math.cos(yaw);
         const cx = best.x + fx * 4.4, cz = best.z + fz * 4.4, cy = Math.max(gy, w.heightAt(cx, cz)) + 2.1;
         const D = this.watcher, e = this.engine, sc = this.scene;
-        shots.push({ dur: 6.5, from: { pos: V(cx, cy, cz), look: V(best.x, gy + 2.75, best.z) }, to: { pos: V(best.x + fx * 3.2, cy + 0.25, best.z + fz * 3.2), look: V(best.x, gy + 2.6, best.z) }, fov: 34,
+        const plan = V(best.x, gy + 2.7, best.z);
+        shots.push({ dur: 6.5, from: { pos: V(cx, cy, cz), look: plan.clone().setY(gy + 2.75) }, to: { pos: V(best.x + fx * 3.2, cy + 0.25, best.z + fz * 3.2), look: plan.clone().setY(gy + 2.6) }, fov: 34,
+          track: () => this.devilFace(), anchor: plan, ground: (x, z) => w.heightAt(x, z),
           at: () => {
-            D.pos.set(best.x, gy, best.z); D.yaw = yaw; D.state = 'stare'; D.t = 0; D.fade = 1; D.mesh.visible = true;
+            D.pos.set(best.x, gy, best.z); D.yaw = yaw; D.state = 'stare'; D.t = 0; D.fade = 1; D.mesh.visible = true; D.mesh.position.set(best.x, gy, best.z); D.mesh.rotation.y = yaw;
             robeWind(0.45, 0.08);
             // the dark: black all round, the world lit only by a cold glimmer on his face
             const saved = { fc: sc.fog.color.clone(), fd: sc.fog.density, sun: e.sun.intensity, hemi: e.hemi.intensity, fill: e.fill.intensity, exp: e.renderer.toneMappingExposure };

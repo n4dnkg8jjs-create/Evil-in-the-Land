@@ -7,7 +7,7 @@ export class Cinema {
     this.engine = engine; this.ui = ui; this.shots = null; this.t = 0; this.idx = 0; this.onDone = null; this.active = false;
     this.cam = engine.camera; this.lb = 0; this.skippable = true;
   }
-  // shots: [{ dur, from:{pos,look}, to:{pos,look}, fov?, fovTo?, ease?, text?, title?, shake?, at?: fn, tick?: fn(dt, k) }]
+  // shots: [{ dur, track?: fn -> Vector3, anchor?: Vector3, ground?: fn(x, z) -> y, from:{pos,look}, to:{pos,look}, fov?, fovTo?, ease?, text?, title?, shake?, at?: fn, tick?: fn(dt, k) }]
   play(shots, onDone, { skippable = true } = {}) {
     this.shots = shots; this.t = 0; this.idx = 0; this.onDone = onDone; this.active = true; this.skippable = skippable; this.fired = new Set();
     this.ui.letterbox(true); this.ui.hint(skippable ? 'Hold Space to skip' : '');
@@ -20,15 +20,7 @@ export class Cinema {
   update(dt) {
     if (!this.active) return false;
     const s = this.shots[this.idx];
-    this.t += dt;
-    const k = clamp(this.t / s.dur, 0, 1); const e = (s.ease || easeInOut)(k);
-    const fp = s.from.pos, tp = s.to.pos, fl = s.from.look, tl = s.to.look;
-    this.cam.position.set(fp.x + (tp.x - fp.x) * e, fp.y + (tp.y - fp.y) * e, fp.z + (tp.z - fp.z) * e);
-    const look = new THREE.Vector3(fl.x + (tl.x - fl.x) * e, fl.y + (tl.y - fl.y) * e, fl.z + (tl.z - fl.z) * e);
-    this.cam.up.set(0, 1, 0); this.cam.lookAt(look);
-    if (s.roll) this.cam.rotateZ(s.roll * (1 - e));
-    const fov = s.fov ? s.fov + ((s.fovTo ?? s.fov) - s.fov) * e : 50;
-    if (Math.abs(this.cam.fov - fov) > 0.01) { this.cam.fov = fov; this.cam.updateProjectionMatrix(); }
+    // a shot's set-up runs before its first frame is framed, so whatever it places is already there
     if (!this.fired.has(this.idx)) {
       this.fired.add(this.idx);
       if (s.text !== undefined) this.ui.subtitle(s.text);
@@ -36,6 +28,19 @@ export class Cinema {
       if (s.at) s.at();
       if (s.shake) this.engine.shake(s.shake, s.dur);
     }
+    this.t += dt;
+    const k = clamp(this.t / s.dur, 0, 1); const e = (s.ease || easeInOut)(k);
+    const fp = s.from.pos, tp = s.to.pos, fl = s.from.look, tl = s.to.look;
+    this.cam.position.set(fp.x + (tp.x - fp.x) * e, fp.y + (tp.y - fp.y) * e, fp.z + (tp.z - fp.z) * e);
+    const look = new THREE.Vector3(fl.x + (tl.x - fl.x) * e, fl.y + (tl.y - fl.y) * e, fl.z + (tl.z - fl.z) * e);
+    // track: keep the framing on a moving target (e.g. a head bone) relative to where the shot was planned around
+    if (s.track && s.anchor) { const T = s.track(); if (T) { const dx = T.x - s.anchor.x, dy = T.y - s.anchor.y, dz = T.z - s.anchor.z; if (!s.trackLook) { this.cam.position.x += dx; this.cam.position.y += dy; this.cam.position.z += dz; } look.x += dx; look.y += dy; look.z += dz; } }
+    // ground: never let the camera sink into the hillside
+    if (s.ground) { const g = s.ground(this.cam.position.x, this.cam.position.z) + 0.5; if (this.cam.position.y < g) this.cam.position.y = g; }
+    this.cam.up.set(0, 1, 0); this.cam.lookAt(look);
+    if (s.roll) this.cam.rotateZ(s.roll * (1 - e));
+    const fov = s.fov ? s.fov + ((s.fovTo ?? s.fov) - s.fov) * e : 50;
+    if (Math.abs(this.cam.fov - fov) > 0.01) { this.cam.fov = fov; this.cam.updateProjectionMatrix(); }
     if (s.tick) s.tick(dt, k);
     if (this.t >= s.dur) { this.idx++; this.t = 0; if (this.idx >= this.shots.length) this.finish(); }
     return true;
