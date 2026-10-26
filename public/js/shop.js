@@ -364,15 +364,20 @@ export class Shop {
     if (!this.el) return;
     const a = this.a, me = this.g.me, cur = me.loadout.weapon, tab = this.tab || 'arms';
     const btn = (attrs, cost, label) => `<button class="btn small" ${attrs} ${a.silver < cost ? 'disabled' : ''}>${label || cost}</button>`;
+    // selling back: half what it cost; a second click confirms anything worth 100 or more
+    const sell = (attr, val) => { const sure = this.confirm === attr; return `<button class="btn small sell${sure ? ' sure' : ''}" ${attr} title="Sell back for half">${sure ? `Sure? +${val}` : `Sell · ${val}`}</button>`; };
     const pips = (lvl, max) => `<span class="pips">${'<i class="on"></i>'.repeat(lvl)}${'<i></i>'.repeat(Math.max(0, max - lvl))}</span>`;
     const weaponRow = ([k, d]) => {
       const owned = a.owned.includes(k), price = PRICES[k] || 0, equipped = k === cur, temper = a.up['edge:' + k] || 0;
-      const act = equipped ? '<span class="tag">Wielding</span>' : owned ? `<button class="btn small" data-equip="${k}">Take up</button>` : btn(`data-buy="${k}"`, price, `Buy · ${price}`);
+      const act0 = equipped ? '<span class="tag">Wielding</span>' : owned ? `<button class="btn small" data-equip="${k}">Take up</button>` : btn(`data-buy="${k}"`, price, `Buy · ${price}`);
+      const act = owned && price ? `<span class="ware-acts">${act0}${sell(`data-sellw="${k}"`, this.weaponRefund(k))}</span>` : act0;
       return `<div class="ware${equipped ? ' on' : ''}${d.legendary ? ' relic' : ''}"><div><b>${d.name}</b> ${temper ? pips(temper, 3) : ''}${d.lore ? `<p class="lore">${d.lore}</p>` : ''}<p>${d.desc}</p></div>${act}</div>`;
     };
     const upRow = (k) => {
       const d = UPGRADES[k]; const key = k === 'edge' ? 'edge:' + cur : k; const lvl = a.up[key] || 0; const cost = d.cost[lvl];
-      return `<div class="ware"><div><b>${d.name}${k === 'edge' ? ` · ${WEAPONS[cur].name}` : ''}</b> ${pips(lvl, d.max)}<p>${d.desc}</p></div>${lvl >= d.max ? '<span class="tag">Done</span>' : btn(`data-up="${key}"`, cost)}</div>`;
+      const buyB = lvl >= d.max ? '<span class="tag">Done</span>' : btn(`data-up="${key}"`, cost);
+      const acts = lvl > 0 ? `<span class="ware-acts">${buyB}${sell(`data-sellu="${key}"`, Math.floor(d.cost[lvl - 1] / 2))}</span>` : buyB;
+      return `<div class="ware"><div><b>${d.name}${k === 'edge' ? ` · ${WEAPONS[cur].name}` : ''}</b> ${pips(lvl, d.max)}<p>${d.desc}</p></div>${acts}</div>`;
     };
     const stock = (name, desc, have, max, cost, attr) => `<div class="ware"><div><b>${name}</b> <span class="tag">${have} / ${max}</span><p>${desc}</p></div>${have >= max ? '<span class="tag">Full</span>' : btn(attr, cost)}</div>`;
     const W = Object.entries(WEAPONS).filter(([k]) => k !== 'buckler');
@@ -395,13 +400,43 @@ export class Shop {
     const b = e.target.closest('button'); if (!b || b.disabled) return;
     const a = this.a, me = this.g.me, d = b.dataset;
     if (d.close) return this.close();
-    if (d.tab) { this.tab = d.tab; return this.render(); }
+    if (d.tab) { this.tab = d.tab; this.confirm = null; return this.render(); }
+    // selling back, at half price; a second click confirms the dear ones
+    if (d.sellw || d.sellu) {
+      const attr = d.sellw ? `data-sellw="${d.sellw}"` : `data-sellu="${d.sellu}"`;
+      const val = d.sellw ? this.weaponRefund(d.sellw) : Math.floor(UPGRADES[d.sellu.startsWith('edge') ? 'edge' : d.sellu].cost[(a.up[d.sellu] || 1) - 1] / 2);
+      if (val >= 100 && this.confirm !== attr) { this.confirm = attr; clearTimeout(this._cf); this._cf = setTimeout(() => { if (this.confirm === attr) { this.confirm = null; if (this.open) this.render(); } }, 3000); return this.render(); }
+      this.confirm = null;
+      if (d.sellw) this.sellWeapon(d.sellw); else this.sellUpgrade(d.sellu);
+      this.g.audio.coin?.(me.pos) ?? this.g.audio.clang?.(me.pos, 0.2, 1.8);
+      saveArmoury(a); this.showWallet(); this.render(); return;
+    }
+    this.confirm = null;
     if (d.buy) { const p = PRICES[d.buy]; if (a.silver < p || a.owned.includes(d.buy)) return; a.silver -= p; a.owned.push(d.buy); this.equip(d.buy); this.g.audio.clang?.(me.pos, 0.3, 1.4); if (WEAPONS[d.buy].legendary) { this.g.audio.holy?.(me.pos, 0.8); this.g.fx.holyBurst(me.pos, 2); this.g.ui.toast(`${WEAPONS[d.buy].name} is yours`, 3); } }
     else if (d.equip) this.equip(d.equip);
     else if (d.up) { const k = d.up.startsWith('edge') ? 'edge' : d.up; const lvl = a.up[d.up] || 0; const cost = UPGRADES[k].cost[lvl]; if (cost === undefined || a.silver < cost) return; a.silver -= cost; a.up[d.up] = lvl + 1; this.g.audio.clang?.(me.pos, 0.3, 1.2); this.applyToMe(); }
     else if (d.draught) { if (a.silver < DRAUGHT.cost || a.draughts >= draughtMax(a)) return; a.silver -= DRAUGHT.cost; a.draughts++; }
     else if (d.flask) { if (a.silver < FLASK.cost || (a.flasks || 0) >= FLASK.max) return; a.silver -= FLASK.cost; a.flasks = (a.flasks || 0) + 1; }
     saveArmoury(a); this.showWallet(); this.render();
+  }
+  // half the weapon's price, and half of whatever was spent tempering its edge
+  weaponRefund(k) {
+    const a = this.a, t = a.up['edge:' + k] || 0; let spent = PRICES[k] || 0;
+    for (let i = 0; i < t; i++) spent += UPGRADES.edge.cost[i] || 0;
+    return Math.floor(spent / 2);
+  }
+  sellWeapon(k) {
+    const a = this.a; if (!a.owned.includes(k) || !PRICES[k]) return;
+    a.silver += this.weaponRefund(k); a.owned = a.owned.filter((w) => w !== k); delete a.up['edge:' + k];
+    if (this.g.me.loadout.weapon === k) this.equip('longsword');
+    this.g.ui.toast(`Sold ${WEAPONS[k].name}`, 2);
+  }
+  sellUpgrade(key) {
+    const a = this.a, k = key.startsWith('edge') ? 'edge' : key, lvl = a.up[key] || 0; if (!lvl) return;
+    a.silver += Math.floor(UPGRADES[k].cost[lvl - 1] / 2);
+    if (lvl > 1) a.up[key] = lvl - 1; else delete a.up[key];
+    a.draughts = Math.min(a.draughts, draughtMax(a));
+    this.applyToMe();
   }
   equip(key) {
     const g = this.g; g.me.setWeapon(key, g.engine.q); this.applyToMe();

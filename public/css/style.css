@@ -401,3 +401,9 @@ input[type=checkbox]:focus-visible { outline: 1px solid var(--gilt-hi); outline-
   .boss-name { font-size: 1.6rem; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
+
+/* selling back at the sutler's */
+.ware-acts { display: flex; flex-direction: column; gap: 0.3rem; align-items: stretch; }
+.btn.small.sell { opacity: 0.72; font-size: 0.78em; }
+.btn.small.sell:hover, .btn.small.sell:focus-visible { opacity: 1; }
+.btn.small.sell.sure { opacity: 1; background: linear-gradient(#5a1414, #3a0a0a); border-color: #a33; color: #fbe; }

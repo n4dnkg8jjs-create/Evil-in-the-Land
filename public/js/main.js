@@ -379,7 +379,7 @@ function chapterOptions() {
   return CHAPTERS.map((c, i) => [i, `${i + 1}. ${c.title}${c.id === 'peak' ? ' — the battle with the Dragon' : ''}${i > unlocked ? ' (test)' : ''}`]);
 }
 function fillWeapons() {
-  const a = loadArmoury(); if (!a.owned.includes(app.loadout.weapon)) { a.owned.push(app.loadout.weapon); saveArmoury(a); }
+  const a = loadArmoury(); if (!a.owned.includes(app.loadout.weapon)) { if (WEAPONS[app.loadout.weapon]?.price || ['zweihander', 'halberd', 'pollaxe'].includes(app.loadout.weapon) || !WEAPONS[app.loadout.weapon]) app.loadout.weapon = 'longsword'; else { a.owned.push(app.loadout.weapon); saveArmoury(a); } }   // a sold weapon is not handed back
   fillSelect('loWeapon', Object.entries(WEAPONS).filter(([k]) => a.owned.includes(k)).map(([k, w]) => [k, w.name + (a.up['edge:' + k] ? ' ' + '✦'.repeat(a.up['edge:' + k]) : '')]), app.loadout.weapon);
 }
 function enterLobby(solo = false) {
