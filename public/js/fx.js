@@ -184,10 +184,10 @@ function bloodMaterial() {
       float bFade = 1.0 - smoothstep(bLife, bLife + 12.0, bAge);
       float bWet = 1.0 - bDry, bRain = uBRain * bWet;
       // thick centre almost black, the thin edge a deep red; dried it goes brown-black
-      vec3 bC = mix(vec3(0.085, 0.006, 0.008), vec3(0.035, 0.002, 0.004), smoothstep(0.03, 0.4, bf));
-      bC = mix(bC, vec3(0.05, 0.016, 0.012), bDry);
+      vec3 bC = mix(vec3(0.016, 0.015, 0.017), vec3(0.004, 0.004, 0.005), smoothstep(0.03, 0.4, bf));
+      bC = mix(bC, vec3(0.022, 0.021, 0.02), bDry);
       // rain thins the edge to a pinkish wash
-      bC = mix(bC, bC * 1.7 + vec3(0.05, 0.0, 0.004), bRain * (1.0 - smoothstep(0.1, 0.6, bf)) * 0.7);
+      bC = mix(bC, bC * 1.7 + vec3(0.03, 0.03, 0.032), bRain * (1.0 - smoothstep(0.1, 0.6, bf)) * 0.7);
       diffuseColor.rgb = bC;
       diffuseColor.a = smoothstep(0.02, 0.12, bf) * bFade * (0.97 - 0.3 * bRain * (1.0 - bf));
       // thickness for the surface: a raised meniscus at the rim, a dome in the middle, rain rings on pools
@@ -229,8 +229,8 @@ class Blood {
       fragmentShader: `uniform vec3 fogColor; uniform float fogDensity; varying vec2 vUv; varying float vA; varying float vFog;
         void main(){
           float r = length(vec2(vUv.x, vUv.y * 0.9)); float a = smoothstep(1.0, 0.55, r) * vA; if (a < 0.02) discard;
-          vec3 c = mix(vec3(0.26, 0.02, 0.025), vec3(0.07, 0.004, 0.006), smoothstep(0.0, 0.9, r));
-          c += vec3(0.35, 0.18, 0.18) * smoothstep(0.35, 0.0, length(vUv - vec2(-0.3, 0.35))) * 0.6;   // the glint of a wet bead
+          vec3 c = mix(vec3(0.035, 0.034, 0.037), vec3(0.006, 0.006, 0.007), smoothstep(0.0, 0.9, r));
+          c += vec3(0.3, 0.3, 0.32) * smoothstep(0.35, 0.0, length(vUv - vec2(-0.3, 0.35))) * 0.6;   // the glint of a wet bead
           float f = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog); gl_FragColor = vec4(mix(c, fogColor, f), a); }`,
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
     });
@@ -322,7 +322,7 @@ export function bloodyWeapon(k, add = 0.1) {
           // it gathers toward the business end, runs down in streaks, and lies thicker in the hollows
           float wbn = wbN(vBP * vec3(90.0, 7.0, 90.0)) * 0.55 + wbN(vBP * 220.0) * 0.45;
           float wbm = smoothstep(0.86 - wbL * 0.38, 0.9 - wbL * 0.3, wbn) * smoothstep(0.0, 0.25, wbL);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.07, 0.004, 0.005), wbm);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.008, 0.009), wbm);
           roughnessFactor = mix(roughnessFactor, 0.3, wbm);
           metalnessFactor = mix(metalnessFactor, 0.0, wbm);`);
       };
@@ -401,7 +401,7 @@ export class FX {
     // gouts: a few heavy ropes of it, slower, falling close
     for (let i = 0; i < Math.round((2 + 3 * amount) * mul); i++) G.drop(pos.x, pos.y, pos.z, ox * (1 + R() * 1.5) + cx * R() * 2, 0.3 + R() * 1.5, oz * (1 + R() * 1.5) + cz * R() * 2, 0.018 + R() * 0.014, ground);
     // a fine red mist where the blade went through
-    for (let i = 0; i < 5 * amount * mul; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 1.4 + (R() - 0.5) * 0.8, vy: R() * 0.5, vz: cz * 1.4 + (R() - 0.5) * 0.8, color: [0.13, 0.008, 0.01], a: 0.28, size: 0.18 + R() * 0.25, grow: 1.1, life: 0.5 + R() * 0.5, drag: 3.5, cell: 0 });
+    for (let i = 0; i < 5 * amount * mul; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 1.4 + (R() - 0.5) * 0.8, vy: R() * 0.5, vz: cz * 1.4 + (R() - 0.5) * 0.8, color: [0.02, 0.02, 0.022], a: 0.28, size: 0.18 + R() * 0.25, grow: 1.1, life: 0.5 + R() * 0.5, drag: 3.5, cell: 0 });
     // flecks of flesh
     for (let i = 0; i < 4 * amount * mul; i++) this.smoke.emit({ x: pos.x, y: pos.y, z: pos.z, vx: cx * 3 + ox * 2 + (R() - 0.5) * 2, vy: 1.5 + R() * 2.5, vz: cz * 3 + oz * 2 + (R() - 0.5) * 2, color: [0.07, 0.025, 0.025], a: 1, size: 0.045 + R() * 0.035, life: 0.8 + R() * 0.3, drag: 0.4, grav: -11, cell: 2, spin: 6, fadeIn: 0.01 });
     // what runs straight down the body to its feet

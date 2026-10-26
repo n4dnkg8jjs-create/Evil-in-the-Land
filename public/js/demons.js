@@ -160,7 +160,7 @@ const WOUND = (() => {
   const armG = mergeGeometries([arm, hand].map((g) => { g.deleteAttribute('uv'); return g; }));
   return {
     gash, bruise, head, arm: armG, stump: new THREE.CircleGeometry(1, 12).rotateX(Math.PI / 2), eye: new THREE.SphereGeometry(0.018, 8, 6),
-    gashMat: new THREE.MeshStandardMaterial({ color: 0x3a0306, emissive: 0x140000, roughness: 0.08, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, side: THREE.DoubleSide }),
+    gashMat: new THREE.MeshStandardMaterial({ color: 0x070707, emissive: 0x000000, roughness: 0.08, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, side: THREE.DoubleSide }),
     bruiseMat: new THREE.MeshStandardMaterial({ color: 0x12080c, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }),
     fleshMat: new THREE.MeshStandardMaterial({ color: 0x1c1513, roughness: 0.45, metalness: 0.05 }),
     eyeMat: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 0.05, 0.02) }),
@@ -195,10 +195,10 @@ function splitFor(mesh, bone) {
 }
 // a cut face: wet dark flesh domed slightly out of the wound, a ring of torn skin, the pale bone in the middle
 const CUT = {
-  flesh: new THREE.MeshStandardMaterial({ color: 0x4a0508, emissive: 0x120000, roughness: 0.18, metalness: 0.05 }),
+  flesh: new THREE.MeshStandardMaterial({ color: 0x0b0a0b, emissive: 0x000000, roughness: 0.12, metalness: 0.05 }),
   meat: new THREE.MeshStandardMaterial({ color: 0x6e1a16, roughness: 0.4 }),
   bone: new THREE.MeshStandardMaterial({ color: 0xd6cbb6, roughness: 0.55 }),
-  marrow: new THREE.MeshStandardMaterial({ color: 0x5a1a12, roughness: 0.35 }),
+  marrow: new THREE.MeshStandardMaterial({ color: 0x141213, roughness: 0.3 }),
   dome: (() => { const g = new THREE.SphereGeometry(1, 18, 6, 0, Math.PI * 2, 0, Math.PI * 0.32); const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.sin(i * 12.9898) * 43758.5453 % 1) * 0.06; p.setXYZ(i, p.getX(i) * k, (p.getY(i) - Math.cos(Math.PI * 0.32)) * 0.6, p.getZ(i) * k); } g.computeVertexNormals(); return g; })(),
   ring: new THREE.TorusGeometry(1, 0.09, 6, 20).rotateX(Math.PI / 2),
   bone1: new THREE.CylinderGeometry(1, 1.08, 1, 10),
@@ -535,8 +535,8 @@ export class Demon {
   // blood wells from the wounds and runs down; a severed stump spurts
   bleed(dt, fx) {
     if (!fx) return;
-    if (this.wounds) for (const w of this.wounds) { if (w.left <= 0) continue; w.left -= dt; w.next -= dt; if (w.next > 0) continue; w.next = 0.12 + Math.random() * 0.25; const p = w.m.getWorldPosition(_wv); fx.smoke.emit({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 0.3, vy: -0.2, vz: (Math.random() - 0.5) * 0.3, color: [0.18, 0.008, 0.01], a: 0.9, size: 0.03 + Math.random() * 0.025, life: 0.7, drag: 0.4, grav: -9.8, cell: 2, fadeIn: 0.01 }); }
-    if (this.stump && this.stump.t < 2.2) { this.stump.t += dt; const p = this.stump.bone.getWorldPosition(_wv); const k = 1 - this.stump.t / 2.2; const pulse = Math.max(0, Math.sin(this.stump.t * 9)); for (let i = 0; i < 3 * k * pulse + 0.5; i++) fx.smoke.emit({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 1.2, vy: 1.5 + Math.random() * 2.5 * k, vz: (Math.random() - 0.5) * 1.2, color: [0.2, 0.01, 0.012], a: 0.95, size: 0.04 + Math.random() * 0.04, life: 0.7, drag: 0.4, grav: -9.8, cell: 2, fadeIn: 0.01 }); }
+    if (this.wounds) for (const w of this.wounds) { if (w.left <= 0) continue; w.left -= dt; w.next -= dt; if (w.next > 0) continue; w.next = 0.12 + Math.random() * 0.25; const p = w.m.getWorldPosition(_wv); fx.smoke.emit({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 0.3, vy: -0.2, vz: (Math.random() - 0.5) * 0.3, color: [0.015, 0.014, 0.016], a: 0.9, size: 0.03 + Math.random() * 0.025, life: 0.7, drag: 0.4, grav: -9.8, cell: 2, fadeIn: 0.01 }); }
+    if (this.stump && this.stump.t < 2.2) { this.stump.t += dt; const p = this.stump.bone.getWorldPosition(_wv); const k = 1 - this.stump.t / 2.2; const pulse = Math.max(0, Math.sin(this.stump.t * 9)); for (let i = 0; i < 3 * k * pulse + 0.5; i++) fx.smoke.emit({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 1.2, vy: 1.5 + Math.random() * 2.5 * k, vz: (Math.random() - 0.5) * 1.2, color: [0.015, 0.014, 0.016], a: 0.95, size: 0.04 + Math.random() * 0.04, life: 0.7, drag: 0.4, grav: -9.8, cell: 2, fadeIn: 0.01 }); }
   }
   dispose() { this.scene.remove(this.mesh); this.mat.dispose(); if (this.wings) for (const k in this.wings) this.wings[k].mesh.geometry.dispose(); }
 }
