@@ -920,7 +920,9 @@ export class World {
         snow = max(snow, uFlatSnow * smoothstep(0.62, 0.86, vWNorm.y + (rock.a - 0.5) * 0.3 + (dead2.a - 0.5) * 0.15) * smoothstep(uSnowFrom, uSnowFrom + 70.0, vWPos.y + (rock.a - 0.5) * 16.0));
         // fresh snow settling on the flats while it falls
         snow = max(snow, uSnowAcc * smoothstep(0.8, 0.95, vWNorm.y) * smoothstep(0.3, 0.6, wxn(vWPos.xz * 0.4) * 0.6 + dead.a * 0.4 + uSnowAcc * 0.3));
-        tcol = mix(tcol, texture2D(tSnow, wuv).rgb * mix(vec3(0.84, 0.81, 0.81), vec3(1.04), aliveMix), snow);   // ash-grey snow in the blight, clean where healed
+        // on the mountain, healed ground is clean snow: fresh white lies on everything flat enough to hold it, rock showing through on the steeps
+        snow = max(snow, (1.0 - uAliveGrass) * aliveMix * smoothstep(0.7, 0.9, vWNorm.y + (rock.a - 0.5) * 0.25 + (dead2.a - 0.5) * 0.12) * (1.0 - road * 0.6));
+        tcol = mix(tcol, texture2D(tSnow, wuv).rgb * mix(vec3(0.84, 0.81, 0.81), vec3(1.06, 1.05, 1.02), aliveMix), snow);   // ash-grey snow in the blight, clean where healed
         // rain: the ground darkens and goes glossy, and water stands in its hollows (low ground, flat, by the noise)
         float wetK = uWet * (1.0 - snow);
         float pn = wxn(vWPos.xz * 0.09) * 0.6 + wxn(vWPos.xz * 0.31 + 3.0) * 0.3 + (1.0 - dead2.a) * 0.1;
@@ -945,7 +947,7 @@ export class World {
             nw = normalize(mix(nw, Nw, puddle * 0.9) + vec3(rg.x, 0.0, rg.y) * uRainA * (0.35 * puddle + 0.08 * wetK));
           }
           normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);`)
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.3, 0.06) * ember * uEmber * 0.6;');
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(1.0, 0.3, 0.06) * ember * uEmber * 0.6;\n{ vec2 gc = floor(vWPos.xz * 22.0); float gl = fract(sin(dot(gc + floor(cameraPosition.xz * 1.5), vec2(12.9898, 78.233))) * 43758.5453); totalEmissiveRadiance += vec3(1.0, 0.97, 0.9) * step(0.994, gl) * snow * aliveMix * (1.0 - uAliveGrass) * 0.9; }');
     };
     const mesh = new THREE.Mesh(g, mat);
     mesh.receiveShadow = true; mesh.castShadow = this.ch.terrain.kind === 'mountain';

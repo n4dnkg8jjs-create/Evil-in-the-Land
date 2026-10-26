@@ -303,7 +303,7 @@ export class Weather {
     const kd = g.world.ch.terrain.kind, high = kd === 'mountain' || kd === 'peak';
     const lifeHere = high && g.world.lifeAt ? g.world.lifeAt(cam.x, cam.z) : 0;
     this.calm = (this.calm ?? 0) + (lifeHere - (this.calm ?? 0)) * Math.min(1, dt / 3);
-    rain *= 1 - 0.75 * this.calm;
+    rain *= 1 - 0.45 * this.calm;   // gentler, never gone: snow keeps falling softly over healed ground
     // on the Ascent the snow comes with height: down in the valley it falls as rain
     let snow = this.cl.snow ? 1 : 0;
     if (this.cl.byHeight) { const k = Math.min(1, Math.max(0, (cam.y - 30) / 40)); snow = k; }
