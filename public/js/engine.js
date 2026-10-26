@@ -18,7 +18,7 @@ export const QUALITY = {
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null }, uTime: { value: 0 }, uHurt: { value: 0 }, uHoly: { value: 0 },
-    uDesat: { value: 0 }, uVignette: { value: 0.32 }, uGrain: { value: 0.035 }, uAberr: { value: 0.0012 },
+    uDesat: { value: 0 }, uVignette: { value: 0.32 }, uGrain: { value: 0.022 }, uAberr: { value: 0.0012 },
     uTint: { value: new THREE.Color(1, 1, 1) }, uFlash: { value: 0 }, uLift: { value: new THREE.Color(0, 0, 0) },
   },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
@@ -26,6 +26,7 @@ const GradeShader = {
     uniform sampler2D tDiffuse; uniform float uTime, uHurt, uHoly, uDesat, uVignette, uGrain, uAberr, uFlash;
     uniform vec3 uTint, uLift; varying vec2 vUv;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+    float hash2(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
     void main(){
       vec2 c = vUv - 0.5; float r2 = dot(c,c);
       float ab = uAberr * (1.0 + uHurt * 4.0);
@@ -43,7 +44,13 @@ const GradeShader = {
       col += vec3(uFlash);
       float vig = 1.0 - uVignette * smoothstep(0.08, 0.55, r2) * 1.6;
       col *= vig;
-      col += (hash(vUv * 1000.0 + uTime) - 0.5) * uGrain;
+      // film grain: changes 24 times a second (not every frame), fine and soft, and weighted to the midtones so
+      // the dark and the sky stay clean instead of crawling like television static
+      float gt = floor(uTime * 24.0);
+      vec2 gp = floor(gl_FragCoord.xy) + vec2(gt * 37.0, gt * 91.0);
+      float g = (hash2(gp) + hash2(gp + vec2(1.0, 0.0)) + hash2(gp + vec2(0.0, 1.0))) / 3.0 - 0.5;
+      float lm = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col += g * uGrain * 4.0 * lm * (1.0 - lm) * smoothstep(0.02, 0.12, lm);
       gl_FragColor = vec4(max(col, 0.0), 1.0);
     }`,
 };
