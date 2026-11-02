@@ -20,7 +20,7 @@ export const P2P_CODE_LEN = 5, WS_CODE_LEN = 4;
 const MAX_PLAYERS = 5, HOST_ID = 1, PROTO = 1;
 // A closed channel is noticed at once; this only catches connections that die silently. It is
 // long because loading a chapter can freeze a slow machine's page for many seconds.
-const SILENT_MS = 45000;
+const SILENT_MS = 120000;
 // Google's public STUN servers find each player's public address. Some strict
 // networks (symmetric NAT, some offices and mobile carriers) also need a TURN
 // relay server, which would go here.
@@ -51,6 +51,53 @@ function loadPeerJS() {
   });
   return peerLib;
 }
+// ---------------------------------------------------------------- the relay (fallback)
+// When a direct browser-to-browser link can't be opened (strict routers, school and work WiFi, hotspots), everything
+// goes through a free public MQTT message relay over a secure websocket on port 443-ish, which nearly every network
+// allows. No accounts. Each lobby talks on its own topics; the host carries on relaying exactly as with direct links.
+const MQTT_URL = 'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js';
+// shiftr.io's public broker answers on the standard https port (443), which even strict networks let through;
+// the others are backups on their own ports
+const BROKERS = [
+  { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
+  { url: 'wss://broker.emqx.io:8084/mqtt' }, { url: 'wss://broker.hivemq.com:8884/mqtt' }, { url: 'wss://test.mosquitto.org:8081/mqtt' },
+];
+const TOPIC = (code) => `evil-in-the-land/v${PROTO}/${code}`;
+let mqttLib = null;
+function loadMQTT() {
+  if (window.mqtt) return Promise.resolve(window.mqtt);
+  if (mqttLib) return mqttLib;
+  mqttLib = new Promise((resolve, reject) => {
+    const s = document.createElement('script'); s.src = MQTT_URL; s.async = true; s.crossOrigin = 'anonymous';
+    s.onload = () => (window.mqtt ? resolve(window.mqtt) : reject(new Error('The relay library did not load.')));
+    s.onerror = () => { mqttLib = null; reject(new Error('Could not load the relay library.')); };
+    document.head.appendChild(s);
+  });
+  return mqttLib;
+}
+// connect to the first public broker that answers
+async function relayClient() {
+  const mqtt = await loadMQTT();
+  for (const { url, username, password } of BROKERS) {
+    const c = await new Promise((resolve) => {
+      let cl; try { cl = mqtt.connect(url, { username, password, clientId: 'eil_' + Math.random().toString(36).slice(2, 12), clean: true, keepalive: 120, reconnectPeriod: 1500, connectTimeout: 6000, resubscribe: true, queueQoSZero: true }); } catch { resolve(null); return; }
+      const t = setTimeout(() => { try { cl.end(true); } catch {} resolve(null); }, 7000);
+      cl.once('connect', () => { clearTimeout(t); resolve(cl); });
+    });
+    if (c) return c;
+  }
+  throw new Error('Could not reach the relay either. Check your internet connection.');
+}
+// looks like a PeerJS DataConnection to the rest of this file
+class RelayConn {
+  constructor(client, out, wrap) { this.client = client; this.out = out; this.wrap = wrap; this.open = true; this.h = {}; this.relay = true; }
+  on(t, f) { (this.h[t] || (this.h[t] = [])).push(f); }
+  emit(t, a) { for (const f of this.h[t] || []) { try { f(a); } catch (e) { console.error(e); } } }
+  send(obj) { if (this.open) this.client.publish(this.out, JSON.stringify(this.wrap(obj)), { qos: 0 }); }
+  shut() { if (!this.open) return; this.open = false; this.emit('close'); }
+  close() { if (!this.open) return; try { this.client.publish(this.out, JSON.stringify(this.wrap({ t: '__x' })), { qos: 0 }); } catch {} this.shut(); }
+}
+
 const makeCode = () => Array.from({ length: P2P_CODE_LEN }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
 const cleanName = (n) => String(n || 'Knight').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 18) || 'Knight';
 
@@ -81,7 +128,9 @@ export class Net {
   // ------------------------------------------------------------ public API
   async host(name) {
     this.leave(true);
-    try { return await this.p2pHost(name); } catch (e) {
+    try { const m = await this.p2pHost(name); this.relayHost(this.code).catch((e) => console.warn('relay unavailable', e)); return m; } catch (e) {
+      // the matchmaking service is unreachable from here: hold the lobby on the relay alone
+      try { return await this.relayOnlyHost(name); } catch (e2) { console.warn('relay host failed', e2); }
       // no broker reachable: if this page came from the local server, hold the lobby there instead
       if (this.serverAvailable) { await this.wsConnect(); return this.waitFor('hosted', () => this.raw({ t: 'host', name })); }
       throw e;
@@ -110,12 +159,12 @@ export class Net {
   kick(id) { this.raw({ t: 'kick', id }); }
   leave(silent = false) {
     if (this.mode) this.raw({ t: 'leave' });
-    const peer = this.peer, ws = this.ws, conns = [...this.conns.values()], hc = this.hostConn;
+    const peer = this.peer, ws = this.ws, conns = [...this.conns.values()], hc = this.hostConn, relay = this.relay; this.relay = null;
     this.mode = null; this.connected = false;
     clearInterval(this._pi); clearInterval(this._wd);
     this.peer = null; this.ws = null; this.hostConn = null; this.conns = new Map();
     // let the goodbye go out before the channels close
-    if (peer || ws) setTimeout(() => { for (const c of conns) try { c.close(); } catch {} try { hc?.close(); } catch {} try { peer?.destroy(); } catch {} try { ws?.close(); } catch {} }, silent ? 0 : 150);
+    if (peer || ws || relay || hc) setTimeout(() => { for (const c of conns) try { c.close(); } catch {} try { hc?.close(); } catch {} try { peer?.destroy(); } catch {} try { ws?.close(); } catch {} setTimeout(() => { try { relay?.end(true); } catch {} }, 200); }, silent ? 0 : 150);
     this.id = 0; this.hostId = 0; this.code = ''; this.players = []; this.started = false;
   }
   waitFor(type, send) {
@@ -175,6 +224,31 @@ export class Net {
         err.type = e.type; reject(err);
       });
     });
+  }
+  // the host also listens on the relay, so friends whose direct link fails can still come in
+  async relayHost(code) {
+    const client = await relayClient();
+    if (this.code !== code || this.mode !== 'p2p') { client.end(true); return; }
+    this.relay = client; const T = TOPIC(code), conns = new Map();
+    client.subscribe(T + '/h');
+    client.on('message', (topic, buf) => {
+      let env; try { env = JSON.parse(buf.toString()); } catch { return; }
+      if (!env || typeof env.c !== 'string') return;
+      let c = conns.get(env.c);
+      if (env.k === 'x') { if (c) { conns.delete(env.c); c.shut(); } return; }
+      if (!c) { c = new RelayConn(client, `${T}/g/${env.c}`, (m) => m); conns.set(env.c, c); c.on('close', () => conns.delete(env.c)); this.hostAccept(c); }
+      c.emit('data', env.m);
+    });
+  }
+  async relayOnlyHost(name) {
+    name = cleanName(name);
+    const code = makeCode();
+    this.mode = 'p2p'; this.peer = null; this.connected = true; this.started = false; this.nextId = HOST_ID + 1; this.code = code;
+    this.roster = new Map([[HOST_ID, { id: HOST_ID, name, conn: null, heard: performance.now() }]]);
+    try { await this.relayHost(code); } catch (e) { this.mode = null; this.connected = false; throw e; }
+    clearInterval(this._wd); this._tick = 0; this._wd = setInterval(() => this.hostWatchdog(), 2000);
+    const m = { t: 'hosted', code, id: HOST_ID, players: this.rosterList() };
+    this.handle(m); return m;
   }
   rosterList() { return [...this.roster.values()].map((p) => ({ id: p.id, name: p.name })); }
   hostAccept(conn) {
@@ -242,33 +316,63 @@ export class Net {
 
   // ------------------------------------------------------------ peer to peer: guest
   async p2pJoin(code, name) {
-    const Peer = await loadPeerJS();
-    const peer = await this.openPeer(Peer, undefined);
-    this.mode = 'p2p'; this.peer = peer;
+    this.mode = 'p2p';
     return new Promise((resolve, reject) => {
-      let done = false;
-      const fail = (msg) => { if (done) return; done = true; clearTimeout(t); this.leave(true); reject(new Error(msg)); };
-      const t = setTimeout(() => fail('Could not reach the host. Check the code is right and the host still has the lobby open. If it is, try again, or have someone else host.'), 30000);
-      peer.on('error', (e) => { if (e.type === 'peer-unavailable') fail(`No lobby with code ${code}. Check the code with your host.`); else if (!done) console.warn('peer error', e.type); });
-      const conn = peer.connect(ID_PREFIX + code, { reliable: true, serialization: 'json' });
-      this.hostConn = conn;
-      conn.on('open', () => { conn.send({ t: 'join', name: cleanName(name), v: PROTO }); });
-      conn.on('data', (m) => {
-        if (!m || typeof m !== 'object') return;
-        this.lastHeard = performance.now();
-        if (!done) {
-          if (m.t === 'error') return fail(m.msg);
-          if (m.t === 'joined') {
-            done = true; clearTimeout(t); this.connected = true; this.handle(m); resolve(m);
-            clearInterval(this._pi); this._pi = setInterval(() => this.raw({ t: 'ping', ts: performance.now() }), 3000);
-            clearInterval(this._wd); this._tick = 0; this._wd = setInterval(() => { if (this.frozen()) this.lastHeard = performance.now(); else if (this.hostConn === conn && performance.now() - this.lastHeard > SILENT_MS) this.lost(conn); }, 2000);
+      let done = false, relayStarted = false, peer = null;
+      const tries = [];   // the connections being attempted; the first to be let in wins
+      const fail = (msg) => { if (done) return; done = true; clearTimeout(t); clearTimeout(rt); for (const c of tries) try { c.close(); } catch {} try { peer?.destroy(); } catch {} this.leave(true); reject(new Error(msg)); };
+      const t = setTimeout(() => fail('Could not reach the host. Check the code is right and the host still has the lobby open, then try again.'), 35000);
+      // an answer from the host on either path
+      const attach = (conn) => {
+        tries.push(conn);
+        conn.on('open', () => { conn.send({ t: 'join', name: cleanName(name), v: PROTO }); });
+        conn.on('data', (m) => {
+          if (!m || typeof m !== 'object') return;
+          if (m.t === '__x') { conn.shut ? conn.shut() : conn.close(); return; }
+          if (this.hostConn === conn) this.lastHeard = performance.now();
+          if (!done) {
+            if (m.t === 'error') return fail(m.msg);
+            if (m.t === 'joined') {
+              done = true; clearTimeout(t); clearTimeout(rt);
+              for (const c of tries) if (c !== conn) try { c.close(); } catch {}
+              if (conn.relay) { try { peer?.destroy(); } catch {} this.peer = null; }
+              this.hostConn = conn; this.lastHeard = performance.now(); this.connected = true; this.handle(m); resolve(m);
+              clearInterval(this._pi); this._pi = setInterval(() => this.raw({ t: 'ping', ts: performance.now() }), 3000);
+              clearInterval(this._wd); this._tick = 0; this._wd = setInterval(() => { if (this.frozen()) this.lastHeard = performance.now(); else if (this.hostConn === conn && performance.now() - this.lastHeard > SILENT_MS) this.lost(conn); }, 2000);
+            }
+            return;
           }
-          return;
-        }
-        this.handle(m);
-      });
-      conn.on('close', () => { if (!done) fail('The host closed the connection.'); else this.lost(conn); });
-      conn.on('error', (e) => { if (!done) fail('Could not connect to the host.'); else console.warn('conn error', e); });
+          if (this.hostConn === conn) this.handle(m);
+        });
+        conn.on('close', () => { if (done && this.hostConn === conn) this.lost(conn); });
+        conn.on('error', (e) => console.warn('conn error', e));
+      };
+      // the relay: started if the direct link has not opened after a few seconds, or cannot be tried at all
+      const startRelay = async () => {
+        if (relayStarted || done) return; relayStarted = true;
+        try {
+          const client = await relayClient(); if (done) { client.end(true); return; }
+          this.relay = client;
+          const T = TOPIC(code), key = Math.random().toString(36).slice(2, 12);
+          const conn = new RelayConn(client, T + '/h', (m) => (m.t === '__x' ? { c: key, k: 'x' } : { c: key, k: 'd', m }));
+          client.subscribe(`${T}/g/${key}`, () => { attach(conn); conn.emit('open'); });
+          client.on('message', (topic, buf) => { let m; try { m = JSON.parse(buf.toString()); } catch { return; } conn.emit('data', m); });
+        } catch (e) { console.warn('relay join failed', e); }
+      };
+      const forceRelay = /[?&]relay\b/.test(location.search);   // ?relay: go straight to the relay
+      const rt = setTimeout(startRelay, forceRelay ? 0 : 8000);
+      // the direct link
+      if (!forceRelay) (async () => {
+        try {
+          const Peer = await loadPeerJS(); peer = await this.openPeer(Peer, undefined); if (done) { peer.destroy(); return; }
+          this.peer = peer;
+          // no direct lobby with that code: it may still be held on the relay
+          peer.on('error', (e) => { if (e.type === 'peer-unavailable') startRelay(); else if (!done) console.warn('peer error', e.type); });
+          const conn = peer.connect(ID_PREFIX + code, { reliable: true, serialization: 'json' });
+          attach(conn);
+          conn.on('iceStateChanged', (st) => { if (st === 'failed' || st === 'disconnected') startRelay(); });
+        } catch (e) { console.warn('direct link unavailable', e); startRelay(); }
+      })();
     });
   }
   lost(conn) {

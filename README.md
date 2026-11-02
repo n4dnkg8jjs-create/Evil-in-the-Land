@@ -26,7 +26,7 @@ Nothing to download or run: the host's browser holds the lobby.
 
 Each friend's knight takes the place of a companion. Companions fill any places that are left, up to five knights in all. If a friend drops out mid-game, a companion carries on in their knight's harness. If the host leaves, the game ends for everyone and they're sent back to the title.
 
-Players find each other through the free PeerJS matchmaking service, then connect directly browser to browser. Everyone needs an internet connection. A few strict networks, such as some offices, schools and mobile hotspots, block direct connections; if friends can't join, try another network, or use the local server below.
+Players find each other through the free PeerJS matchmaking service and connect directly browser to browser. If a network blocks direct connections (strict routers, school or work WiFi, phone hotspots), the game switches by itself after a few seconds to a free public message relay (shiftr.io) over an ordinary secure web connection, so joining still works. Everyone needs an internet connection. Adding `?relay` to the address makes a joining player use the relay straight away.
 
 ## Run the game yourself (optional)
 

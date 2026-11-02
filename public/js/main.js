@@ -454,8 +454,8 @@ function startFromLobby() {
   const ai = Math.min(st.opts.ai, 5 - players.length);
   for (let i = 0; i < ai; i++) players.push({ id: 1000 + i, name: AI_NAMES[i], loadout: AI_LOADOUTS[i], ai: true });
   const m = { players, difficulty: st.opts.diff, chapter: st.opts.chapter };
-  if (!L.solo) app.net.start(m);
-  startGame(m);
+  if (!L.solo) { app.net.start(m); setTimeout(() => startGame(m), 400); }   // let the word go out before loading freezes the page
+  else startGame(m);
 }
 
 function startGame(m) {
