@@ -25,6 +25,19 @@ const SILENT_MS = 45000;
 // networks (symmetric NAT, some offices and mobile carriers) also need a TURN
 // relay server, which would go here.
 const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls: 'stun:stun2.l.google.com:19302' }];
+// Relays for networks that block direct links (strict routers, school and work WiFi, phone hotspots), used only when
+// no direct route is found: the free Open Relay Project. Its static-auth relay takes short-lived logins made from a
+// public shared secret (the standard TURN REST scheme: user = expiry time, password = HMAC-SHA1 of it).
+const RELAY_HOST = 'staticauth.openrelay.metered.ca', RELAY_SECRET = 'openrelayprojectsecret';
+async function iceServers() {
+  try {
+    const user = String(Math.floor(Date.now() / 1000) + 24 * 3600);
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(RELAY_SECRET), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(user));
+    const credential = btoa(String.fromCharCode(...new Uint8Array(sig)));
+    return [...ICE, { urls: [`turn:${RELAY_HOST}:80`, `turn:${RELAY_HOST}:80?transport=tcp`, `turn:${RELAY_HOST}:443`, `turns:${RELAY_HOST}:443?transport=tcp`], username: user, credential }];
+  } catch (e) { console.warn('no relay login', e); return ICE; }
+}
 
 let peerLib = null;
 function loadPeerJS() {
@@ -150,9 +163,10 @@ export class Net {
     }
     throw new Error('Could not make a lobby code. Try again.');
   }
-  openPeer(Peer, id) {
+  async openPeer(Peer, id) {
+    const ice = await iceServers();
     return new Promise((resolve, reject) => {
-      let peer; try { peer = new Peer(id, { config: { iceServers: ICE }, debug: 1 }); } catch (e) { reject(new Error('This browser cannot make direct connections (WebRTC).')); return; }
+      let peer; try { peer = new Peer(id, { config: { iceServers: ice }, debug: 1 }); } catch (e) { reject(new Error('This browser cannot make direct connections (WebRTC).')); return; }
       const t = setTimeout(() => { try { peer.destroy(); } catch {} reject(new Error('Could not reach the matchmaking service. Check your internet connection.')); }, 12000);
       peer.on('open', () => { clearTimeout(t); resolve(peer); });
       peer.on('error', (e) => {
@@ -234,7 +248,7 @@ export class Net {
     return new Promise((resolve, reject) => {
       let done = false;
       const fail = (msg) => { if (done) return; done = true; clearTimeout(t); this.leave(true); reject(new Error(msg)); };
-      const t = setTimeout(() => fail('Could not reach the host. Check the code; if it is right, your network or theirs may be blocking direct connections.'), 15000);
+      const t = setTimeout(() => fail('Could not reach the host. Check the code is right and the host still has the lobby open. If it is, try again, or have someone else host.'), 30000);
       peer.on('error', (e) => { if (e.type === 'peer-unavailable') fail(`No lobby with code ${code}. Check the code with your host.`); else if (!done) console.warn('peer error', e.type); });
       const conn = peer.connect(ID_PREFIX + code, { reliable: true, serialization: 'json' });
       this.hostConn = conn;
