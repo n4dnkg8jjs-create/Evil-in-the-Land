@@ -112,13 +112,13 @@ export class Kit {
   }
   // a flat outline [[u, y]...] at depth z, facing +z (plaster is two-sided)
   face(k, poly, z, uvFn) { for (let i = 1; i < poly.length - 1; i++) { const a = poly[0], b = poly[i], c = poly[i + 1]; this.tri(k, [a[0], a[1], z], [b[0], b[1], z], [c[0], c[1], z], uvFn && [...uvFn(a), ...uvFn(b), ...uvFn(c)]); } }
-  // a moulding: the profile [[out, y]...] (bottom to top) carried along the path [[x, z]...] (anticlockwise seen
-  // from above for an outside corner run), mitred at each corner
+  // a moulding: the profile [[out, y]...] (bottom to top) carried along the path [[x, z]...], mitred at each
+  // corner; walking the path, the outside is on (-dz, dx) — the same side a wall's face is on in its own frame
   mould(k, prof, path, closed = true, grain = false) {
     const n = path.length, ring = [];
     for (let i = 0; i < n; i++) {
       const a = path[(i - 1 + n) % n], b = path[i], c = path[(i + 1) % n];
-      let n1 = norm2(b[1] - a[1], -(b[0] - a[0])), n2 = norm2(c[1] - b[1], -(c[0] - b[0]));
+      let n1 = norm2(-(b[1] - a[1]), b[0] - a[0]), n2 = norm2(-(c[1] - b[1]), c[0] - b[0]);
       if (!closed && i === 0) n1 = n2; if (!closed && i === n - 1) n2 = n1;
       const k2 = 1 + n1[0] * n2[0] + n1[1] * n2[1]; ring.push([(n1[0] + n2[0]) / Math.max(0.3, k2), (n1[1] + n2[1]) / Math.max(0.3, k2)]);
     }
@@ -130,7 +130,7 @@ export class Kit {
         const p = prof[q], p2 = prof[q + 1];
         const a = [A[0] + ma[0] * p[0], p[1], A[1] + ma[1] * p[0]], b = [Bp[0] + mb[0] * p[0], p[1], Bp[1] + mb[1] * p[0]], c = [Bp[0] + mb[0] * p2[0], p2[1], Bp[1] + mb[1] * p2[0]], d = [A[0] + ma[0] * p2[0], p2[1], A[1] + ma[1] * p2[0]];
         const v0 = q * 0.13 + uo, v1 = v0 + Math.hypot(p2[0] - p[0], p2[1] - p[1]) / TT;
-        this.quad(k, a, d, c, b, grain ? [v0, run / TT, v1, run / TT, v1, (run + len) / TT, v0, (run + len) / TT] : null);
+        this.quad(k, a, b, c, d, grain ? [v0, run / TT, v0, (run + len) / TT, v1, (run + len) / TT, v1, run / TT] : null);
       }
       if (!closed && (i === 0 || i === n - 2)) {   // close the cut ends
         const tx = (Bp[0] - A[0]) / (len || 1), tz = (Bp[1] - A[1]) / (len || 1);
@@ -239,6 +239,24 @@ export function archOpening(K, k, o) {
   return L;
 }
 
+// an iron ring standing in the wall's plane (a door pull, a hoist's eye)
+export function ironRing(K, cx, cy, cz, R, r2) { K.rot(cx, cy, cz, PI / 2, 0, 0); const pr = []; for (let i = 0; i <= 5; i++) { const a = i / 5 * TAU; pr.push([R + Math.cos(a) * r2, Math.sin(a) * r2]); } K.lathe('iron', pr, 8, 0, 0, 0); K.pop(); }
+// a door leaf of boards on strap hinges, hung at (hx, y0, zf) in the wall's frame; ang > 0 swings it inward.
+// left: hinged on its left edge (seen from outside). o2.brace: a barn door, ledged and braced on its face.
+export function leafDoor(K, BRD, hx, y0, zf, wd, ht, ang, left = true, tilt = 0, o2 = {}) {
+  K.rot(hx, y0, zf, 0, left ? ang : PI - ang, tilt);
+  const nb = Math.max(2, Math.round(wd / 0.21)), bw = wd / nb, zs = left ? -1 : 1;
+  for (let i = 0; i < nb; i++) { const v = (i % 2) * 0.007; K.box(BRD, i * bw, 0, zs * (0.045 + v), (i + 1) * bw, ht, zs * v, 'y'); }
+  const hy = ht > 2.4 ? [0.14, 0.5, 0.86] : [0.2, 0.8], so = o2.brace ? 0.03 : 0;
+  for (const f of hy) { K.box('iron', 0, ht * f - 0.024, left ? so : -0.014 - so, wd * 0.62, ht * f + 0.024, left ? 0.014 + so : -so); K.box('iron', -0.03, ht * f - 0.05, left ? -0.03 : -0.02 - so, 0.03, ht * f + 0.05, left ? 0.02 + so : 0.03); }
+  if (o2.brace) {
+    const zz = left ? [0, 0.03] : [-0.03, 0];
+    for (const f of [0.14, 0.5, 0.86]) K.box(BRD, 0.02, ht * f - 0.07, zz[0], wd - 0.02, ht * f + 0.07, zz[1], 'x');
+    for (const [fa, fb] of [[0.14, 0.5], [0.5, 0.86]]) K.tim(BRD, 0.06, ht * fa + 0.07, wd - 0.06, ht * fb - 0.07, 0.12, zz[0], zz[1] - 0.002, rectClip(0.02, ht * fa + 0.07, wd - 0.02, ht * fb - 0.07));
+  } else if (o2.ring) { const rx2 = wd - 0.13, ry2 = ht * 0.5; K.box('iron', rx2 - 0.035, ry2 - 0.06, left ? 0 : -0.012, rx2 + 0.035, ry2 + 0.08, left ? 0.012 : 0); ironRing(K, rx2, ry2 - 0.03, left ? 0.03 : -0.03, 0.05, 0.009); }
+  K.pop();
+}
+
 // ---------------------------------------------------------------------------------------------- houses
 // One house, barn or burnt wreck in its own frame: x along the street front, +z toward the road, y = 0 its floor.
 // `plan` is what the world's own random stream decided for it (standing or burnt, the roofing, where each wall
@@ -286,26 +304,12 @@ export function buildHouse(K, o) {
     const e = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)).elements;
     K.obox(k, x, base + (Math.abs(e[1]) * sx + Math.abs(e[5]) * sy + Math.abs(e[9]) * sz) / 2 - sink, z, sx, sy, sz, rx, ry, rz, g);
   };
-  const ring = (cx, cy, cz, R, r2) => { K.rot(cx, cy, cz, PI / 2, 0, 0); const pr = []; for (let i = 0; i <= 5; i++) { const a = i / 5 * TAU; pr.push([R + Math.cos(a) * r2, Math.sin(a) * r2]); } K.lathe('iron', pr, 8, 0, 0, 0); K.pop(); };
+  const ring = (cx, cy, cz, R, r2) => ironRing(K, cx, cy, cz, R, r2);
 
   // the footing: takes up the slope under the house, its top the floor
   K.box('stone', -(w / 2 + 0.35), -footing, -(d / 2 + 0.35), w / 2 + 0.35, 0, d / 2 + 0.35);
 
-  // ---- a door leaf of oak boards on strap hinges, hung at (hx, y0, zf) in the wall's frame; ang > 0 swings it in
-  const doorLeaf = (hx, y0, zf, wd, ht, ang, left = true, tilt = 0, o2 = {}) => {
-    K.rot(hx, y0, zf, 0, left ? ang : PI - ang, tilt);
-    const nb = Math.max(2, Math.round(wd / 0.21)), bw = wd / nb, zs = left ? -1 : 1;
-    for (let i = 0; i < nb; i++) { const v = (i % 2) * 0.007; K.box(BRD, i * bw, 0, zs * (0.045 + v), (i + 1) * bw, ht, zs * v, 'y'); }
-    const hy = ht > 2.4 ? [0.14, 0.5, 0.86] : [0.2, 0.8];
-    const so = o2.brace ? 0.03 : 0;
-    for (const f of hy) { K.box('iron', 0, ht * f - 0.024, left ? so : -0.014 - so, wd * 0.62, ht * f + 0.024, left ? 0.014 + so : -so); K.box('iron', -0.03, ht * f - 0.05, left ? -0.03 : -0.02 - so, 0.03, ht * f + 0.05, left ? 0.02 + so : 0.03); }
-    if (o2.brace) {   // a barn door: ledges and braces on its face
-      const zz = left ? [0, 0.03] : [-0.03, 0];
-      for (const f of [0.14, 0.5, 0.86]) K.box(BRD, 0.02, ht * f - 0.07, zz[0], wd - 0.02, ht * f + 0.07, zz[1], 'x');
-      for (const [fa, fb] of [[0.14, 0.5], [0.5, 0.86]]) K.tim(BRD, 0.06, ht * fa + 0.07, wd - 0.06, ht * fb - 0.07, 0.12, zz[0], zz[1] - 0.002, rectClip(0.02, ht * fa + 0.07, wd - 0.02, ht * fb - 0.07));
-    } else if (intact) { const rx2 = wd - 0.13, ry2 = ht * 0.5; K.box('iron', rx2 - 0.035, ry2 - 0.06, left ? 0 : -0.012, rx2 + 0.035, ry2 + 0.08, left ? 0.012 : 0); ring(rx2, ry2 - 0.03, left ? 0.03 : -0.03, 0.05, 0.009); }
-    K.pop();
-  };
+  const doorLeaf = (hx, y0, zf, wd, ht, ang, left = true, tilt = 0, o2 = {}) => leafDoor(K, BRD, hx, y0, zf, wd, ht, ang, left, tilt, { ...o2, ring: intact && !o2.brace });
   // ---- a window between a0 and a1, c0 to c1, its glass at depth zg behind the wall's face (z = 0 here)
   const shutState = () => { const f = q(); return f < 0.3 ? 'closed' : f < 0.68 ? 'open' : f < 0.78 ? 'ajar' : f < 0.88 ? 'hang' : 'none'; };
   const winUnit = (a0, a1, c0, c1, zg, o2 = {}) => {
@@ -688,7 +692,7 @@ export function buildHouse(K, o) {
           if (s.lintel) { const t = minTop(s.u - 0.5, s.u + 0.5); soot(s.u - 0.6, s.u + 0.6, 1.98, Math.min(3.3, t), 0.012); soot(s.u - 0.6, s.u + 0.6, 1.98, Math.min(3.3, t), -WT - 0.012, false); }
         }
         // loose stones left on the broken top, the charred stumps of studs, a joist end still in its pocket
-        for (const st of s.stones || []) { const u = s.u + sgn * st.qx, sz = st.sz * 1.35; K.rot(0, 0, 0, 0, 0, 0); rest('stone', u, -0.25 + st.pz, sz, sz * 0.55, sz * 0.75, st.rx * 0.12, st.rz, st.rz * 0.1, W.top(u), 0.015); K.pop(); }
+        for (const st of s.stones || []) { const u = s.u + sgn * st.qx, sz = st.sz * 1.35; rest('stone', u, -0.25 + st.pz, sz, sz * 0.55, sz * 0.75, st.rx * 0.12, st.rz, st.rz * 0.1, W.top(u), 0.015); }
         if (s.stud) { const u = s.u + sgn * s.stud.px, t = W.top(u); K.obox(TIM, u, t + s.stud.ht / 2 - 0.04, -0.25, 0.16, s.stud.ht, 0.17, s.stud.rx, 0, s.stud.rz, 'y'); }
         if (s.joist) { const t = W.top(s.u); if (t > 1.2) K.obox(TIM, s.u, t - 0.13, -0.25, 0.16, 0.17, s.joist.len + 0.5, s.joist.rx * 0.5, 0, 0, 'z'); }
       }
@@ -759,3 +763,195 @@ export function sootMaterial() {
   }
   return new THREE.MeshStandardMaterial({ color: 0x060504, roughness: 1, metalness: 0, transparent: true, alphaMap: _sootTex, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 }
+
+// ---------------------------------------------------------------------------------------------- the church
+const snapC0 = (y) => Math.max(0, Math.round(y / COURSE) * COURSE);
+// a flat block: the outline [[x, z]...] from y0 up to y1
+export function slabXZ(K, k, poly, y0, y1) {
+  let cx = 0, cz = 0; for (const p of poly) { cx += p[0]; cz += p[1]; } cx /= poly.length; cz /= poly.length;
+  for (let i = 1; i < poly.length - 1; i++) { const a = poly[0], b = poly[i], c = poly[i + 1]; K.triTo(k, [a[0], y1, a[1]], [b[0], y1, b[1]], [c[0], y1, c[1]], 0, 1, 0); K.triTo(k, [a[0], y0, a[1]], [b[0], y0, b[1]], [c[0], y0, c[1]], 0, -1, 0); }
+  for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; K.quadTo(k, [a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]], [a[0], y1, a[1]], (a[0] + b[0]) / 2 - cx, 0, (a[1] + b[1]) / 2 - cz); }
+}
+// a buttress against the wall of the current frame, centred on u = 0: its profile [[out, y]...] foot to head, wd wide
+function buttress(K, k, prof, wd, yMax = 1e9) {
+  const h = wd / 2, zin = -0.3;
+  for (let j = 0; j < prof.length - 1; j++) {
+    let [o0, y0] = prof[j], [o1, y1] = prof[j + 1]; if (y0 >= yMax) break; if (y1 > yMax) { o1 = o0 + (o1 - o0) * (yMax - y0) / (y1 - y0); y1 = yMax; }
+    K.quad(k, [-h, y0, o0], [h, y0, o0], [h, y1, o1], [-h, y1, o1]);
+    if (y1 - y0 > 1e-4) { K.quadTo(k, [h, y0, zin], [h, y1, zin], [h, y1, o1], [h, y0, o0], 1, 0, 0); K.quadTo(k, [-h, y0, zin], [-h, y1, zin], [-h, y1, o1], [-h, y0, o0], -1, 0, 0); }
+    if (y1 >= yMax && o1 > 0.02) K.quad(k, [-h, y1, o1], [h, y1, o1], [h, y1, zin], [-h, y1, zin]);
+  }
+}
+// the stones of an arch between two outlines (the same count of points each), as a moulding from depth z0 to z1
+function archRing(K, k, Lin, Lout, z0, z1, i0 = 0, i1 = Lin.length - 1) { for (let i = i0; i < i1; i++) K.prism(k, [Lin[i], Lin[i + 1], Lout[i + 1], Lout[i]], z0, z1); }
+// a roof slope as a grid of slates: O its eave corner, U along the eave, V up the slope, th thick; keep(i, j) holes it
+function roofSheet(K, top, bot, O, U, V, us, vs, th, keep, tile = 2.0) {
+  const N = [U[1] * V[2] - U[2] * V[1], U[2] * V[0] - U[0] * V[2], U[0] * V[1] - U[1] * V[0]]; if (N[1] < 0) { N[0] = -N[0]; N[1] = -N[1]; N[2] = -N[2]; }
+  const P = (u, v, h) => [O[0] + U[0] * u + V[0] * v + N[0] * h, O[1] + U[1] * u + V[1] * v + N[1] * h, O[2] + U[2] * u + V[2] * v + N[2] * h];
+  const nu = us.length - 1, nv = vs.length - 1, kp = (i, j) => i >= 0 && j >= 0 && i < nu && j < nv && (!keep || keep(i, j)), e = th / tile;
+  for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+    if (!kp(i, j)) continue;
+    const u0 = us[i], u1 = us[i + 1], v0 = vs[j], v1 = vs[j + 1];
+    K.quadTo(top, P(u0, v0, th), P(u1, v0, th), P(u1, v1, th), P(u0, v1, th), N[0], N[1], N[2], [u0 / tile, v0 / tile, u1 / tile, v0 / tile, u1 / tile, v1 / tile, u0 / tile, v1 / tile]);
+    K.quadTo(bot, P(u0, v0, 0), P(u1, v0, 0), P(u1, v1, 0), P(u0, v1, 0), -N[0], -N[1], -N[2]);
+    if (!kp(i, j - 1)) K.quadTo(top, P(u0, v0, 0), P(u1, v0, 0), P(u1, v0, th), P(u0, v0, th), -V[0], -V[1], -V[2], [u0 / tile, 0, u1 / tile, 0, u1 / tile, e, u0 / tile, e]);
+    if (!kp(i, j + 1)) K.quadTo(top, P(u0, v1, 0), P(u1, v1, 0), P(u1, v1, th), P(u0, v1, th), V[0], V[1], V[2], [u0 / tile, 0, u1 / tile, 0, u1 / tile, e, u0 / tile, e]);
+    if (!kp(i - 1, j)) K.quadTo(top, P(u0, v0, 0), P(u0, v1, 0), P(u0, v1, th), P(u0, v0, th), -U[0], -U[1], -U[2], [v0 / tile, 0, v1 / tile, 0, v1 / tile, e, v0 / tile, e]);
+    if (!kp(i + 1, j)) K.quadTo(top, P(u1, v0, 0), P(u1, v1, 0), P(u1, v1, th), P(u1, v0, th), U[0], U[1], U[2], [v0 / tile, 0, v1 / tile, 0, v1 / tile, e, v0 / tile, e]);
+  }
+}
+// A pointed window with real depth, in the wall of the current frame: splayed without and within, a mullion and
+// Y-tracery cut in stone at the glass line, iron saddle bars, and what the fire left of its leaded glass
+function gothicWindow(K, o) {
+  const { uc, T, sill, ys, hw, bw, y0, y1, q } = o, zg = o.zg ?? -0.3, kk = o.k ?? 1, R = 2 * hw * kk, m = o.lights ?? 2, bz0 = zg - 0.07, bz1 = zg + 0.07, bwid = 0.1;
+  archOpening(K, 'stone', { uc, bw, y0, y1, T, kk, segs: 6, loops: [{ z: 0, hw: hw + 0.14, yb: sill - 0.2, ys }, { z: zg, hw, yb: sill, ys }, { z: -T, hw: hw + 0.22, yb: sill - 0.12, ys }] });
+  const inside = (u, y) => y <= ys ? Math.abs(u - uc) <= hw : Math.hypot(Math.abs(u - uc) + (R - hw), y - ys) <= R;
+  for (let j = 1; j < m; j++) {
+    const um = uc - hw + 2 * hw * j / m; K.box('stone', um - bwid / 2, sill, bz0, um + bwid / 2, ys, bz1);
+    for (const sd of [-1, 1]) { let p = [um, ys]; for (let a = 0.11; a < 1.5; a += 0.11) { const pn = [um + sd * (R - R * Math.cos(a)) * -1, ys + R * Math.sin(a)]; const ok = inside(pn[0], pn[1]); K.tim('stone', p[0], p[1], pn[0], pn[1], bwid, bz0, bz1); p = pn; if (!ok) break; } }
+  }
+  for (let j = 0; j < m; j++) {
+    const a0 = uc - hw + 2 * hw * j / m + (j ? bwid / 2 : 0), a1 = uc - hw + 2 * hw * (j + 1) / m - (j < m - 1 ? bwid / 2 : 0), nb = Math.max(2, Math.round((ys - sill) / 0.56)), bh = (ys - sill) / nb;
+    for (let b = 0; b <= nb; b++) { const y = sill + b * bh; if (b > 0) K.box('iron', a0, y - 0.011, zg + 0.02, a1, y + 0.011, zg + 0.042);
+      if (b < nb && q() < (o.glassP ?? 0.3) * (1 - 0.5 * b / nb)) { const ya = y + (b ? 0 : 0.0), yb = y + bh * (q() < 0.3 ? q.range(0.4, 0.9) : 1), A = [a0, ya, zg], Bq = [a1, ya, zg], Cq = [a1, yb, zg], D = [a0, b < nb - 1 && yb < y + bh ? yb - q.range(0, 0.2) : yb, zg]; K.quad('glass', A, Bq, Cq, D); K.quad('glass', Bq, A, D, Cq); } }
+  }
+}
+
+// The church of Saint Aldric in its own frame: +z west (the tower and its door), y = 0 the floor. A small late-Gothic
+// village church: west tower with diagonal buttresses and a broach spire, nave, a narrower chancel closed in three
+// sides of an octagon, a sacristy against it. It burned with the village: the nave's roof is gone but for its east
+// end, and the wall is breached where the world's plan says. `plan` carries the decisions of the world's own random
+// stream (which bays fell, which trusses stand, the pews); q is the church's own generator.
+export function buildChurch(K, o) {
+  const { plan, q, gH, foot } = o, ST = 'stone', OAK = 'oak', CHAR = 'timber', SL = 'roof';
+  const T = 0.8, WN = 4.9, HN = 22 * COURSE, XC = 3.62, TC = 0.7, HC = 19 * COURSE, ZE = -2.4, ZW = 10.4;
+  const TWH = 2.7, TZ1 = 15.4, TT = 0.85, SH = 44 * COURSE, BH = 16 * COURSE, TZ = 12.7, TOP = SH + BH;
+  const PITCH = 54 * PI / 180, tanR = Math.tan(PITCH), cosR = Math.cos(PITCH), sinR = Math.sin(PITCH);
+  const info = { colliders: [], bell: [0, TOP - 1.5, TZ] }, col = (x, z, r2) => info.colliders.push([x, z, r2]);
+  const wallF = (ax, az, bx, bz, fn) => { const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz); K.at((ax + bx) / 2, 0, (az + bz) / 2, Math.atan2(-dz, dx)); fn(L); K.pop(); };
+  const rest = (k, x, z, sx, sy, sz, rx, ry, rz, base, sink = 0.02, g) => { const e = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)).elements; K.obox(k, x, base + (Math.abs(e[1]) * sx + Math.abs(e[5]) * sy + Math.abs(e[9]) * sz) / 2 - sink, z, sx, sy, sz, rx, ry, rz, g); };
+
+  // ---- where the walls are down (from the plan): a breach to the ground in the nave's south wall, bays broken lower elsewhere
+  const BR0 = -1.6, BR1 = 0.9, dmg = { '-1': [], '1': [] };
+  for (const s of [-1, 1]) plan.bays[s < 0 ? 0 : 1].forEach((b, k) => { if (!b.broken) return; const zc = -9 + 2 * k;
+    if (b.breach) dmg[s].push({ zc: (BR0 + BR1) / 2, hw: (BR1 - BR0) / 2, h: 0, ramp: 1.5 }); else if (zc > -1.5) dmg[s].push({ zc, hw: 0.35, h: Math.max(8 * COURSE, b.h), ramp: 1.0 }); else if (s > 0 && zc < -2.5 && zc > -8) dmg[s].push({ zc, hw: 0.35, h: Math.max(10 * COURSE, b.h), ramp: 1.0 }); });
+  const topAtZ = (s, z, H) => { let t = H; for (const g of dmg[s]) t = Math.min(t, g.h + (H - g.h) * smooth(clamp((Math.abs(z - g.zc) - g.hw) / g.ramp, 0, 1))); return t; };
+  const lowered = (s, z, H) => topAtZ(s, z, H) < H - 0.2;
+
+  // ---- floors and footings
+  K.box(ST, -4.5, -foot, ZE, 4.5, 0, ZW); K.box(ST, -TWH, -foot, ZW, TWH, 0, TZ1);
+  const apse = (r2) => [[r2, ZE], [r2, -6.38 - r2 * 0.4142], [r2 * 0.4142, -6.38 - r2], [-r2 * 0.4142, -6.38 - r2], [-r2, -6.38 - r2 * 0.4142], [-r2, ZE]];
+  slabXZ(K, ST, apse(XC - 0.2), -foot, 0.16);
+  slabXZ(K, ST, [[-1.7, -7.0], [1.7, -7.0], [1.7, -9.0], [0.9, -9.6], [-0.9, -9.6], [-1.7, -9.0]].reverse(), 0.16, 0.32);
+
+  // ---- a long wall of nave or chancel: its windows, buttresses, string course and corbelled eaves, broken where the plan broke it
+  const longWall = (s, x, zA, zB, H, Tw, wz, bz, win) => wallF(s * x, s > 0 ? zA : zB, s * x, s > 0 ? zB : zA, (L) => {
+    const zm = (zA + zB) / 2, zOf = (u) => zm - s * u, uOf = (z) => s * (zm - z), nc = Math.round(L / 0.4), cs = L / nc, cuts = []; for (let i = 1; i < nc; i++) cuts.push(-L / 2 + i * cs);
+    const top = (u) => { const c = clamp(Math.floor((u + L / 2) / cs), 0, nc - 1); return snapC0(topAtZ(s, zOf(-L / 2 + (c + 0.5) * cs), H)); };
+    const holes = [], wins = [];
+    for (const zw of wz) { const uc = uOf(zw); let mn = 1e9; for (let u = uc - win.bw + 0.05; u <= uc + win.bw; u += 0.19) mn = Math.min(mn, top(u));
+      if (mn >= H - 0.01) { holes.push([uc - win.bw, uc + win.bw, win.y0, win.y1]); wins.push(uc); } else holes.push([uc - win.hw, uc + win.hw, win.sill, Infinity]); }
+    const cols = wallRun(K, ST, -L / 2, L / 2, -foot, top, Tw, holes, cuts);
+    for (const uc of wins) gothicWindow(K, { uc, T: Tw, q, ...win });
+    for (const c of cols) {
+      const t = c.iv.length ? c.iv[c.iv.length - 1][1] : -9;
+      if (t >= H - 0.01) { K.box(ST, c.ua, H - 0.2, 0, c.ub, H, 0.15); for (let u = Math.ceil(c.ua / 0.62) * 0.62; u < c.ub - 0.05; u += 0.62) K.box(ST, u - 0.09, H - 0.42, 0, u + 0.09, H - 0.2, 0.11); }
+      if (c.iv.length && c.iv[0][1] >= win.y0 - 0.01) { K.box(ST, c.ua, win.y0 - 0.16, 0, c.ub, win.y0 - 0.04, 0.075); K.quad(ST, [c.ua, win.y0 - 0.04, 0.075], [c.ub, win.y0 - 0.04, 0.075], [c.ub, win.y0, 0], [c.ua, win.y0, 0]); }
+    }
+    for (const [zb2, pr, wd] of bz) { const u = uOf(zb2), t = top(u); if (t < 1.5) continue; K.at(u, 0, 0); buttress(K, ST, pr, wd, t >= H - 0.01 ? 1e9 : t + 0.3); K.pop(); const hx = s * (x + 0.55); col(hx, zb2, 0.5); }
+    info['top' + s + (H === HN ? 'n' : 'c')] = (z) => top(uOf(z));
+  });
+  const bN = [[0.95, -foot], [0.95, 0.92], [0.85, 1.04], [0.85, 3.5], [0.55, 4.05], [0.55, 5.6], [0, 6.5]], bC = [[0.78, -foot], [0.78, 0.92], [0.68, 1.04], [0.68, 3.0], [0.4, 3.5], [0.4, 4.7], [0, 5.4]];
+  const wN = { sill: 2.62, ys: 4.9, hw: 0.6, bw: 1.0, y0: 2.4, y1: 21 * COURSE, glassP: 0.3 }, wC = { sill: 2.62, ys: 4.3, hw: 0.5, bw: 0.9, y0: 2.4, y1: 18 * COURSE, glassP: 0.5 };
+  for (const s of [-1, 1]) longWall(s, WN, ZW, ZE, HN, T, [8, 4, 0], [[9.95, bN, 0.85], [6, bN, 0.8], [2, bN, 0.8], [-1.95, bN, 0.85]], wN);
+  longWall(1, XC, ZE, -7.88, HC, TC, [-5.1], [], wC); longWall(-1, XC, ZE, -7.88, HC, TC, [], [], wC);
+  // the apse: three sides of an octagon, a window in each, a buttress at each angle
+  const AP = [[XC, -7.88], [1.5, -10], [-1.5, -10], [-XC, -7.88]];
+  for (let i = 0; i < 3; i++) wallF(AP[i][0], AP[i][1], AP[i + 1][0], AP[i + 1][1], (L) => {
+    const w3 = i === 1 ? { sill: 2.62, ys: 4.45, hw: 0.62, bw: 1.0, y0: 2.4, y1: 18 * COURSE, glassP: 0.6 } : wC;
+    wallRun(K, ST, -L / 2, L / 2, -foot, HC, TC, [[-w3.bw, w3.bw, w3.y0, w3.y1]]); gothicWindow(K, { uc: 0, T: TC, q, ...w3 });
+    K.box(ST, -L / 2 - 0.06, HC - 0.2, 0, L / 2 + 0.06, HC, 0.15); for (let u = -L / 2 + 0.2; u < L / 2; u += 0.62) K.box(ST, u - 0.09, HC - 0.42, 0, u + 0.09, HC - 0.2, 0.11);
+    for (const [a, b] of [[-L / 2 - 0.03, -w3.bw], [w3.bw, L / 2 + 0.03]]) { K.box(ST, a, w3.y0 - 0.16, 0, b, w3.y0 - 0.04, 0.075); K.quad(ST, [a, w3.y0 - 0.04, 0.075], [b, w3.y0 - 0.04, 0.075], [b, w3.y0, 0], [a, w3.y0, 0]); }
+    K.box(ST, -w3.bw, w3.y0 - 0.16, 0, w3.bw, w3.y0 - 0.04, 0.075); K.quad(ST, [-w3.bw, w3.y0 - 0.04, 0.075], [w3.bw, w3.y0 - 0.04, 0.075], [w3.bw, w3.y0, 0], [-w3.bw, w3.y0, 0]);
+  });
+  for (let i = 0; i < 4; i++) { const a = AP[Math.max(0, i - 1)], b = AP[i], c = AP[Math.min(3, i + 1)]; let n1 = i === 0 ? [1, 0] : norm2(-(b[1] - a[1]), b[0] - a[0]), n2 = i === 3 ? [-1, 0] : norm2(-(c[1] - b[1]), c[0] - b[0]); const m = norm2(n1[0] + n2[0], n1[1] + n2[1]);
+    K.at(b[0] - m[0] * 0.12, 0, b[1] - m[1] * 0.12, Math.atan2(m[0], m[1])); buttress(K, ST, bC, 0.66); K.pop(); col(b[0] + m[0] * 0.3, b[1] + m[1] * 0.3, 0.55); }
+
+  // ---- the gable walls: the nave's east wall with the chancel arch, its west wall with the tower arch
+  const gable = (H, half, extra = 0.34) => { const yA = H + half * tanR + extra / cosR; K.prism(ST, [[-half, H], [half, H], [0, yA]], -T, 0);
+    for (const sd of [-1, 1]) K.tim(ST, sd * (half + 0.12), H - 0.12 * tanR + 0.06, 0, yA + 0.06, 0.14, -T - 0.07, 0.07, [[sd, 0, half + 0.2], [-sd, 0, 0]]);
+    return yA; };
+  let yGable = 0;
+  wallF(WN, ZE, -WN, ZE, () => {   // east: faces the chancel
+    wallRun(K, ST, -WN, WN, -foot, HN, T, [[-2.75, 2.75, 0, 21 * COURSE]]);
+    archOpening(K, ST, { uc: 0, bw: 2.75, y0: 0, y1: 21 * COURSE, T, kk: 0.8, segs: 8, open: true, loops: [{ z: 0, hw: 2.3, yb: 0, ys: 3.2 }, { z: -0.1, hw: 2.2, yb: 0, ys: 3.2 }, { z: -T + 0.1, hw: 2.2, yb: 0, ys: 3.2 }, { z: -T, hw: 2.3, yb: 0, ys: 3.2 }] });
+    yGable = gable(HN, WN);
+    // a stone cross on the gable's head
+    K.box(ST, -0.09, yGable, -T / 2 - 0.09, 0.09, yGable + 0.95, -T / 2 + 0.09); K.box(ST, -0.34, yGable + 0.52, -T / 2 - 0.08, 0.34, yGable + 0.7, -T / 2 + 0.08);
+  });
+  wallF(-WN, ZW, WN, ZW, () => {   // west: its middle is the tower's east wall
+    wallRun(K, ST, -WN, WN, -foot, HN, T, [[-1.75, 1.75, 0, 15 * COURSE]]);
+    archOpening(K, ST, { uc: 0, bw: 1.75, y0: 0, y1: 15 * COURSE, T, kk: 0.85, segs: 8, open: true, loops: [{ z: 0, hw: 1.3, yb: 0, ys: 2.6 }, { z: -T + 0.1, hw: 1.3, yb: 0, ys: 2.6 }, { z: -T, hw: 1.4, yb: 0, ys: 2.6 }] });
+    gable(HN, WN);
+  });
+
+  // ---- the tower
+  const lancet = (uc, yb, ys, hw, Tw, louvre) => {
+    archOpening(K, ST, { uc, bw: hw + 0.3, y0: yb - 0.32, y1: snapC(archApex(hw + 0.1, ys) + 0.2), T: Tw, kk: 1, segs: 5, loops: [{ z: 0, hw: hw + 0.1, yb: yb - 0.12, ys }, { z: -0.12, hw, yb, ys }, { z: -Tw, hw: hw + 0.06, yb, ys }] });
+    if (louvre) { const top = ys + hw * 0.6, n = Math.round((top - yb) / 0.34); for (let i = 0; i < n; i++) { if (q() < 0.22) continue; const y = yb + 0.1 + i * 0.34; K.rot(uc, y, -0.34 + (q() < 0.12 ? -0.1 : 0), 0.62, 0, q() < 0.12 ? q.range(-0.25, 0.25) : 0); K.box(OAK, -hw - 0.03, -0.012, -0.17, hw + 0.03, 0.012, 0.17, 'x'); K.pop(); } }
+    else K.quad('dark', [uc - hw - 0.06, yb, -Tw + 0.02], [uc + hw + 0.06, yb, -Tw + 0.02], [uc + hw + 0.06, ys + hw * 2, -Tw + 0.02], [uc - hw - 0.06, ys + hw * 2, -Tw + 0.02]);
+    return [uc - hw - 0.3, uc + hw + 0.3, yb - 0.32, snapC(archApex(hw + 0.1, ys) + 0.2)];
+  };
+  const BY = SH + 0.96, BS = SH + 2.9;   // the belfry lights: sill and springing
+  const towerFace = (ax, az, bx, bz, kind) => wallF(ax, az, bx, bz, (L) => {
+    const holes = [], after = [];
+    for (const uc of [-0.72, 0.72]) { const hb = [uc - 0.7, uc + 0.7, BY - 0.32, snapC(archApex(0.5, BS) + 0.2)]; holes.push(hb); after.push(() => lancet(uc, BY, BS, 0.4, TT, true)); }
+    if (kind !== 'e') { holes.push([-0.52, 0.52, 9.6 - 0.32, snapC(archApex(0.32, 11.0) + 0.2)]); after.push(() => lancet(0, 9.6, 11.0, 0.22, TT, false)); }
+    if (kind === 'w') { holes.push([-1.9, 1.9, 0, 14 * COURSE]); holes.push([-0.5, 0.5, 5.76 - 0.32, snapC(archApex(0.3, 6.6) + 0.2)]); after.push(() => lancet(0, 5.76, 6.6, 0.2, TT, false)); }
+    if (kind === 'e') holes.push([-1.75, 1.75, 0, 15 * COURSE]);
+    wallRun(K, ST, -L / 2, L / 2, kind === 'e' ? 0 : -foot, TOP, kind === 'e' ? 0.45 : TT, holes);
+    for (const f of after) f();
+    if (kind === 'e') archOpening(K, ST, { uc: 0, bw: 1.75, y0: 0, y1: 15 * COURSE, T: 0.45, kk: 0.85, segs: 8, open: true, back: false, loops: [{ z: 0, hw: 1.4, yb: 0, ys: 2.6 }, { z: -0.1, hw: 1.3, yb: 0, ys: 2.6 }, { z: -0.45, hw: 1.3, yb: 0, ys: 2.6 }] });
+    if (kind === 'w') portal();
+  });
+  const portal = () => {
+    // the west door: three orders stepping in, a hood-mould over them, a plain tympanum with a cross, two oak leaves
+    const ys = 2.1, kk = 0.8, hws = [1.52, 1.3, 1.08], loops = [];
+    hws.forEach((hw, i) => { loops.push({ z: -0.19 * i, hw, yb: 0, ys }); loops.push({ z: -0.19 * (i + 1) - (i === 2 ? 0.1 : 0), hw, yb: 0, ys }); });
+    const Lp = archOpening(K, ST, { uc: 0, bw: 1.9, y0: 0, y1: 14 * COURSE, T: TT, kk, segs: 8, open: true, loops });
+    const hood = archLoop(1.66, 0, ys, kk, 8); archRing(K, ST, Lp[0], hood, 0, 0.08, 1, hood.length - 2);
+    for (const sd of [-1, 1]) K.box(ST, sd * 1.5, ys - 0.18, 0, sd * 1.7, ys + 0.02, 0.1);
+    const tym = archLoop(1.08, ys, ys, kk, 8).slice(1, -1); K.prism(ST, tym.reverse(), -0.68, -0.5); K.box(ST, -1.08, ys - 0.02, -0.7, 1.08, ys + 0.2, -0.46);
+    K.box(ST, -0.05, ys + 0.42, -0.5, 0.05, ys + 1.12, -0.47); K.box(ST, -0.26, ys + 0.8, -0.5, 0.26, ys + 0.9, -0.47);
+    leafDoor(K, OAK, -1.07, 0.03, -0.58, 1.06, ys - 0.07, 1.25, true, 0, { ring: true }); leafDoor(K, OAK, 1.07, 0.03, -0.58, 1.06, ys - 0.07, 0.42, false, 0, { ring: true });
+    K.box(ST, -1.75, -foot, 0, 1.75, 0.0, 0.52); K.box(ST, -1.08, -0.2, -TT, 1.08, 0.02, 0);
+  };
+  towerFace(TWH, TZ1, TWH, ZW, 's'); towerFace(-TWH, ZW, -TWH, TZ1, 'n'); towerFace(-TWH, TZ1, TWH, TZ1, 'w'); towerFace(-TWH, ZW + 0.45, TWH, ZW + 0.45, 'e');
+  // its diagonal buttresses at the west corners, dying into the wall below the belfry
+  const bT = [[1.1, -foot], [1.1, 1.0], [0.98, 1.14], [0.98, 5.4], [0.68, 6.0], [0.68, 9.9], [0.38, 10.5], [0.38, 12.3], [0, 13.0]];
+  for (const sd of [-1, 1]) { K.at(sd * (TWH - 0.2), 0, TZ1 - 0.2, sd * PI / 4); buttress(K, ST, bT, 0.9); K.pop(); col(sd * 3.15, 15.85, 0.55); }
+  // string courses, the belfry cornice on its corbels
+  const sq = (h) => [[-h, ZW], [-h, TZ1], [h, TZ1], [h, ZW]].map((p) => [p[0], p[1] + (p[1] === ZW ? -0.0 : 0)]);
+  const sqT = [[TWH, TZ1], [TWH, ZW], [-TWH, ZW], [-TWH, TZ1]];
+  for (const y of [HN, SH]) K.mould(ST, [[0, y - 0.14], [0.09, y - 0.14], [0.09, y - 0.02], [0, y + 0.1]], sqT, true);
+  K.mould(ST, [[0, TOP - 0.3], [0.1, TOP - 0.3], [0.1, TOP - 0.12], [0.22, TOP - 0.12], [0.22, TOP + 0.06], [0, TOP + 0.06]], sqT, true);
+  for (const [ax, az, bx, bz] of [[TWH, TZ1, TWH, ZW], [-TWH, ZW, -TWH, TZ1], [-TWH, TZ1, TWH, TZ1], [TWH, ZW, -TWH, ZW]]) wallF(ax, az, bx, bz, (L) => { for (let u = -L / 2 + 0.3; u < L / 2; u += 0.6) K.box(ST, u - 0.09, TOP - 0.52, 0, u + 0.09, TOP - 0.3, 0.14); });
+  // floors in the tower, the bell frame
+  K.box(OAK, -TWH + TT, 6.6, ZW + 0.45, TWH - TT, 6.76, TZ1 - TT, 'x'); K.box(OAK, -TWH + TT, SH - 0.1, ZW + 0.45, TWH - TT, SH + 0.06, TZ1 - TT, 'x');
+  for (const sd of [-1, 1]) { K.box(OAK, -TWH + TT - 0.1, TOP - 1.55, TZ + sd * 0.95 - 0.11, TWH - TT + 0.1, TOP - 1.33, TZ + sd * 0.95 + 0.11, 'x'); for (const sx of [-1, 1]) K.beam(OAK, [sx * 1.5, SH + 0.06, TZ + sd * 0.95], [sx * 0.35, TOP - 1.55, TZ + sd * 0.95], 0.16, 0.16); }
+  // the spire: eight slated sides over the square, broaches on the corners, a kick at the eaves; ball, cross and cock
+  { const a = TWH + 0.26, ya = TOP + 0.32, H2 = 12.4, y2 = ya + H2, t8 = 0.41421356, tile = 2.0, ae = a + 0.24, ye = ya - 0.2;
+    const slTri = (A, Bq, Cq) => { const ex = Bq[0] - A[0], ey = Bq[1] - A[1], ez = Bq[2] - A[2], l = Math.hypot(ex, ey, ez), ux = ex / l, uy = ey / l, uz = ez / l; const uv = (P) => { const dx = P[0] - A[0], dy = P[1] - A[1], dz = P[2] - A[2], u = dx * ux + dy * uy + dz * uz; return [u / tile, Math.hypot(dx - u * ux, dy - u * uy, dz - u * uz) / tile]; };
+      const cx = (A[0] + Bq[0] + Cq[0]) / 3, cz = (A[2] + Bq[2] + Cq[2]) / 3 - TZ, e1 = [Bq[0] - A[0], Bq[1] - A[1], Bq[2] - A[2]], e2 = [Cq[0] - A[0], Cq[1] - A[1], Cq[2] - A[2]], n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      if (n[0] * cx + n[2] * cz + n[1] * 0.5 >= 0) K.tri(SL, A, Bq, Cq, [...uv(A), ...uv(Bq), ...uv(Cq)]); else K.tri(SL, A, Cq, Bq, [...uv(A), ...uv(Cq), ...uv(Bq)]); };
+    const oct = []; for (let i = 0; i < 8; i++) { const c = [[1, -t8], [1, t8], [t8, 1], [-t8, 1], [-1, t8], [-1, -t8], [-t8, -1], [t8, -1]][i]; oct.push([c[0] * a, ya, TZ + c[1] * a]); }
+    const apex = [0, y2, TZ];
+    for (let i = 0; i < 8; i++) slTri(oct[i], oct[(i + 1) % 8], apex);
+    const hb = 3.0; for (const [sx, sz] of [[1, 1], [-1, 1], [-1, -1], [1, -1]]) { const cn = [sx * a, ya, TZ + sz * a], p1 = [sx * a, ya, TZ + sz * a * t8], p2 = [sx * a * t8, ya, TZ + sz * a], m = 0.7071 * a * (1 + t8) / 1.4142 * 1.4142 / 1, bq = [sx * (a * (1 + t8) / 2) * (1 - hb / H2), ya + hb, TZ + sz * (a * (1 + t8) / 2) * (1 - hb / H2)]; slTri(p1, cn, bq); slTri(cn, p2, bq); }
+    const sqr = (h, y) => [[h, y, TZ - h], [h, y, TZ + h], [-h, y, TZ + h], [-h, y, TZ - h]], S0 = sqr(a, ya), S1 = sqr(ae, ye);
+    for (let i = 0; i < 4; i++) { const j = (i + 1) % 4, mx = (S1[i][0] + S1[j][0]) / 2, mz = (S1[i][2] + S1[j][2]) / 2 - TZ; K.quadTo(SL, S1[i], S1[j], S0[j], S0[i], mx, 1.2, mz, [0, 0, 2 * ae / tile, 0, 2 * ae / tile, 0.16, 0, 0.16]); K.quadTo(OAK, S1[i], S1[j], [S0[j][0] * 0.9, ye, TZ + (S0[j][2] - TZ) * 0.9], [S0[i][0] * 0.9, ye, TZ + (S0[i][2] - TZ) * 0.9], 0, -1, 0); }
+    K.lathe('iron', [[0, y2 - 0.3], [0.1, y2 - 0.25], [0.2, y2 - 0.05], [0.24, y2 + 0.12], [0.2, y2 + 0.3], [0.08, y2 + 0.42], [0.03, y2 + 0.5]], 10, 0, 0, TZ);
+    K.box('iron', -0.028, y2 + 0.45, TZ - 0.028, 0.028, y2 + 2.0, TZ + 0.028); K.box('iron', -0.42, y2 + 1.25, TZ - 0.024, 0.42, y2 + 1.31, TZ + 0.024);
+    const ck = [[0.0, 0], [0.2, 0.02], [0.3, 0.2], [0.24, 0.33], [0.33, 0.38], [0.22, 0.44], [0.12, 0.4], [0.06, 0.26], [-0.12, 0.22], [-0.3, 0.4], [-0.34, 0.16], [-0.16, 0.04]];
+    for (let i = 1; i < ck.length - 1; i++) { const P = (p) => [p[0], y2 + 2.02 + p[1], TZ]; K.tri('iron', P(ck[0]), P(ck[i]), P(ck[i + 1])); K.tri('iron', P(ck[0]), P(ck[i + 1]), P(ck[i])); }
+  }

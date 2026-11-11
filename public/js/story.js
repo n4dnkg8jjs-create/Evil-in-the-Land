@@ -117,6 +117,8 @@ function loreModel(kind, r) {
     for (let i = 0; i < 8; i++) add(new THREE.BoxGeometry(0.16 - (i === 7 ? 0.08 : 0), 0.018, 0.01), new THREE.MeshStandardMaterial({ color: 0x1a1816 }), [i === 7 ? -0.04 : 0, 0.55 + i * 0.09, 0.103]);
   } else if (kind === 'shrine' && (page = buildLadyShrine(Math.floor(r() * 1e4)))) {   // Our Lady of the Fen (statue.js)
     const lady = page; page = null; g.add(lady); g.userData.update = lady.userData.update;
+    g.userData.faceYaw = lady.userData.info?.yaw || 0;   // she is turned on her pedestal: the close shot comes round to her face
+    g.userData.lift = Math.max(0, (lady.userData.info?.head?.[1] ?? 1.5) - 1.5);   // her face stands this far above where the lore camera looks by default
     const pg = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.28), parch); pg.rotation.set(-Math.PI / 2, 0, r() * 2); pg.position.set(...lady.userData.pageAt); g.add(pg);
     return { g, page: pg };
   } else if (kind === 'shrine' || kind === 'relief') {   // a wayside shrine: pillar, gabled niche; the relief panel, or a worn statue
@@ -234,10 +236,12 @@ export class Story {
     seen[key] = 1; account.set('evil.loreSeen', seen);
     const V = (x, y, z) => new THREE.Vector3(x, y, z), y0 = s.y, a = (s.yaw ?? Math.atan2(g.me.pos.x - s.x, g.me.pos.z - s.z));
     const P = (ang, r, h) => V(s.x + Math.sin(ang) * r, y0 + h, s.z + Math.cos(ang) * r);
+    const fy = s.g?.userData.faceYaw || 0;
+    const up = s.g?.userData.lift || 0;   // a tall thing (Our Lady on her pedestal): the close shot is of its face, not its middle
     g.cinema.play([
-      { dur: 4.2, from: { pos: P(a + 0.9, 4.2, 2.2), look: V(s.x, y0 + 1.0, s.z) }, to: { pos: P(a + 0.35, 3.0, 1.7), look: V(s.x, y0 + 1.2, s.z) }, fov: 42, text: lines[0] },
-      { dur: 4.4, from: { pos: P(a - 0.1, 2.4, 1.5), look: V(s.x, y0 + 1.3, s.z) }, to: { pos: P(a - 0.45, 2.1, 1.6), look: V(s.x, y0 + 1.5, s.z) }, fov: 34, text: lines[1] },
-    ], null, { skippable: true });
+      { dur: 4.2, from: { pos: P(a + 0.9, 4.2 + up, 2.2 + up * 0.5), look: V(s.x, y0 + 1.0 + up * 0.6, s.z) }, to: { pos: P(a + 0.35, 3.0 + up * 0.5, 1.7 + up * 0.7), look: V(s.x, y0 + 1.2 + up * 0.8, s.z) }, fov: 42, text: lines[0] },
+      { dur: 4.4, from: { pos: P(a + fy + (fy ? 0.24 : -0.1), 2.4, 1.5 + up), look: V(s.x, y0 + 1.3 + up, s.z) }, to: { pos: P(a + fy - (fy ? 0.06 : 0.45), 2.1, 1.6 + up), look: V(s.x, y0 + 1.5 + up, s.z) }, fov: 34, text: lines[1] },
+    ], null, { skippable: true, local: true });
   }
   hideCard() { document.getElementById('page')?.classList.remove('show'); }
   // a line from Him, when He shows himself

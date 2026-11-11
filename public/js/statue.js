@@ -551,7 +551,10 @@ function buildStone(seed) {
     o.push([-HW, CAP], [-HW, EAVE + 0.03], [0, EAVE + RISE + 0.09], [HW, EAVE + 0.03], [HW, CAP]);
     for (const p of half) o.push(p); for (let i = half.length - 2; i >= 0; i--) o.push([-half[i][0], half[i][1]]);
     const q = []; for (let i = 0; i < 32; i++) { const a = (i / 32) * TAU; const rr = 0.045 + 0.05 * Math.pow(Math.abs(Math.cos(a * 2)), 0.7); q.push([Math.sin(a) * rr, EAVE + RISE - 0.36 + Math.cos(a) * rr]); }
-    add(at(plate(o.reverse(), 0.15, [q], 0.016), [0, 0, PZ - 0.075]), 0.22); }
+    add(at(plate(o.reverse(), 0.15, [q], 0.016), [0, 0, PZ - 0.075]), 0.22);
+    // a roll moulding round the arch
+    const roll = half.slice(1).map(([x, y]) => V3(x + 0.012, y + 0.008, PZ + 0.07)); for (let i = half.length - 2; i >= 1; i--) roll.push(V3(-half[i][0] - 0.012, half[i][1] + 0.008, PZ + 0.07));
+    add(tube(roll, () => 0.02, 6, 0.3, 44), 0.3); }
   // side beams from pier to wall, each cut to a low arch
   for (const s of [-1, 1]) { const o = [[-0.4, CAP], [-0.4, EAVE], [0.425, EAVE], [0.425, CAP], [0.36, CAP]]; for (let i = 1; i < 10; i++) { const t = i / 10; o.push([lerp(0.36, -0.33, t), CAP + 0.15 * Math.pow(Math.sin(t * PI), 0.6)]); } o.push([-0.33, CAP]);
     const g = plate(o.map(([z, y]) => [-z, y]), 0.14, [], 0.012); g.rotateY(PI / 2); add(at(g, [s * 0.6 - 0.07, 0, 0]), 0.3); }
@@ -585,7 +588,8 @@ function buildVotives(seed) {
   if (VOTIVES.has(seed)) return VOTIVES.get(seed);
   const r = rng(seed ^ 0xa11ce), C = [], K = [], F = [], lit = [];
   const tint = (g, hex) => { const c = new THREE.Color(hex), n = g.attributes.position.count, a = new Float32Array(n * 3); for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g; };
-  const plain = (g) => { const h = g.index ? g : (() => { const n = g.attributes.position.count, a = new Uint32Array(n); for (let i = 0; i < n; i++) a[i] = i; g.setIndex(new THREE.BufferAttribute(a, 1)); return g; })(); if (!h.attributes.normal) h.computeVertexNormals(); for (const k of Object.keys(h.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color') h.deleteAttribute(k); return h; };
+  const plain = (g) => { if (!g.index) { const n = g.attributes.position.count, a = new Uint32Array(n); for (let i = 0; i < n; i++) a[i] = i; g.setIndex(new THREE.BufferAttribute(a, 1)); }
+    if (!g.attributes.normal) g.computeVertexNormals(); for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color') g.deleteAttribute(k); return g; };
   for (const [x, y, z, h, on] of [[-0.3, PT, 0.29, 0.11, 1], [0.31, PT, 0.28, 0.06, 1], [0.24, PT, 0.31, 0.03, 0], [-0.44, ST2, 0.5, 0.13, 0], [-0.35, ST2, 0.58, 0.07, 0], [-0.5, ST2, 0.6, 0.045, 0], [0.3, ST2, 0.57, 0.09, 0], [0.2, ST2, 0.62, 0.04, 0]]) {
     const rr = 0.017 + r() * 0.011, pr = [[0, 0], [rr * 2.1, 0], [rr * 1.6, 0.005], [rr * 1.15, 0.012], [rr, 0.02], [rr * 1.02, h * 0.6], [rr * 0.98, h], [rr * 0.6, h + 0.004], [0.002, h + 0.001]];
     const lg = new THREE.LatheGeometry(pr.map(([a, b]) => new THREE.Vector2(a, b)), 12), lp = lg.attributes.position, lean = (r() - 0.5) * 0.1;
@@ -614,7 +618,7 @@ function buildVotives(seed) {
   VOTIVES.set(seed, out); return out;
 }
 
-let WAX = null, DARK = null;
+let WAX = null, DARK = null, FLAME = null;
 export function buildLadyShrine(seed = 7) {
   const st = buildStone(seed); if (!st) return null;
   const g = new THREE.Group(), sh = new THREE.Group(); g.add(sh); sh.rotation.set(-0.012, 0, 0.016);   // the whole shrine has settled, leaning
@@ -627,12 +631,12 @@ export function buildLadyShrine(seed = 7) {
   const v = buildVotives(seed);
   WAX = WAX || new THREE.MeshStandardMaterial({ color: 0xb9ad8c, roughness: 0.6, emissive: 0x2a1c08, emissiveIntensity: 0.16 });
   DARK = DARK || new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
-  const flame = new THREE.MeshBasicMaterial({ color: 0xffb860, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+  const flame = FLAME = FLAME || new THREE.MeshBasicMaterial({ color: 0xffb860, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
   const wax = new THREE.Mesh(v.wax, WAX); wax.castShadow = true; sh.add(wax); sh.add(new THREE.Mesh(v.dark, DARK)); sh.add(new THREE.Mesh(v.flames, flame));
   stone.userData.U.uCandle.value = v.lit.slice(0, 2);
   // the flames flicker, and their light on the stone with them
   g.userData.update = (time) => { const f = 0.78 + Math.sin(time * 17) * 0.1 + Math.sin(time * 29.3) * 0.08 + Math.sin(time * 7.1) * 0.04; flame.opacity = f; stone.userData.U.uGlow.value = f * 1.15; };
   g.userData.pageAt = [0.3, ST1 + 0.02, 0.86];
-  g.userData.info = { head: st.head.toArray(), yaw: FIG_YAW };
+  g.userData.info = { head: st.head.toArray(), yaw: FIG_YAW };   // where her face is (for a camera that wants to look at it)
   return g;
 }
