@@ -1736,13 +1736,12 @@ export class World {
     plan.walls.forEach((WP, li) => { for (const sp of WP.segs) if (sp.fire) { const [fx, fz] = toW(sp.wx, sp.wz); (this.wallFires || (this.wallFires = [])).push({ x: fx, y: y + info.tops[[0, 2, 1, 3][li]](li === 1 || li === 3 ? -sp.lx : sp.lx), z: fz, s: sp.fire.s, yaw: yaw + WP.rot, wall: true }); } });
     const B = this.buildingMats();
     const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
-    const boardMat = this.boardMat || (this.boardMat = buildingMat(woodTextures(256, [92, 80, 66]), { key: 'board', moss: 0.3, damp: 0.5 }));
     const sootMat = this.sootMat || (this.sootMat = sootMaterial());
     const frameMat = intact ? B.oak : B.charred;
     for (const [list, m, tile] of [[walls, B.stone, 1.6], [timber, frameMat, 1.1], [iron, B.iron, 0.6], [cloth, B.sacking, 1.0], [hay, B.hay, 1.6], [water, B.water, 1]]) {
       if (!list.length) continue; const geo = boxUV(merge(list), tile); const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.water; mesh.receiveShadow = true; g.add(mesh);
     }
-    for (const [k, m, tile] of [['stone', B.stone, 1.6], ['timber', frameMat, 1.1], ['board', boardMat, 1.1], ['plaster', B.plaster, 2.0], ['dark', voidMat, 1], ['glass', B.glass, 0.8], ['iron', B.iron, 0.6],
+    for (const [k, m, tile] of [['stone', B.stone, 1.6], ['timber', frameMat, 1.1], ['board', frameMat, 1.1], ['plaster', B.plaster, 2.0], ['dark', voidMat, 1], ['glass', B.glass, 0.8], ['iron', B.iron, 0.6],
       ['thatch', B.thatch, 2.4], ['roof', roofKind === 'shingle' ? B.shingle : B.slate, 2.0], ['roofBurnt', B.shingleBurnt, 2.2], ['lamp', B.lamp, 1], ['soot', sootMat, 1]]) {
       const geo = K.geometry(k, tile); if (!geo) continue; const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.lamp && m !== sootMat; mesh.receiveShadow = m !== sootMat; g.add(mesh);
     }
@@ -1922,11 +1921,10 @@ export class World {
       const prof = [[0.02, 0], [0.16, 0.0], [0.24, -0.06], [0.27, -0.3], [0.31, -0.6], [0.42, -0.86], [0.56, -1.0], [0.6, -1.05], [0.55, -1.06], [0.5, -1.0]].map(([rr, yy]) => new THREE.Vector2(rr, yy));
       const hang = new THREE.Group(); hang.position.set(x, y, z); hang.rotation.y = yaw;
       const pivot = new THREE.Group(); pivot.position.set(...info.bell);
-      const bell = new THREE.Mesh(new THREE.LatheGeometry(prof, 28), bronze); bell.castShadow = true;
-      const clapper = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.84, 6), bronze); clapper.position.y = -0.4;   // hung from the crown inside
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), bronze); ball.position.y = -0.86;
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.32, 2.2), B.oak); stock.position.y = 0.12; stock.castShadow = true;
-      pivot.add(bell, clapper, ball, stock); hang.add(pivot); this.group.add(hang); this.bellPivot = pivot; this.bellSwing = 0; }
+      // the bell, with its clapper hung from the crown inside
+      const bell = new THREE.Mesh(merge([new THREE.LatheGeometry(prof, 28), xf(new THREE.CylinderGeometry(0.035, 0.035, 0.84, 6), [0, -0.4, 0]), xf(new THREE.SphereGeometry(0.09, 10, 8), [0, -0.86, 0])]), bronze); bell.castShadow = true;
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.32, 2.2), B.oak); stock.position.y = 0.08; stock.castShadow = true;
+      pivot.add(bell, stock); hang.add(pivot); this.group.add(hang); this.bellPivot = pivot; this.bellSwing = 0; }
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     for (const [lx, lz, cr] of info.colliders) this.addCollider(...toW(lx, lz), cr);

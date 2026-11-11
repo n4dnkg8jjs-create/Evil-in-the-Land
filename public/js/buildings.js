@@ -281,7 +281,7 @@ export function buildHouse(K, o) {
     for (let k = 1; k < W.n; k++) W.posts.push(-len / 2 + k * L.sw);
     W.door = segs.find((s) => s.isDoor) || null;
     const nc = Math.max(2, Math.round(2 * W.half / 0.4)); W.cs = 2 * W.half / nc; W.cuts = []; for (let i = 1; i < nc; i++) W.cuts.push(-W.half + i * W.cs);
-    W.jit = []; for (let i = 0; i < nc; i++) { const f = q(); W.jit.push(i < 2 || i >= nc - 2 ? 0 : f < 0.22 ? -COURSE : f < 0.3 ? -2 * COURSE : 0); }   // a broken wall's head is never level
+    W.jit = []; for (let i = 0, st = 0; i < nc; i++) { const f = q(), g = q(); if (f < 0.3) st = g < 0.45 ? 0 : g < 0.85 ? -COURSE : -2 * COURSE; W.jit.push(i < 2 || i >= nc - 2 ? 0 : st); }   // a broken wall's head is never level
     return W;
   };
   const LW = plan.walls;
@@ -355,7 +355,7 @@ export function buildHouse(K, o) {
     posts.forEach((p, j) => { if (j < b0 - 1 || j > b1) return; const lo = (dB === j || dB === j + 1) ? y0 : ya; K.box(TIM, p.u - p.w / 2, lo, zb + 0.008, p.u + p.w / 2, yb, p.w > 0.2 ? 0.012 : -0.002, 'y'); });
     for (let b = b0; b <= b1; b++) {
       const B = bays[b] || { t: 'p' }, e0 = e0f(b), e1 = e1f(b), clip = rectClip(e0, ya, e1, yb);
-      const plaster = (a0, c0, a1, c1) => { if (c1 - c0 < 0.03 || a1 - a0 < 0.03) return; if (o2.daub !== undefined && q() > o2.daub) return; if (B.clad) K.box(BRD, a0, c0, pz - 0.02, a1, c1, pz + 0.012, 'y'); else K.quad('plaster', [a0, c0, pz], [a1, c0, pz], [a1, c1, pz], [a0, c1, pz]); };
+      const plaster = (a0, c0, a1, c1) => { if (c1 - c0 < 0.03 || a1 - a0 < 0.03) return; if (o2.daub !== undefined && (o2.daub <= 0 || q() > o2.daub)) return; if (B.clad) K.box(BRD, a0, c0, pz - 0.02, a1, c1, pz + 0.012, 'y'); else K.quad('plaster', [a0, c0, pz], [a1, c0, pz], [a1, c1, pz], [a0, c1, pz]); };
       const rail = (yr, a0 = e0, a1 = e1, h = 0.13) => K.box(TIM, a0, yr - h / 2, zb + 0.03, a1, yr + h / 2, -0.02, 'x');
       if (B.t === 'w') {
         const c0 = ya + (B.sillH ?? 0.72), c1 = Math.min(yb - 0.14, c0 + (B.h ?? 0.95));
@@ -578,7 +578,7 @@ export function buildHouse(K, o) {
         K.box(TIM, uL + FD, y, f0 - FD, uR, y + 0.2, f0 - 0.06, 'x'); K.box(BRD, uL, y + 0.16, f0 - 0.06, uR, y + 0.2, f0 + jet[i] - FD + 0.01, 'x');
         const nj = Math.max(3, Math.round((uR - uL - 0.3) / 0.62)); for (let j = 0; j <= nj; j++) { const u = uL + 0.11 + (uR - uL - 0.22) * j / nj; K.box(TIM, u - 0.07, y + 0.012, f0 - 0.3, u + 0.07, y + 0.2, f0 + jet[i] - 0.02, 'z'); }
         const bp = [uL + 0.1, uR - 0.1, ...W.posts.filter((_, j) => j % 2 === (W.posts.length % 2 ? 0 : 1))];
-        for (const u of bp) bracket(u, y + 0.012, jet[i] + (f0 < 0 ? 0 : 0));
+        K.at(0, 0, f0); for (const u of bp) bracket(u, y + 0.012, jet[i]); K.pop();
       } else K.box(TIM, uL + FD, y, f0 - FD, uR, y + 0.2, f0 + (style === 'stock' ? 0.015 : 0), 'x');
     }));
     if (style === 'stock') {
@@ -706,7 +706,7 @@ export function buildHouse(K, o) {
       }
       // smoke-black on the wall heads, inside and out
       for (const c of cols) { if (!c.iv.length) continue; const [a, b] = c.iv[c.iv.length - 1]; if (b - a < 0.5) continue; const ua = c.ua / 1.37, ub = c.ub / 1.37, yo = Math.max(a, b - 1.45), yi = Math.max(a, b - 2.3);
-        const vt = 0.12 + ((c.ua * 7.31) % 1 + 1) % 1 * 0.22;
+        const vt = 0.14;
         K.quad('soot', [c.ua, yo, 0.012], [c.ub, yo, 0.012], [c.ub, b, 0.012], [c.ua, b, 0.012], [0.5, 0.95, 0.5, 0.95, 0.5, vt, 0.5, vt]);
         if (c.ua > -W.half + WT + 0.01 && c.ub < W.half - WT - 0.01) K.quad('soot', [c.ub, yi, -WT - 0.012], [c.ua, yi, -WT - 0.012], [c.ua, b, -WT - 0.012], [c.ub, b, -WT - 0.012], [0.5, 1, 0.5, 1, 0.5, 0.05, 0.5, 0.05]); }
     }));
@@ -716,7 +716,7 @@ export function buildHouse(K, o) {
       if (best) inW(best.i, (W, i) => {
         const b0 = best.run[0], b1 = best.run[best.run.length - 1], whole = b0 === 0 && b1 === W.n - 1, B = layout(W), yT = GF + 2.4;
         addWindows(B, 1 + (W.n > 5 ? 1 : 0), {});
-        const ex = frame(i, GF, yT, 0, B, { b0, b1, daub: 0.3, leftPost: true, fl: 0, fr: 0 });
+        const ex = frame(i, GF, yT, 0, B, { b0, b1, daub: 0, leftPost: true, fl: 0, fr: 0 });
         if (whole && i % 2 === 0 && q() < 0.7) gableEnd(i, yT, 0, ex, { bare: true, win: false, strut: Math.floor(q() * 3) });
         info.frame = [best.i, b0, b1];
       });
@@ -754,8 +754,8 @@ export function buildHouse(K, o) {
       const sx = plan.chimney.sx, hx = sx * (w / 2 - 0.24), top = snapC(plan.chimney.h), X = (a) => hx - sx * a, bx = (a, y0, c, y1, z0, z1) => K.box('stone', Math.min(X(a), X(c)), y0, z0, Math.max(X(a), X(c)), y1, z1);
       bx(0, 0, 0.2, 1.6, -0.62, 0.62); bx(0.2, 0, 0.85, 1.28, -0.62, -0.38); bx(0.2, 0, 0.85, 1.28, 0.38, 0.62); bx(0.2, 1.28, 0.85, 1.6, -0.62, 0.62);
       bx(0, 1.6, 0.72, 2.24, -0.52, 0.52); bx(0, 2.24, 0.62, top, -0.42, 0.42); bx(0, top, 0.62, top + COURSE, -0.42, 0.05 + q.range(-0.2, 0.2));
-      K.quadTo('dark', [X(0.21), 0, -0.38], [X(0.21), 0, 0.38], [X(0.21), 1.28, 0.38], [X(0.21), 1.28, -0.38], -sx, 0, 0);
       K.push(new THREE.Matrix4().makeRotationY(-sx * PI / 2).setPosition(X(0.862), 0, 0)); soot(-0.6, 0.6, 1.3, 3.2, 0); K.pop();
+      K.push(new THREE.Matrix4().makeRotationY(-sx * PI / 2).setPosition(X(0.212), 0, 0)); for (let k2 = 0; k2 < 2; k2++) K.quad('soot', [-0.38, 0, 0], [0.38, 0, 0], [0.38, 1.28, 0], [-0.38, 1.28, 0], [0.5, 0.06, 0.5, 0.06, 0.5, 0.12, 0.5, 0.12]); K.pop();
     }
     for (const sb of plan.stones14) rest('stone', sb.lx, sb.lz, sb.sz, sb.sz * 0.6, sb.sz * 0.8, sb.rx, sb.ry, sb.rz, gH(sb.lx, sb.lz), sb.sz * 0.12);
   } else {
@@ -865,9 +865,9 @@ export function buildChurch(K, o) {
   const longWall = (s, x, zA, zB, H, Tw, wz, bz, win) => wallF(s * x, s > 0 ? zA : zB, s * x, s > 0 ? zB : zA, (L) => {
     const zm = (zA + zB) / 2, zOf = (u) => zm - s * u, uOf = (z) => s * (zm - z), nc = Math.round(L / 0.4), cs = L / nc, cuts = []; for (let i = 1; i < nc; i++) cuts.push(-L / 2 + i * cs);
     const top = (u) => { const c = clamp(Math.floor((u + L / 2) / cs), 0, nc - 1); return snapC0(topAtZ(s, zOf(-L / 2 + (c + 0.5) * cs), H)); };
-    const holes = [], wins = [];
+    const holes = [], wins = [], notch = [];
     for (const zw of wz) { const uc = uOf(zw); let mn = 1e9; for (let u = uc - win.bw + 0.05; u <= uc + win.bw; u += 0.19) mn = Math.min(mn, top(u));
-      if (mn >= H - 0.01) { holes.push([uc - win.bw, uc + win.bw, win.y0, win.y1]); wins.push(uc); } else holes.push([uc - win.hw, uc + win.hw, win.sill, Infinity]); }
+      if (mn >= H - 0.01) { holes.push([uc - win.bw, uc + win.bw, win.y0, win.y1]); wins.push(uc); } else { holes.push([uc - win.hw, uc + win.hw, win.sill, Infinity]); notch.push([uc - win.hw - 0.3, uc + win.hw + 0.3, win.sill]); } }
     const cols = wallRun(K, ST, -L / 2, L / 2, -foot, top, Tw, holes, cuts);
     for (const uc of wins) { gothicWindow(K, { uc, T: Tw, q, ...win }); if (H === HN) { const ya = archApex(win.hw + 0.14, win.ys) - 0.5; K.quad('soot', [uc - 0.95, ya, 0.012], [uc + 0.95, ya, 0.012], [uc + 0.95, H - 0.2, 0.012], [uc - 0.95, H - 0.2, 0.012], [0, 0, 1, 0, 1, 0.8, 0, 0.8]); } }
     for (const c of cols) {
@@ -877,6 +877,7 @@ export function buildChurch(K, o) {
     }
     for (const [zb2, pr, wd] of bz) { const u = uOf(zb2), t = top(u); if (t < 1.5) continue; K.at(u, 0, 0); buttress(K, ST, pr, wd, t >= H - 0.01 ? 1e9 : t + 0.3); K.pop(); const hx = s * (x + 0.55); col(hx, zb2, 0.5); }
     info['top' + s + (H === HN ? 'n' : 'c')] = (z) => top(uOf(z));
+    info['sol' + s + (H === HN ? 'n' : 'c')] = (z) => { const u = uOf(z); for (const nt of notch) if (u > nt[0] && u < nt[1]) return Math.min(nt[2], top(u)); for (const uc of wins) if (Math.abs(u - uc) < win.bw) return -1; return top(u); };
   });
   const bN = [[0.95, -foot], [0.95, 0.92], [0.85, 1.04], [0.85, 3.5], [0.55, 4.05], [0.55, 5.6], [0, 6.5]], bC = [[0.78, -foot], [0.78, 0.92], [0.68, 1.04], [0.68, 3.0], [0.4, 3.5], [0.4, 4.7], [0, 5.4]];
   const wN = { sill: 2.62, ys: 4.9, hw: 0.6, bw: 1.0, y0: 2.4, y1: 21 * COURSE, glassP: 0.3 }, wC = { sill: 2.62, ys: 4.3, hw: 0.5, bw: 0.9, y0: 2.4, y1: 18 * COURSE, glassP: 0.5 };
@@ -956,7 +957,7 @@ export function buildChurch(K, o) {
   K.box(OAK, -TWH + TT, 6.6, ZW + 0.45, TWH - TT, 6.76, TZ1 - TT, 'x'); K.box(OAK, -TWH + TT, SH - 0.1, Z0 + TT, TWH - TT, SH + 0.06, TZ1 - TT, 'x');
   for (const sd of [-1, 1]) { K.box(OAK, -TWH + TT - 0.1, TOP - 1.8, TZ + sd * 0.95 - 0.11, TWH - TT + 0.1, TOP - 1.58, TZ + sd * 0.95 + 0.11, 'x'); for (const sx of [-1, 1]) K.beam(OAK, [sx * 1.5, SH + 0.06, TZ + sd * 0.95], [sx * 0.35, TOP - 1.8, TZ + sd * 0.95], 0.16, 0.16); }
   // the spire: eight slated sides over the square, broaches on the corners, a kick at the eaves; ball, cross and cock
-  { const a = TWH + 0.26, ya = TOP + 0.32, H2 = 12.4, y2 = ya + H2, t8 = 0.41421356, tile = 2.0, ae = a + 0.24, ye = ya - 0.2;
+  { const a = TWH + 0.26, ya = TOP + 0.26, H2 = 12.4, y2 = ya + H2, t8 = 0.41421356, tile = 2.0, ae = a + 0.24, ye = ya - 0.2;
     const slTri = (A, Bq, Cq) => { const ex = Bq[0] - A[0], ey = Bq[1] - A[1], ez = Bq[2] - A[2], l = Math.hypot(ex, ey, ez), ux = ex / l, uy = ey / l, uz = ez / l; const uv = (P) => { const dx = P[0] - A[0], dy = P[1] - A[1], dz = P[2] - A[2], u = dx * ux + dy * uy + dz * uz; return [u / tile, Math.hypot(dx - u * ux, dy - u * uy, dz - u * uz) / tile]; };
       const cx = (A[0] + Bq[0] + Cq[0]) / 3, cz = (A[2] + Bq[2] + Cq[2]) / 3 - TZ, e1 = [Bq[0] - A[0], Bq[1] - A[1], Bq[2] - A[2]], e2 = [Cq[0] - A[0], Cq[1] - A[1], Cq[2] - A[2]], n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
       if (n[0] * cx + n[2] * cz + n[1] * 0.5 >= 0) K.tri(SL, A, Bq, Cq, [...uv(A), ...uv(Bq), ...uv(Cq)]); else K.tri(SL, A, Cq, Bq, [...uv(A), ...uv(Cq), ...uv(Bq)]); };
@@ -981,8 +982,8 @@ export function buildChurch(K, o) {
     });
     // the end walls rise with the roof
     for (const [z, sg] of [[z0, -1], [z1, 1]]) { const xa = z === z1 ? -WN : x1; K.quadTo(ST, [x0, h0, z], [xa, h0, z], [xa, h0 + (h1 - h0) * (xa - x0) / (x1 - x0), z], [x0, h0, z], 0, 0, sg); K.quadTo(ST, [x0, h0, z - sg * Ts], [xa, h0, z - sg * Ts], [xa, h0 + (h1 - h0) * (xa - x0) / (x1 - x0), z - sg * Ts], [x0, h0, z - sg * Ts], 0, 0, -sg); }
-    const sl = Math.hypot(x1 - x0 + 0.3, h1 - h0 + 0.2), U = [0, 0, -1], V = [(x1 - x0 + 0.3) / sl, (h1 - h0 + 0.2) / sl, 0];
-    roofSheet(K, SL, OAK, [x0 - 0.3, h0 - 0.1, z1], U, V, [0, z1 - z0 + 0.25], [0, sl], 0.07, null);
+    const mS = (h1 - h0) / (x1 - x0), kS = Math.hypot(1, mS), sl = (x1 - x0 + 0.3) * kS, U = [0, 0, -1], V = [1 / kS, mS / kS, 0];
+    roofSheet(K, SL, OAK, [x0 - 0.3, h0 - 0.3 * mS, z1], U, V, [0, z1 - z0 + 0.25], [0, sl], 0.07, null);
     for (const z of [-3.2, -4.4, -5.6]) col(x0 + 0.25, z, 0.7); col(-5.2, z0 + 0.25, 0.62); col(-4.3, z0 + 0.25, 0.62); col(-5.45, z1 - 0.2, 0.62);
   }
 
@@ -998,14 +999,20 @@ export function buildChurch(K, o) {
   const slope = (s, half, H, zA, zB, keep) => {   // one side of a pitched roof from z = zA to zB, eaves at s * half
     const sl = (half + eo) / cosR, U = [0, 0, s > 0 ? -1 : 1], V = [-s * cosR, sinR, 0], O = [s * (half + eo), H - eo * tanR, s > 0 ? zA : zB];
     const L = zA - zB, nu = Math.max(1, Math.round(L / 0.56)), nv = Math.max(1, Math.round(sl / 0.62)), us = [], vs = []; for (let i = 0; i <= nu; i++) us.push(L * i / nu); for (let j = 0; j <= nv; j++) vs.push(sl * j / nv);
-    roofSheet(K, SL, CHAR, O, U, V, us, vs, th, keep && ((i, j) => { const u = (us[i] + us[i + 1]) / 2, z = s > 0 ? zA - u : zB + u; return keep(z, (j + 0.5) / nv, i, j); }));
+    let kp = null;
+    if (keep) { const G = [], zAt = (i) => { const u = (us[i] + us[i + 1]) / 2; return s > 0 ? zA - u : zB + u; };
+      for (let i = 0; i < nu; i++) { G.push([]); for (let j = 0; j < nv; j++) G[i].push(keep(zAt(i), (j + 0.5) / nv, i, j) ? 1 : 0); }
+      const st = []; for (let i = 0; i < nu; i++) if (G[i][0] === 1) { G[i][0] = 2; st.push([i, 0]); } for (const i of [0, nu - 1]) for (let j = 0; j < nv; j++) if (G[i][j] === 1) { G[i][j] = 2; st.push([i, j]); }
+      while (st.length) { const [i, j] = st.pop(); for (const [a, b] of [[i + 1, j], [i - 1, j], [i, j + 1], [i, j - 1]]) if (a >= 0 && b >= 0 && a < nu && b < nv && G[a][b] === 1) { G[a][b] = 2; st.push([a, b]); } }
+      kp = (i, j) => G[i][j] === 2; }
+    roofSheet(K, SL, CHAR, O, U, V, us, vs, th, kp);
   };
   const gone = (s, z, t, H) => { for (const g of dmg[s]) { if (H === HC && !(g.zc < -2.5)) continue; if (H === HN && g.zc < -2.5) continue; if (Math.abs(z - g.zc) - g.hw < (g.h < 1 ? 1.5 : 0.9) * (1 - t * 1.25)) return true; } return false; };
   const hC = [0, 1].map(() => ({ s: q() < 0.5 ? -1 : 1, z: q.range(-5.6, -3.0), t: q.range(0.3, 0.8), rz: q.range(0.5, 1.0), rt: q.range(0.08, 0.16) }));
   const keepC = (s) => (z, t, i, j) => { if (gone(s, z, t, HC)) return false; for (const h of hC) if (h.s === s && ((z - h.z) / h.rz) ** 2 + ((t - h.t) / h.rt) ** 2 < 1) return false; return true; };
   const burnZ = (s, t) => 3.4 + 1.6 * Math.sin(t * 3.4 + (s > 0 ? 0.4 : 2.0)) + (s > 0 ? -0.4 : 0.9);
   const keepN = (s) => (z, t, i, j) => z < burnZ(s, t) + (hash(i, j, s + 3) - 0.5) * 1.3 && !gone(s, z, t, HN) && !(hash(i, j, 11 + s) < 0.035);
-  for (const s of [-1, 1]) { slope(s, XC, HC, ZE, zc8, keepC(s)); slope(s, WN, HN, ZE + T, ZW - T, keepN(s)); }
+  for (const s of [-1, 1]) { slope(s, XC, HC, ZE, zc8, keepC(s)); slope(s, WN, HN, ZW - T, ZE + T, keepN(s)); }
   // the apse's roof: five facets meeting at the ridge's end
   { const R0 = [0, yRC, zc8], ye = HC - eo * tanR, re = XC + eo, pts = [[re, zc8], [re, zc8 - re * 0.4142], [re * 0.4142, zc8 - re], [-re * 0.4142, zc8 - re], [-re, zc8 - re * 0.4142], [-re, zc8]], tile = 2.0;
     for (let i = 0; i < 5; i++) { const a = [pts[i][0], ye, pts[i][1]], b = [pts[i + 1][0], ye, pts[i + 1][1]], mx = (a[0] + b[0]) / 2, mz = (a[2] + b[2]) / 2 - zc8, el = Math.hypot(b[0] - a[0], b[2] - a[2]), sl = Math.hypot(Math.hypot(mx, mz), yRC - ye), nl = Math.hypot(mx, mz) || 1, N = [mx / nl * sinR, cosR, mz / nl * sinR];
@@ -1024,19 +1031,22 @@ export function buildChurch(K, o) {
 
   // ---- the nave's roof timbers: couples of rafters with their collars, charred, fewer toward the west; tie beams
   // on the wall heads; what fell lies in the nave
-  { const full = (s, z) => info['top' + s + 'n'](z) >= HN - 0.01, nT = 12;
+  { const full = (s, z) => info['top' + s + 'n'](z) >= HN - 0.01, nT = 12, pres = [];
     for (let k2 = 0; k2 < nT; k2++) {
       const z = ZE + T + 0.45 + k2 * (ZW - ZE - 2 * T - 0.9) / (nT - 1), li = Math.min(7, Math.floor(k2 * 8 / nT)), has = [false, false];
       [-1, 1].forEach((s, si) => {
         const under = z < burnZ(s, 0.5) + 0.3 && !gone(s, z, 0.5, HN), lg = plan.raf[Math.min(4, li)][si], p = under ? 1 : (lg ? 0.62 : 0.3) - k2 * 0.02;
-        if (!full(s, z) || q() > p) { if (!under && q() < 0.5 && full(s, z)) K.beam(CHAR, [s * 4.0, HN + 0.1, z + q.range(-0.2, 0.2)], [s * q.range(0.3, 1.6), q.range(0.1, 0.5), z + q.range(-1.2, 1.2)], 0.16, 0.2, q.range(0, 1)); return; }
+        if (!full(s, z) || q() > p) { if (!under && q() < 0.5 && full(s, z)) K.beam(CHAR, [s * 4.25, HN + 0.07, z], [s * q.range(0.3, 1.6), 0.1, z + q.range(-1.2, 1.2)], 0.16, 0.2, q.range(0, 1)); return; }
         has[si] = true; const xa = 4.82, xb = 0.07, yl = (x) => HN + (WN - x) * tanR, P = [[xa, yl(xa)], [xb, yl(xb)], [xb - sinR * 0.2, yl(xb) - cosR * 0.2], [xa - sinR * 0.2, yl(xa) - cosR * 0.2]].map((p2) => [s * p2[0], p2[1]]);
         K.prism(CHAR, s > 0 ? P : P.reverse(), z - 0.07, z + 0.07, [-s * cosR, sinR]);
       });
       if (has[0] && has[1]) { const y = HN + WN * tanR * 0.56, hw = WN * 0.44 - 0.2; K.box(CHAR, -hw, y - 0.1, z - 0.06, hw, y + 0.1, z + 0.06, 'x'); if (k2 % 3 === 0) K.box(CHAR, -0.08, y + 0.1, z - 0.06, 0.08, yRN - 0.3, z + 0.06, 'y'); }
       if (k2 % 2 === 0 && plan.tie[li] && full(-1, z) && full(1, z)) K.box(CHAR, -4.3, HN - 0.27, z - 0.1, 4.3, HN - 0.03, z + 0.1, 'x');
       else if (k2 % 2 === 0 && q() < 0.6) rest(CHAR, q.range(-2.5, 2.5), z, q.range(3, 6), 0.2, 0.22, q.range(-0.05, 0.05), q.range(-0.6, 0.6), q.range(-0.04, 0.04), 0, 0.01, 'x');
+      pres.push({ z, has });
     }
+    // laths still nailed across the rafters where two neighbours stand
+    for (let k2 = 0; k2 < nT - 1; k2++) [-1, 1].forEach((s, si) => { const a = pres[k2], b = pres[k2 + 1]; if (!a.has[si] || !b.has[si]) return; for (const t of [0.12, 0.26, 0.4, 0.54, 0.68, 0.82]) { if (q() < 0.4) continue; const x = WN * (1 - t) - 0.1, y = HN + (WN - x) * tanR; K.box(CHAR, s * x - 0.03, y - 0.012, a.z - 0.1, s * x + 0.03, y + 0.03, b.z + 0.1, 'z'); } });
     K.box(CHAR, -0.09, yRN - 0.36, ZE + T, 0.09, yRN - 0.14, Math.max(burnZ(1, 1), burnZ(-1, 1)) + 0.8, 'z');
     for (let k2 = 0; k2 < 4; k2++) { const z = ZE - 0.6 - k2 * 1.1; for (const s of [-1, 1]) { const xa = 3.55, xb = 0.07, yl = (x) => HC + (XC - x) * tanR, P = [[xa, yl(xa)], [xb, yl(xb)], [xb - sinR * 0.18, yl(xb) - cosR * 0.18], [xa - sinR * 0.18, yl(xa) - cosR * 0.18]].map((p2) => [s * p2[0], p2[1]]); K.prism(CHAR, s > 0 ? P : P.reverse(), z - 0.06, z + 0.06, [-s * cosR, sinR]); } }
     // slates slid off and smashed along the wall feet inside, and out under the eaves
@@ -1050,14 +1060,14 @@ export function buildChurch(K, o) {
     slabXZ(K, ST, o8(0.6), 0, 0.14); slabXZ(K, ST, o8(0.26), 0.14, 0.62); slabXZ(K, ST, o8(0.5), 0.62, 1.02); slabXZ(K, 'dark', o8(0.38), 1.0, 1.024); col(fx, fz, 0.6); }
   plan.pews.forEach((row, k2) => row.forEach((pw, si) => {
     const sx = si ? 1 : -1, pz = -0.5 + k2 * 1.42;
-    K.rot(sx * 2.15 + (pw.over ? pw.dx : 0), pw.over ? 0.24 : 0, pz, pw.over ? PI / 2 - 0.1 : 0, pw.ry, 0);
+    K.rot(sx * 2.15 + (pw.over ? pw.dx : 0), pw.over ? 0.24 : 0, pz, 0, pw.ry, 0); K.rot(0, 0, 0, pw.over ? PI / 2 - 0.1 : 0, 0, 0);
     K.box(CHAR, -1.5, 0.41, -0.22, 1.5, 0.49, 0.22, 'x'); K.box(CHAR, -1.5, 0.49, 0.18, 1.5, 1.02, 0.24, 'x'); for (const e of [-1.46, 1.46]) K.box(CHAR, e - 0.04, 0, -0.22, e + 0.04, 0.72, 0.24, 'y');
-    K.pop();
+    K.pop(); K.pop();
   }));
   for (const s of [-1, 1]) plan.bays[s < 0 ? 0 : 1].forEach((b, k) => {
     if (!b.broken) return; const zc0 = -9 + 2 * k; if (!b.breach && !(zc0 > -1.5) && !(s > 0 && zc0 < -2.5 && zc0 > -8)) return;
-    const zc = b.breach ? (BR0 + BR1) / 2 : zc0, xw = zc0 < -2.5 ? XC - TC / 2 : WN - T / 2, tf = info['top' + s + (zc0 < -2.5 ? 'c' : 'n')];
-    for (const st of b.stones) { const z = zc + st.dz * (b.breach ? 1.6 : 1.1), sz = st.sz * 1.3; rest(ST, s * (xw + st.dx), z, sz, sz * 0.55, sz * 0.8, st.rx * 0.1, st.ry, st.rz * 0.1, tf(z), 0.015); }
+    const zc = b.breach ? (BR0 + BR1) / 2 : zc0, xw = zc0 < -2.5 ? XC - TC / 2 : WN - T / 2, tf = info['sol' + s + (zc0 < -2.5 ? 'c' : 'n')];
+    for (const st of b.stones) { const z = zc + st.dz * (b.breach ? 1.6 : 1.1), sz = st.sz * 1.3; if (tf(z) < 0) continue; rest(ST, s * (xw + st.dx), z, sz, sz * 0.55, sz * 0.8, st.rx * 0.1, st.ry, st.rz * 0.1, tf(z), 0.015); }
     for (const rb of b.rubble) { const x = s * (xw + rb.off), z = zc + rb.dz * (b.breach ? 1.15 : 1), sz = rb.sz * 1.25, ins = Math.abs(x) < (zc0 < -2.5 ? XC - TC : WN - T); if (b.breach && Math.abs(rb.off) < 0.75 && Math.abs(z - zc) < 0.9 && rb.sz > 0.3) continue;
       rest(ST, x, z, sz, sz * 0.55, sz * 0.85, rb.rx * 0.12, rb.ry, rb.rz * 0.12, ins || Math.abs(rb.off) < 0.4 ? 0 : gH(x, z), sz * 0.1); }
   });
