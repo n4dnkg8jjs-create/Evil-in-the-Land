@@ -237,6 +237,7 @@ function setupMenus() {
   app.net.on('k:lobbyState', (m) => { if (app.lobby && !app.lobby.host) { app.lobby.state = m; renderLobby(); } });
   app.net.on('peer', (m) => { if (app.lobby?.host) { app.lobby.players.set(m.id, { id: m.id, name: m.name, loadout: null, ready: false }); broadcastLobby(); app.ui.toast?.(`${m.name} joins the company`, 2); } });
   app.net.on('left', (m) => { if (app.lobby?.host) { app.lobby.players.delete(m.id); broadcastLobby(); } });
+  app.net.on('status', () => { if (app.lobby && !app.lobby.solo) $('lobbyNet').textContent = app.net.statusLine(); });
   app.net.on('k:start', (m) => { if (!app.net.isHost) startGame(m); });
   app.net.on('k:lobby', () => { if (app.game && !app.net.isHost) app.endGame(false); });
   app.net.on('hostLeft', () => { const wasGame = !!app.game; if (app.game) app.endGame(false, true); else { app.lobby = null; app.ui.show('title'); } $('titleErr').textContent = 'The host has left. The company is disbanded.'; });
@@ -394,6 +395,7 @@ function enterLobby(solo = false) {
   $('btnStart').hidden = !host; $('btnReady').hidden = host;
   $('lobbyCode').textContent = solo ? '—' : app.net.code;
   $('lobbyAddr').textContent = solo ? '' : app.net.mode === 'p2p' ? 'Friends open this game\'s page, choose Join with a Code and type this code. Nothing to download.' : '';
+  $('lobbyNet').textContent = solo ? '' : app.net.statusLine();   // which ways into the lobby are open, or how this player is linked
   $('inviteRow').hidden = solo || !host;
   if (!solo && app.net.mode === 'ws') fetch('api/info').then((r) => r.json()).then((info) => { $('lobbyAddr').textContent = info.lan.length ? `Friends join with address ${info.lan[0]}:${info.port} (on the game's web page, or open http://${info.lan[0]}:${info.port})` : ''; }).catch(() => {});
   if (solo) { $('optAI').value = store.get('evil.soloAI', '3'); }

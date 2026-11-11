@@ -208,15 +208,31 @@ Testing gotchas:
   1. **Direct WebRTC via PeerJS.** The library loads from a pinned jsdelivr URL and uses the free PeerJS cloud
      broker. The peer id is `evil-in-the-land-<5-letter code>`. It uses Google STUN plus Open Relay static-auth TURN
      with short-lived HMAC logins; that TURN path is unverified and may not work.
-  2. **MQTT relay fallback.** If the direct link hasn't opened after 8 s, or the PeerJS broker or the host is
-     unreachable, the guest connects through a public MQTT broker over WSS.
-     - `public.cloud.shiftr.io` on port 443 (user and password `public`) is the one that works through strict
-       networks. EMQX, HiveMQ and Mosquitto, on non-443 ports, are backups.
-     - The host always listens on the relay too (`relayHost`), on topics `evil-in-the-land/v<PROTO>/<code>/h` and
-       `.../g/<guestKey>`.
+  2. **MQTT relay fallback.** A guest connects to the relay from the start and begins knocking there if the direct
+     link is seen to fail (PeerJS broker unreachable, no such peer, ICE failed) or has no answer after 5 s.
+     - The brokers are public MQTT services over WSS and are **not bridged to each other**, so host and guest must
+       meet on the same one. Both therefore use **all of them at once** (`openRelays`): the host listens on every
+       broker it reaches and keeps retrying the rest; a guest knocks on every one it reaches; the first broker to
+       carry the knock keeps that guest's link (the host ignores the same guest key on another broker). The old code
+       took "the first broker that answers" on each side separately, so the two could end up on different brokers.
+     - `public.cloud.shiftr.io` on port 443 (user and password `public`) is the one that gets through strict
+       networks. EMQX, HiveMQ and Mosquitto, on non-443 ports, are the others.
+     - Topics: `evil-in-the-land/v<PROTO>/<code>/h` (to the host) and `.../g/<guestKey>` (to a guest).
      - `RelayConn` mimics a PeerJS DataConnection, so the rest of the code doesn't care which path is in use.
+     - Keep-alive is 20 s: a lobby idles for minutes while the code is passed round, and idle sockets get dropped.
+     - A guest repeats its `join` every 2.5 s on each open path until answered; the host answers a repeat again.
+       The `join` carries a random `key` so the host seats a guest once when it knocks by two paths.
      - `?relay` makes a guest skip the direct attempt.
   3. **The local `server.js` WebSocket relay,** used only when the page is served by `server.js`.
+- **Libraries:** PeerJS and mqtt.js are served from `public/lib/` (the CDN copy is a second try).
+- **Diagnostics:** the lobby shows a line under the code (`net.statusLine()`): for the host, which ways in are open
+  ("direct open · relay open (3 of 4)"); for a guest, how it is linked. A failed join ends with a bracketed reason,
+  e.g. `[direct: blocked by the network; relay reached (2 of 4), no answer from the host]`. Ask the owner for these
+  when they report a failure.
+- **Testing without the public services** (they are unreachable from the cloud sandbox): run two local MQTT brokers
+  (aedes over websocket-stream) and a local PeerJS server (`peer`), and open the game with
+  `?peerjs=localhost:9000&brokers=ws://localhost:1884,ws://localhost:1885`. Giving host and guest different broker
+  lists, or a dead `peerjs=` port, simulates blocked networks.
 - **Why the fallback exists:** the owner's friends got "Could not reach the host" because their networks blocked
   direct links. The relay fixed it in testing; after the fix, the owner hadn't yet confirmed it on their real
   networks.
@@ -241,9 +257,11 @@ Testing gotchas:
 ## Known open issues and rough edges
 
 All reported or flagged, none confirmed fixed by the owner:
-- **Multiplayer relay:** awaiting the owner's confirmation on real networks. The public brokers are free shared
-  services; if shiftr.io goes down, strict networks may fail again. A paid or owned TURN or relay would be the robust
-  fix.
+- **Multiplayer:** the relay now uses every broker at once and passes local simulations of blocked networks, but it
+  has not been confirmed on the owner's friends' real networks. The public brokers are free shared services with
+  unknown rate limits (the host sends each guest a snapshot 15 times a second through them). A link that dies in
+  the middle of a game still sends that player to the title; there is no rejoin. An owned relay (Supabase Realtime,
+  a Cloudflare Worker, or a paid TURN) would be the robust fix.
 - **Fen Lady statue:** third pass, better but not perfect. The veil still hugs the head like a cap, the gown reads a
   little columnar from the front, and the eyes are blank stone.
 - **Bosses:** difficulty is tuned only against a test bot. The Serpent's open lower jaw reads as a flat pink slab.
