@@ -281,6 +281,7 @@ export function buildHouse(K, o) {
     for (let k = 1; k < W.n; k++) W.posts.push(-len / 2 + k * L.sw);
     W.door = segs.find((s) => s.isDoor) || null;
     const nc = Math.max(2, Math.round(2 * W.half / 0.4)); W.cs = 2 * W.half / nc; W.cuts = []; for (let i = 1; i < nc; i++) W.cuts.push(-W.half + i * W.cs);
+    W.jit = []; for (let i = 0; i < nc; i++) { const f = q(); W.jit.push(i < 2 || i >= nc - 2 ? 0 : f < 0.22 ? -COURSE : f < 0.3 ? -2 * COURSE : 0); }   // a broken wall's head is never level
     return W;
   };
   const LW = plan.walls;
@@ -295,7 +296,8 @@ export function buildHouse(K, o) {
       const h = lerp(S[i].top, S[j].top, clamp(f - i, 0, 1)), dl = u + W.half, dr = W.half - u;
       return Math.max(h, W.cL - Math.max(0, dl - 0.45) * 1.5, W.cR - Math.max(0, dr - 0.45) * 1.5);
     };
-    W.top = intact ? () => GF : (u) => { const c = clamp(Math.floor((u + W.half) / W.cs), 0, Math.round(2 * W.half / W.cs) - 1); return snapC(W.raw(-W.half + (c + 0.5) * W.cs)); };
+    W.top0 = (u) => { const c = clamp(Math.floor((u + W.half) / W.cs), 0, W.jit.length - 1); return snapC(W.raw(-W.half + (c + 0.5) * W.cs)); };
+    W.top = intact ? () => GF : (u) => { const c = clamp(Math.floor((u + W.half) / W.cs), 0, W.jit.length - 1), t = W.top0(u); return W.keep && u > W.keep[0] && u < W.keep[1] ? t : Math.max(COURSE, t + (t > 1.3 ? W.jit[c] : 0)); };
   }
   info.tops = Ws.map((W) => W.top); info.walls = Ws;
 
@@ -342,16 +344,18 @@ export function buildHouse(K, o) {
     const W = Ws[i], uL = -(W.half + (o2.fl ?? fz)), uR = W.half + (o2.fr ?? fz), posts = o2.posts || W.posts.map((u) => ({ u, w: PW }));
     const E = [uL + FD, ...posts.map((p) => p.u), uR - FD], n = E.length - 1, ya = y0 + SILL, yb = y1 - PLATE, H = yb - ya, zb = -FD, pz = -0.05;
     const e0f = (b) => b === 0 ? E[0] : E[b] + posts[b - 1].w / 2, e1f = (b) => b === n - 1 ? E[n] : E[b + 1] - posts[b].w / 2;
+    const b0 = o2.b0 ?? 0, b1 = o2.b1 ?? n - 1, sL = b0 === 0 ? uL + (o2.leftPost ? 0 : FD) : E[b0] - posts[b0 - 1].w / 2, sR = b1 === n - 1 ? uR : E[b1 + 1] + posts[b1].w / 2;
     K.at(0, 0, fz);
     const dB = bays.findIndex((b) => b && b.cut);
-    if (dB >= 0) { if (e0f(dB) - (uL + FD) > 0.02) K.box(TIM, uL + FD, y0, zb, e0f(dB), ya, 0, 'x'); if (uR - e1f(dB) > 0.02) K.box(TIM, e1f(dB), y0, zb, uR, ya, 0, 'x'); }
-    else K.box(TIM, uL + FD, y0, zb, uR, ya, 0, 'x');
-    K.box(TIM, uL + FD, yb, zb, uR, y1, 0, 'x');
-    K.box(TIM, uR - FD, dB === n - 1 && bays[dB].cut ? y0 : ya, zb, uR, yb, 0, 'y');
-    posts.forEach((p, j) => { const lo = (dB === j || dB === j + 1) ? y0 : ya; K.box(TIM, p.u - p.w / 2, lo, zb + 0.008, p.u + p.w / 2, yb, p.w > 0.2 ? 0.012 : -0.002, 'y'); });
-    for (let b = 0; b < n; b++) {
+    if (dB >= 0) { if (e0f(dB) - sL > 0.02) K.box(TIM, sL, y0, zb, e0f(dB), ya, 0, 'x'); if (sR - e1f(dB) > 0.02) K.box(TIM, e1f(dB), y0, zb, sR, ya, 0, 'x'); }
+    else K.box(TIM, sL, y0, zb, sR, ya, 0, 'x');
+    K.box(TIM, sL, yb, zb, sR, y1, 0, 'x');
+    if (b1 === n - 1) K.box(TIM, uR - FD, dB === n - 1 && bays[dB].cut ? y0 : ya, zb, uR, yb, 0, 'y');
+    if (o2.leftPost && b0 === 0) K.box(TIM, uL, ya, zb, uL + FD, yb, 0, 'y');
+    posts.forEach((p, j) => { if (j < b0 - 1 || j > b1) return; const lo = (dB === j || dB === j + 1) ? y0 : ya; K.box(TIM, p.u - p.w / 2, lo, zb + 0.008, p.u + p.w / 2, yb, p.w > 0.2 ? 0.012 : -0.002, 'y'); });
+    for (let b = b0; b <= b1; b++) {
       const B = bays[b] || { t: 'p' }, e0 = e0f(b), e1 = e1f(b), clip = rectClip(e0, ya, e1, yb);
-      const plaster = (a0, c0, a1, c1) => { if (c1 - c0 < 0.03 || a1 - a0 < 0.03) return; if (B.clad) K.box(BRD, a0, c0, pz - 0.02, a1, c1, pz + 0.012, 'y'); else K.quad('plaster', [a0, c0, pz], [a1, c0, pz], [a1, c1, pz], [a0, c1, pz]); };
+      const plaster = (a0, c0, a1, c1) => { if (c1 - c0 < 0.03 || a1 - a0 < 0.03) return; if (o2.daub !== undefined && q() > o2.daub) return; if (B.clad) K.box(BRD, a0, c0, pz - 0.02, a1, c1, pz + 0.012, 'y'); else K.quad('plaster', [a0, c0, pz], [a1, c0, pz], [a1, c1, pz], [a0, c1, pz]); };
       const rail = (yr, a0 = e0, a1 = e1, h = 0.13) => K.box(TIM, a0, yr - h / 2, zb + 0.03, a1, yr + h / 2, -0.02, 'x');
       if (B.t === 'w') {
         const c0 = ya + (B.sillH ?? 0.72), c1 = Math.min(yb - 0.14, c0 + (B.h ?? 0.95));
@@ -429,7 +433,7 @@ export function buildHouse(K, o) {
       // boarded: upright boards with a batten over each joint
       K.prism(BRD, [[uL, yE], [uR, yE], [uc, yA]], pz - 0.02, pz + 0.012, [0, 1]);
       for (let u = uc - half + 0.3; u < uc + half - 0.1; u += 0.3) K.tim(BRD, u, yb0, u, yA, 0.05, pz, pz + 0.035, tri);
-    } else K.face('plaster', [[uL, yE], [uR, yE], [uc, yA]], pz);
+    } else if (!o2.bare) K.face('plaster', [[uL, yE], [uR, yE], [uc, yA]], pz);
     const collars = rise > 4.3 ? [0.42, 0.74] : rise > 2.2 ? [0.52] : [];
     const yC = collars.map((f) => yE + rise * f);
     for (const y of yC) K.tim(TIM, uL, y, uR, y, 0.15, zb + 0.03, -0.014, [inR, inL]);
@@ -672,14 +676,18 @@ export function buildHouse(K, o) {
 
   // ---- what the fire left: the stone ground storey broken down, charred timbers standing on it and fallen in it
   if (style === 'wreck') {
-    const jo = [];
+    // where a stretch of wall still stands to its full height, a few bays of the upper storey's frame may stand on it
+    let best = null;
+    Ws.forEach((W, i) => { let run = []; const done = () => { if (run.length >= 2 && (!best || run.length > best.run.length || (run.length === best.run.length && q() < 0.5))) best = { i, W, run }; run = []; };
+      W.segs.forEach((sg, b) => { let ok = true; for (let u = sg.u - W.sw / 2 + 0.05; u <= sg.u + W.sw / 2; u += 0.15) if (W.top0(u) < GF - 0.01) ok = false; if (ok) run.push(b); else done(); }); done(); });
+    if (best && q() < 0.8) best.W.keep = [best.W.segs[best.run[0]].u - best.W.sw / 2 - 0.3, best.W.segs[best.run[best.run.length - 1]].u + best.W.sw / 2 + 0.3]; else best = null;
     Ws.forEach((W, i) => inW(i, () => {
       const e = i % 2 ? WT : 0, holes = [];
       for (const s of W.segs) {
         if (s.isDoor) { if (W.top(s.u) < 2.2) holes.push([s.u - 0.5, s.u + 0.5, 0, Infinity]); else { holes.push([s.u - 0.5, s.u + 0.5, 0, 2.08], [s.u - 0.66, s.u + 0.66, 2.08, 2.24]); s.lintel = true; } }
         else if (s.win) { if (Math.min(W.top(s.u - 0.3), W.top(s.u + 0.3)) < 2.2) holes.push([s.u - 0.36, s.u + 0.36, 0.975, Infinity]); else { holes.push([s.u - 0.36, s.u + 0.36, 0.975, 1.92], [s.u - 0.5, s.u + 0.5, 1.92, 2.08]); s.lintel = true; } }
       }
-      wallRun(K, 'stone', -W.half + e, W.half - e, 0, W.top, WT, holes, W.cuts);
+      const cols = wallRun(K, 'stone', -W.half + e, W.half - e, 0, W.top, WT, holes, W.cuts);
       const minTop = (a, b) => Math.min(W.top(a), W.top((a + b) / 2), W.top(b));
       for (const s of W.segs) {
         const sgn = W.flip ? -1 : 1;
@@ -696,23 +704,32 @@ export function buildHouse(K, o) {
         if (s.stud) { const u = s.u + sgn * s.stud.px, t = W.top(u); K.obox(TIM, u, t + s.stud.ht / 2 - 0.04, -0.25, 0.16, s.stud.ht, 0.17, s.stud.rx, 0, s.stud.rz, 'y'); }
         if (s.joist) { const t = W.top(s.u); if (t > 1.2) K.obox(TIM, s.u, t - 0.13, -0.25, 0.16, 0.17, s.joist.len + 0.5, s.joist.rx * 0.5, 0, 0, 'z'); }
       }
-      // the frame that stood on the wall: where a stretch still stands to its full height, the sill beam lies on it
-      // yet and a few posts stand charred, the tallest still tied by a rail
-      let run = [];
-      const flush = () => {
-        if (run.length >= 2 && q() < 0.75) {
-          const a = run[0].u - W.sw / 2 + 0.02, b = run[run.length - 1].u + W.sw / 2 - 0.02, t = GF, fromL = q() < 0.5;
-          K.box(TIM, a, t, -0.36, b, t + 0.17, -0.16, 'x');
-          const ps = []; for (let k2 = 0; k2 <= run.length; k2++) { const kk = fromL ? k2 : run.length - k2, h = 2.25 - kk * q.range(0.25, 0.8) - (q() < 0.25 ? 1 : 0); if (h > 0.4) ps.push({ u: a + (b - a) * k2 / run.length, h }); else ps.push(null); }
-          ps.forEach((p, k2) => { if (!p) return; K.obox(TIM, p.u, t + 0.17 + p.h / 2, -0.26, 0.17, p.h, 0.18, q.range(-0.03, 0.03), 0, q.range(-0.04, 0.04), 'y');
-            const p2 = ps[k2 + 1]; if (p2) { const hr = Math.min(p.h, p2.h); if (hr > 1.1) K.box(TIM, p.u + 0.085, t + 0.17 + 0.95, -0.34, p2.u - 0.085, t + 0.17 + 1.08, -0.2, 'x');
-              if (hr > 2.0) { K.box(TIM, p.u - 0.085, t + 0.17 + hr - 0.02, -0.36, p2.u + 0.085, t + 0.17 + hr + 0.15, -0.16, 'x'); if (q() < 0.6) K.tim(TIM, p.u + 0.085, t + 0.17, p2.u - 0.085, t + 0.17 + hr * 0.85, 0.13, -0.33, -0.21, rectClip(p.u + 0.085, t + 0.17, p2.u - 0.085, t + 0.17 + hr)); if (q() < 0.45) K.quad('plaster', [p.u + 0.085, t + 0.17 + 1.08, -0.27], [p2.u - 0.085, t + 0.17 + 1.08, -0.27], [p2.u - 0.085, t + 0.15 + hr, -0.27], [p.u + 0.085, t + 0.15 + hr, -0.27]); } } });
-        }
-        run = [];
-      };
-      for (const s of W.segs) { if (minTop(s.u - W.sw / 2 + 0.05, s.u + W.sw / 2 - 0.05) >= GF - 0.01) run.push(s); else flush(); }
-      flush();
+      // smoke-black on the wall heads, inside and out
+      for (const c of cols) { if (!c.iv.length) continue; const [a, b] = c.iv[c.iv.length - 1]; if (b - a < 0.5) continue; const ua = c.ua / 1.37, ub = c.ub / 1.37, yo = Math.max(a, b - 1.45), yi = Math.max(a, b - 2.3);
+        const vt = 0.12 + ((c.ua * 7.31) % 1 + 1) % 1 * 0.22;
+        K.quad('soot', [c.ua, yo, 0.012], [c.ub, yo, 0.012], [c.ub, b, 0.012], [c.ua, b, 0.012], [0.5, 0.95, 0.5, 0.95, 0.5, vt, 0.5, vt]);
+        if (c.ua > -W.half + WT + 0.01 && c.ub < W.half - WT - 0.01) K.quad('soot', [c.ub, yi, -WT - 0.012], [c.ua, yi, -WT - 0.012], [c.ua, b, -WT - 0.012], [c.ub, b, -WT - 0.012], [0.5, 1, 0.5, 1, 0.5, 0.05, 0.5, 0.05]); }
     }));
+    // the frame that stood on the walls: where a stretch still stands to its full height a few bays of the upper
+    // storey stand on it yet, charred, most of their daub fallen; on one house in three a whole gable frame
+    {
+      if (best) inW(best.i, (W, i) => {
+        const b0 = best.run[0], b1 = best.run[best.run.length - 1], whole = b0 === 0 && b1 === W.n - 1, B = layout(W), yT = GF + 2.4;
+        addWindows(B, 1 + (W.n > 5 ? 1 : 0), {});
+        const ex = frame(i, GF, yT, 0, B, { b0, b1, daub: 0.3, leftPost: true, fl: 0, fr: 0 });
+        if (whole && i % 2 === 0 && q() < 0.7) gableEnd(i, yT, 0, ex, { bare: true, win: false, strut: Math.floor(q() * 3) });
+        info.frame = [best.i, b0, b1];
+      });
+    }
+    // charred posts on the other wall heads, and timbers fallen in a tangle within
+    Ws.forEach((W, i) => inW(i, () => { if (info.frame && info.frame[0] === i) return;
+      for (const sg of W.segs) { const u = sg.u - W.sw / 2, t = W.top(u); if (t < GF - 0.01 || q() < 0.5) continue; const h = q.range(0.5, 2.1); K.obox(TIM, u, t + h / 2 - 0.03, -0.25, 0.18, h, 0.18, q.range(-0.04, 0.04), 0, q.range(-0.05, 0.05), 'y'); }
+    }));
+    for (let k2 = 0, nk = 4 + Math.floor(q() * 4); k2 < nk; k2++) {
+      const L = q.range(2.2, 4.2), x = q.range(-w / 2 + 0.9, w / 2 - 0.9), z = q.range(-d / 2 + 0.9, d / 2 - 0.9);
+      if (q() < 0.55) rest(TIM, x, z, 0.17, 0.18, Math.min(L, 3.4), q.range(-0.06, 0.06), q() * TAU, q.range(-0.06, 0.06), 0, 0.01, 'z');
+      else { const i = Math.floor(q() * 4) % 4, W = Ws[i], u = q.range(-W.len / 2 + 0.5, W.len / 2 - 0.5), t = W.top(u); if (t < 1.0) continue; const [ax, az] = toH(i, u, -WT - 0.02), run2 = Math.sqrt(Math.max(0.3, L * L - t * t)), [bx, bz] = toH(i, u + q.range(-1, 1), -WT - run2); K.beam(TIM, [ax, t + 0.05, az], [clamp(bx, -w / 2 + 0.3, w / 2 - 0.3), 0.09, clamp(bz, -d / 2 + 0.3, d / 2 - 0.3)], 0.17, 0.18, q.range(0, 0.6)); }
+    }
     quoins((i, u) => Ws[i].top(u));
     // floor joists: still spanning where both side walls stand, or one end down on the floor
     for (let k2 = 1; k2 < Ws[1].n; k2++) {
@@ -759,7 +776,7 @@ export function sootMaterial() {
       const a = clamp(side * up * (0.75 + 0.5 * col[i] * (1 - v * 0.3)) * 1.05, 0, 1) * 255, p = (j * s + i) * 4;
       im.data[p] = im.data[p + 1] = im.data[p + 2] = a; im.data[p + 3] = 255;
     }
-    x.putImageData(im, 0, 0); _sootTex = new THREE.CanvasTexture(c); _sootTex.colorSpace = THREE.NoColorSpace;
+    x.putImageData(im, 0, 0); _sootTex = new THREE.CanvasTexture(c); _sootTex.colorSpace = THREE.NoColorSpace; _sootTex.wrapS = THREE.RepeatWrapping;
   }
   return new THREE.MeshStandardMaterial({ color: 0x060504, roughness: 1, metalness: 0, transparent: true, alphaMap: _sootTex, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 }
@@ -808,7 +825,7 @@ function gothicWindow(K, o) {
   const inside = (u, y) => y <= ys ? Math.abs(u - uc) <= hw : Math.hypot(Math.abs(u - uc) + (R - hw), y - ys) <= R;
   for (let j = 1; j < m; j++) {
     const um = uc - hw + 2 * hw * j / m; K.box('stone', um - bwid / 2, sill, bz0, um + bwid / 2, ys, bz1);
-    for (const sd of [-1, 1]) { let p = [um, ys]; for (let a = 0.11; a < 1.5; a += 0.11) { const pn = [um + sd * (R - R * Math.cos(a)) * -1, ys + R * Math.sin(a)]; const ok = inside(pn[0], pn[1]); K.tim('stone', p[0], p[1], pn[0], pn[1], bwid, bz0, bz1); p = pn; if (!ok) break; } }
+    for (const sd of [-1, 1]) { let p = [um, ys]; for (let a = 0.11; a < 1.5; a += 0.11) { const pn = [um + sd * (R - R * Math.cos(a)), ys + R * Math.sin(a)]; const ok = inside(pn[0], pn[1]); K.tim('stone', p[0], p[1], pn[0], pn[1], bwid, bz0, bz1); p = pn; if (!ok) break; } }
   }
   for (let j = 0; j < m; j++) {
     const a0 = uc - hw + 2 * hw * j / m + (j ? bwid / 2 : 0), a1 = uc - hw + 2 * hw * (j + 1) / m - (j < m - 1 ? bwid / 2 : 0), nb = Math.max(2, Math.round((ys - sill) / 0.56)), bh = (ys - sill) / nb;
@@ -852,7 +869,7 @@ export function buildChurch(K, o) {
     for (const zw of wz) { const uc = uOf(zw); let mn = 1e9; for (let u = uc - win.bw + 0.05; u <= uc + win.bw; u += 0.19) mn = Math.min(mn, top(u));
       if (mn >= H - 0.01) { holes.push([uc - win.bw, uc + win.bw, win.y0, win.y1]); wins.push(uc); } else holes.push([uc - win.hw, uc + win.hw, win.sill, Infinity]); }
     const cols = wallRun(K, ST, -L / 2, L / 2, -foot, top, Tw, holes, cuts);
-    for (const uc of wins) gothicWindow(K, { uc, T: Tw, q, ...win });
+    for (const uc of wins) { gothicWindow(K, { uc, T: Tw, q, ...win }); if (H === HN) { const ya = archApex(win.hw + 0.14, win.ys) - 0.5; K.quad('soot', [uc - 0.95, ya, 0.012], [uc + 0.95, ya, 0.012], [uc + 0.95, H - 0.2, 0.012], [uc - 0.95, H - 0.2, 0.012], [0, 0, 1, 0, 1, 0.8, 0, 0.8]); } }
     for (const c of cols) {
       const t = c.iv.length ? c.iv[c.iv.length - 1][1] : -9;
       if (t >= H - 0.01) { K.box(ST, c.ua, H - 0.2, 0, c.ub, H, 0.15); for (let u = Math.ceil(c.ua / 0.62) * 0.62; u < c.ub - 0.05; u += 0.62) K.box(ST, u - 0.09, H - 0.42, 0, u + 0.09, H - 0.2, 0.11); }
@@ -898,47 +915,46 @@ export function buildChurch(K, o) {
   // ---- the tower
   const lancet = (uc, yb, ys, hw, Tw, louvre) => {
     archOpening(K, ST, { uc, bw: hw + 0.3, y0: yb - 0.32, y1: snapC(archApex(hw + 0.1, ys) + 0.2), T: Tw, kk: 1, segs: 5, loops: [{ z: 0, hw: hw + 0.1, yb: yb - 0.12, ys }, { z: -0.12, hw, yb, ys }, { z: -Tw, hw: hw + 0.06, yb, ys }] });
-    if (louvre) { const top = ys + hw * 0.6, n = Math.round((top - yb) / 0.34); for (let i = 0; i < n; i++) { if (q() < 0.22) continue; const y = yb + 0.1 + i * 0.34; K.rot(uc, y, -0.34 + (q() < 0.12 ? -0.1 : 0), 0.62, 0, q() < 0.12 ? q.range(-0.25, 0.25) : 0); K.box(OAK, -hw - 0.03, -0.012, -0.17, hw + 0.03, 0.012, 0.17, 'x'); K.pop(); } }
+    if (louvre) { const top = yb + (ys + hw - yb) * 0.56, n = Math.round((top - yb) / 0.34); for (let i = 0; i < n; i++) { if (q() < 0.22) continue; const y = yb + 0.1 + i * 0.34; K.rot(uc, y, -0.34 + (q() < 0.12 ? -0.1 : 0), 0.62, 0, q() < 0.12 ? q.range(-0.25, 0.25) : 0); K.box(OAK, -hw - 0.03, -0.012, -0.17, hw + 0.03, 0.012, 0.17, 'x'); K.pop(); } }
     else K.quad('dark', [uc - hw - 0.06, yb, -Tw + 0.02], [uc + hw + 0.06, yb, -Tw + 0.02], [uc + hw + 0.06, ys + hw * 2, -Tw + 0.02], [uc - hw - 0.06, ys + hw * 2, -Tw + 0.02]);
     return [uc - hw - 0.3, uc + hw + 0.3, yb - 0.32, snapC(archApex(hw + 0.1, ys) + 0.2)];
   };
-  const BY = SH + 0.96, BS = SH + 2.9;   // the belfry lights: sill and springing
+  const BY = SH + 0.96, BS = SH + 3.0, Z0 = TZ - TWH;   // the belfry lights: sill and springing; the tower's east face
   const towerFace = (ax, az, bx, bz, kind) => wallF(ax, az, bx, bz, (L) => {
     const holes = [], after = [];
-    for (const uc of [-0.72, 0.72]) { const hb = [uc - 0.7, uc + 0.7, BY - 0.32, snapC(archApex(0.5, BS) + 0.2)]; holes.push(hb); after.push(() => lancet(uc, BY, BS, 0.4, TT, true)); }
-    if (kind !== 'e') { holes.push([-0.52, 0.52, 9.6 - 0.32, snapC(archApex(0.32, 11.0) + 0.2)]); after.push(() => lancet(0, 9.6, 11.0, 0.22, TT, false)); }
-    if (kind === 'w') { holes.push([-1.9, 1.9, 0, 14 * COURSE]); holes.push([-0.5, 0.5, 5.76 - 0.32, snapC(archApex(0.3, 6.6) + 0.2)]); after.push(() => lancet(0, 5.76, 6.6, 0.2, TT, false)); }
-    if (kind === 'e') holes.push([-1.75, 1.75, 0, 15 * COURSE]);
-    wallRun(K, ST, -L / 2, L / 2, kind === 'e' ? 0 : -foot, TOP, kind === 'e' ? 0.45 : TT, holes);
+    if (kind !== 'ei') for (const uc of [-0.82, 0.82]) { holes.push([uc - 0.8, uc + 0.8, BY - 0.32, snapC(archApex(0.6, BS) + 0.2)]); after.push(() => lancet(uc, BY, BS, 0.5, TT, true)); }
+    if (kind === 's' || kind === 'n' || kind === 'w') { holes.push([-0.52, 0.52, 9.6 - 0.32, snapC(archApex(0.32, 11.0) + 0.2)]); after.push(() => lancet(0, 9.6, 11.0, 0.22, TT, false)); }
+    if (kind === 'w') { holes.push([-1.9, 1.9, 0, 14 * COURSE]); holes.push([-0.9, 0.9, 17 * COURSE, 27 * COURSE]); after.push(() => { gothicWindow(K, { uc: 0, T: TT, q, sill: 17 * COURSE + 0.22, ys: 7.1, hw: 0.5, bw: 0.9, y0: 17 * COURSE, y1: 27 * COURSE, glassP: 0.7 }); K.quad('dark', [-0.75, 5.5, -TT + 0.02], [0.75, 5.5, -TT + 0.02], [0.75, 8.6, -TT + 0.02], [-0.75, 8.6, -TT + 0.02]); }); }
+    if (kind === 'ei') holes.push([-1.75, 1.75, 0, 15 * COURSE]);
+    wallRun(K, ST, -L / 2, L / 2, kind === 'ei' ? 0 : kind === 'eu' ? HN - 3 * COURSE : -foot, kind === 'ei' ? HN - COURSE : TOP, kind === 'ei' ? 0.45 : TT, holes);
     for (const f of after) f();
-    if (kind === 'e') archOpening(K, ST, { uc: 0, bw: 1.75, y0: 0, y1: 15 * COURSE, T: 0.45, kk: 0.85, segs: 8, open: true, back: false, loops: [{ z: 0, hw: 1.4, yb: 0, ys: 2.6 }, { z: -0.1, hw: 1.3, yb: 0, ys: 2.6 }, { z: -0.45, hw: 1.3, yb: 0, ys: 2.6 }] });
+    if (kind === 'ei') archOpening(K, ST, { uc: 0, bw: 1.75, y0: 0, y1: 15 * COURSE, T: 0.45, kk: 0.85, segs: 8, open: true, back: false, loops: [{ z: 0, hw: 1.4, yb: 0, ys: 2.6 }, { z: -0.1, hw: 1.3, yb: 0, ys: 2.6 }, { z: -0.45, hw: 1.3, yb: 0, ys: 2.6 }] });
     if (kind === 'w') portal();
   });
   const portal = () => {
     // the west door: three orders stepping in, a hood-mould over them, a plain tympanum with a cross, two oak leaves
-    const ys = 2.1, kk = 0.8, hws = [1.52, 1.3, 1.08], loops = [];
-    hws.forEach((hw, i) => { loops.push({ z: -0.19 * i, hw, yb: 0, ys }); loops.push({ z: -0.19 * (i + 1) - (i === 2 ? 0.1 : 0), hw, yb: 0, ys }); });
+    const ys = 2.1, kk = 0.8, hws = [1.56, 1.32, 1.08], loops = [];
+    hws.forEach((hw, i) => { loops.push({ z: -0.22 * i, hw, yb: 0, ys }); loops.push({ z: -0.22 * (i + 1) - (i === 2 ? 0.06 : 0), hw, yb: 0, ys }); });
     const Lp = archOpening(K, ST, { uc: 0, bw: 1.9, y0: 0, y1: 14 * COURSE, T: TT, kk, segs: 8, open: true, loops });
-    const hood = archLoop(1.66, 0, ys, kk, 8); archRing(K, ST, Lp[0], hood, 0, 0.08, 1, hood.length - 2);
-    for (const sd of [-1, 1]) K.box(ST, sd * 1.5, ys - 0.18, 0, sd * 1.7, ys + 0.02, 0.1);
-    const tym = archLoop(1.08, ys, ys, kk, 8).slice(1, -1); K.prism(ST, tym.reverse(), -0.68, -0.5); K.box(ST, -1.08, ys - 0.02, -0.7, 1.08, ys + 0.2, -0.46);
-    K.box(ST, -0.05, ys + 0.42, -0.5, 0.05, ys + 1.12, -0.47); K.box(ST, -0.26, ys + 0.8, -0.5, 0.26, ys + 0.9, -0.47);
-    leafDoor(K, OAK, -1.07, 0.03, -0.58, 1.06, ys - 0.07, 1.25, true, 0, { ring: true }); leafDoor(K, OAK, 1.07, 0.03, -0.58, 1.06, ys - 0.07, 0.42, false, 0, { ring: true });
+    const hood = archLoop(1.74, 0, ys, kk, 8); archRing(K, ST, Lp[0], hood, 0, 0.12, 1, hood.length - 2);
+    for (const sd of [-1, 1]) K.box(ST, Math.min(sd * 1.54, sd * 1.8), ys - 0.2, 0, Math.max(sd * 1.54, sd * 1.8), ys + 0.02, 0.15);
+    const tym = archLoop(1.08, ys, ys, kk, 8).slice(1, -1); K.prism(ST, tym.reverse(), -0.74, -0.58); K.box(ST, -1.08, ys - 0.02, -0.76, 1.08, ys + 0.2, -0.54);
+    K.box(ST, -0.06, ys + 0.4, -0.58, 0.06, ys + 1.15, -0.53); K.box(ST, -0.28, ys + 0.8, -0.58, 0.28, ys + 0.92, -0.53);
+    leafDoor(K, OAK, -1.07, 0.03, -0.66, 1.06, ys - 0.07, 1.25, true, 0, { ring: true }); leafDoor(K, OAK, 1.07, 0.03, -0.66, 1.06, ys - 0.07, 0.42, false, 0, { ring: true });
     K.box(ST, -1.75, -foot, 0, 1.75, 0.0, 0.52); K.box(ST, -1.08, -0.2, -TT, 1.08, 0.02, 0);
   };
-  towerFace(TWH, TZ1, TWH, ZW, 's'); towerFace(-TWH, ZW, -TWH, TZ1, 'n'); towerFace(-TWH, TZ1, TWH, TZ1, 'w'); towerFace(-TWH, ZW + 0.45, TWH, ZW + 0.45, 'e');
+  towerFace(TWH, TZ1, TWH, Z0, 's'); towerFace(-TWH, Z0, -TWH, TZ1, 'n'); towerFace(-TWH, TZ1, TWH, TZ1, 'w'); towerFace(TWH, Z0, -TWH, Z0, 'eu'); towerFace(-TWH, ZW + 0.45, TWH, ZW + 0.45, 'ei');
   // its diagonal buttresses at the west corners, dying into the wall below the belfry
   const bT = [[1.1, -foot], [1.1, 1.0], [0.98, 1.14], [0.98, 5.4], [0.68, 6.0], [0.68, 9.9], [0.38, 10.5], [0.38, 12.3], [0, 13.0]];
   for (const sd of [-1, 1]) { K.at(sd * (TWH - 0.2), 0, TZ1 - 0.2, sd * PI / 4); buttress(K, ST, bT, 0.9); K.pop(); col(sd * 3.15, 15.85, 0.55); }
   // string courses, the belfry cornice on its corbels
-  const sq = (h) => [[-h, ZW], [-h, TZ1], [h, TZ1], [h, ZW]].map((p) => [p[0], p[1] + (p[1] === ZW ? -0.0 : 0)]);
-  const sqT = [[TWH, TZ1], [TWH, ZW], [-TWH, ZW], [-TWH, TZ1]];
+  const sqT = [[TWH, TZ1], [TWH, Z0], [-TWH, Z0], [-TWH, TZ1]];
   for (const y of [HN, SH]) K.mould(ST, [[0, y - 0.14], [0.09, y - 0.14], [0.09, y - 0.02], [0, y + 0.1]], sqT, true);
   K.mould(ST, [[0, TOP - 0.3], [0.1, TOP - 0.3], [0.1, TOP - 0.12], [0.22, TOP - 0.12], [0.22, TOP + 0.06], [0, TOP + 0.06]], sqT, true);
-  for (const [ax, az, bx, bz] of [[TWH, TZ1, TWH, ZW], [-TWH, ZW, -TWH, TZ1], [-TWH, TZ1, TWH, TZ1], [TWH, ZW, -TWH, ZW]]) wallF(ax, az, bx, bz, (L) => { for (let u = -L / 2 + 0.3; u < L / 2; u += 0.6) K.box(ST, u - 0.09, TOP - 0.52, 0, u + 0.09, TOP - 0.3, 0.14); });
+  for (const [ax, az, bx, bz] of [[TWH, TZ1, TWH, Z0], [-TWH, Z0, -TWH, TZ1], [-TWH, TZ1, TWH, TZ1], [TWH, Z0, -TWH, Z0]]) wallF(ax, az, bx, bz, (L) => { for (let u = -L / 2 + 0.3; u < L / 2; u += 0.6) K.box(ST, u - 0.09, TOP - 0.52, 0, u + 0.09, TOP - 0.3, 0.14); });
   // floors in the tower, the bell frame
-  K.box(OAK, -TWH + TT, 6.6, ZW + 0.45, TWH - TT, 6.76, TZ1 - TT, 'x'); K.box(OAK, -TWH + TT, SH - 0.1, ZW + 0.45, TWH - TT, SH + 0.06, TZ1 - TT, 'x');
-  for (const sd of [-1, 1]) { K.box(OAK, -TWH + TT - 0.1, TOP - 1.55, TZ + sd * 0.95 - 0.11, TWH - TT + 0.1, TOP - 1.33, TZ + sd * 0.95 + 0.11, 'x'); for (const sx of [-1, 1]) K.beam(OAK, [sx * 1.5, SH + 0.06, TZ + sd * 0.95], [sx * 0.35, TOP - 1.55, TZ + sd * 0.95], 0.16, 0.16); }
+  K.box(OAK, -TWH + TT, 6.6, ZW + 0.45, TWH - TT, 6.76, TZ1 - TT, 'x'); K.box(OAK, -TWH + TT, SH - 0.1, Z0 + TT, TWH - TT, SH + 0.06, TZ1 - TT, 'x');
+  for (const sd of [-1, 1]) { K.box(OAK, -TWH + TT - 0.1, TOP - 1.8, TZ + sd * 0.95 - 0.11, TWH - TT + 0.1, TOP - 1.58, TZ + sd * 0.95 + 0.11, 'x'); for (const sx of [-1, 1]) K.beam(OAK, [sx * 1.5, SH + 0.06, TZ + sd * 0.95], [sx * 0.35, TOP - 1.8, TZ + sd * 0.95], 0.16, 0.16); }
   // the spire: eight slated sides over the square, broaches on the corners, a kick at the eaves; ball, cross and cock
   { const a = TWH + 0.26, ya = TOP + 0.32, H2 = 12.4, y2 = ya + H2, t8 = 0.41421356, tile = 2.0, ae = a + 0.24, ye = ya - 0.2;
     const slTri = (A, Bq, Cq) => { const ex = Bq[0] - A[0], ey = Bq[1] - A[1], ez = Bq[2] - A[2], l = Math.hypot(ex, ey, ez), ux = ex / l, uy = ey / l, uz = ez / l; const uv = (P) => { const dx = P[0] - A[0], dy = P[1] - A[1], dz = P[2] - A[2], u = dx * ux + dy * uy + dz * uz; return [u / tile, Math.hypot(dx - u * ux, dy - u * uy, dz - u * uz) / tile]; };
@@ -955,3 +971,105 @@ export function buildChurch(K, o) {
     const ck = [[0.0, 0], [0.2, 0.02], [0.3, 0.2], [0.24, 0.33], [0.33, 0.38], [0.22, 0.44], [0.12, 0.4], [0.06, 0.26], [-0.12, 0.22], [-0.3, 0.4], [-0.34, 0.16], [-0.16, 0.04]];
     for (let i = 1; i < ck.length - 1; i++) { const P = (p) => [p[0], y2 + 2.02 + p[1], TZ]; K.tri('iron', P(ck[0]), P(ck[i]), P(ck[i + 1])); K.tri('iron', P(ck[0]), P(ck[i + 1]), P(ck[i])); }
   }
+
+  // ---- the sacristy: a lean-to against the chancel's north wall, its door at the east end, a barred window
+  { const x0 = -6.0, x1 = -XC, z0 = -6.6, z1 = ZE, h0 = 8 * COURSE, h1 = 13 * COURSE, Ts = 0.5;
+    wallF(x0, z0, x0, z1, (L) => { wallRun(K, ST, -L / 2, L / 2, -foot, h0, Ts, [[-0.3, 0.3, 1.28, 1.92]]); for (const u of [-0.12, 0.12]) K.box('iron', u - 0.012, 1.28, -0.2, u + 0.012, 1.92, -0.176); K.quad('dark', [-0.3, 1.28, -0.32], [0.3, 1.28, -0.32], [0.3, 1.92, -0.32], [-0.3, 1.92, -0.32]); K.box(ST, -0.4, 1.2, -0.2, 0.4, 1.29, 0.05); });
+    for (const [ax, az, bx, bz, door] of [[x1, z0, x0, z0, true], [x0, z1, -WN, z1, false]]) wallF(ax, az, bx, bz, (L) => {
+      const holes = door ? [[-0.45, 0.45, 0, 1.92]] : []; wallRun(K, ST, -L / 2, L / 2, -foot, h0, Ts, holes);
+      if (door) { K.box(ST, -0.62, 1.92, -Ts, 0.62, 2.24, 0.03); leafDoor(K, OAK, -0.44, 0.03, -0.2, 0.88, 1.87, 0, true, 0, { ring: true }); K.box(ST, -0.55, -0.3, -Ts, 0.55, 0.03, 0.12); }
+    });
+    // the end walls rise with the roof
+    for (const [z, sg] of [[z0, -1], [z1, 1]]) { const xa = z === z1 ? -WN : x1; K.quadTo(ST, [x0, h0, z], [xa, h0, z], [xa, h0 + (h1 - h0) * (xa - x0) / (x1 - x0), z], [x0, h0, z], 0, 0, sg); K.quadTo(ST, [x0, h0, z - sg * Ts], [xa, h0, z - sg * Ts], [xa, h0 + (h1 - h0) * (xa - x0) / (x1 - x0), z - sg * Ts], [x0, h0, z - sg * Ts], 0, 0, -sg); }
+    const sl = Math.hypot(x1 - x0 + 0.3, h1 - h0 + 0.2), U = [0, 0, -1], V = [(x1 - x0 + 0.3) / sl, (h1 - h0 + 0.2) / sl, 0];
+    roofSheet(K, SL, OAK, [x0 - 0.3, h0 - 0.1, z1], U, V, [0, z1 - z0 + 0.25], [0, sl], 0.07, null);
+    for (const z of [-3.2, -4.4, -5.6]) col(x0 + 0.25, z, 0.7); col(-5.2, z0 + 0.25, 0.62); col(-4.3, z0 + 0.25, 0.62); col(-5.45, z1 - 0.2, 0.62);
+  }
+
+  // ---- plinth and string course round the whole church (mitred at the corners), cut at the door and at the breach
+  { const pl = [[0.14, -foot], [0.14, 0.8], [0, 0.96]];
+    K.mould(ST, pl, [[1.9, TZ1], [TWH, TZ1], [TWH, ZW], [WN, ZW], [WN, BR1 + 0.5]], false);
+    K.mould(ST, pl, [[WN, BR0 - 0.45], [WN, ZE], [XC, ZE], [XC, -7.88], [1.5, -10], [-1.5, -10], [-XC, -7.88], [-XC, ZE], [-WN, ZE], [-WN, ZW], [-TWH, ZW], [-TWH, TZ1], [-1.9, TZ1]], false);
+  }
+
+  // ---- roofs. The chancel's stands, holed; the nave's is burnt away from the west, the slates left only over its east end
+  const yRN = HN + WN * tanR, yRC = HC + XC * tanR, zc8 = -6.38, eo = 0.3, th = 0.08;
+  const hash = (i, j, k2) => { let h = Math.imul(i * 374761393 + j * 668265263 + k2 * 2147483647, 1274126177); h ^= h >>> 13; h = Math.imul(h, 1597334677); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const slope = (s, half, H, zA, zB, keep) => {   // one side of a pitched roof from z = zA to zB, eaves at s * half
+    const sl = (half + eo) / cosR, U = [0, 0, s > 0 ? -1 : 1], V = [-s * cosR, sinR, 0], O = [s * (half + eo), H - eo * tanR, s > 0 ? zA : zB];
+    const L = zA - zB, nu = Math.max(1, Math.round(L / 0.56)), nv = Math.max(1, Math.round(sl / 0.62)), us = [], vs = []; for (let i = 0; i <= nu; i++) us.push(L * i / nu); for (let j = 0; j <= nv; j++) vs.push(sl * j / nv);
+    roofSheet(K, SL, CHAR, O, U, V, us, vs, th, keep && ((i, j) => { const u = (us[i] + us[i + 1]) / 2, z = s > 0 ? zA - u : zB + u; return keep(z, (j + 0.5) / nv, i, j); }));
+  };
+  const gone = (s, z, t, H) => { for (const g of dmg[s]) { if (H === HC && !(g.zc < -2.5)) continue; if (H === HN && g.zc < -2.5) continue; if (Math.abs(z - g.zc) - g.hw < (g.h < 1 ? 1.5 : 0.9) * (1 - t * 1.25)) return true; } return false; };
+  const hC = [0, 1].map(() => ({ s: q() < 0.5 ? -1 : 1, z: q.range(-5.6, -3.0), t: q.range(0.3, 0.8), rz: q.range(0.5, 1.0), rt: q.range(0.08, 0.16) }));
+  const keepC = (s) => (z, t, i, j) => { if (gone(s, z, t, HC)) return false; for (const h of hC) if (h.s === s && ((z - h.z) / h.rz) ** 2 + ((t - h.t) / h.rt) ** 2 < 1) return false; return true; };
+  const burnZ = (s, t) => 3.4 + 1.6 * Math.sin(t * 3.4 + (s > 0 ? 0.4 : 2.0)) + (s > 0 ? -0.4 : 0.9);
+  const keepN = (s) => (z, t, i, j) => z < burnZ(s, t) + (hash(i, j, s + 3) - 0.5) * 1.3 && !gone(s, z, t, HN) && !(hash(i, j, 11 + s) < 0.035);
+  for (const s of [-1, 1]) { slope(s, XC, HC, ZE, zc8, keepC(s)); slope(s, WN, HN, ZE + T, ZW - T, keepN(s)); }
+  // the apse's roof: five facets meeting at the ridge's end
+  { const R0 = [0, yRC, zc8], ye = HC - eo * tanR, re = XC + eo, pts = [[re, zc8], [re, zc8 - re * 0.4142], [re * 0.4142, zc8 - re], [-re * 0.4142, zc8 - re], [-re, zc8 - re * 0.4142], [-re, zc8]], tile = 2.0;
+    for (let i = 0; i < 5; i++) { const a = [pts[i][0], ye, pts[i][1]], b = [pts[i + 1][0], ye, pts[i + 1][1]], mx = (a[0] + b[0]) / 2, mz = (a[2] + b[2]) / 2 - zc8, el = Math.hypot(b[0] - a[0], b[2] - a[2]), sl = Math.hypot(Math.hypot(mx, mz), yRC - ye), nl = Math.hypot(mx, mz) || 1, N = [mx / nl * sinR, cosR, mz / nl * sinR];
+      const off = (P) => [P[0] + N[0] * th, P[1] + N[1] * th, P[2] + N[2] * th], ua = i === 0 ? 0 : i === 4 ? el : 0, proj = (P) => { const dx = P[0] - a[0], dz = P[2] - a[2]; return ((b[0] - a[0]) * dx + (b[2] - a[2]) * dz) / el; };
+      const ur = proj(R0);
+      { const A2 = off(a), B3 = off(b), R2 = off(R0), e1 = [B3[0] - A2[0], B3[1] - A2[1], B3[2] - A2[2]], e2 = [R2[0] - A2[0], R2[1] - A2[1], R2[2] - A2[2]];
+        const dn = (e1[1] * e2[2] - e1[2] * e2[1]) * N[0] + (e1[2] * e2[0] - e1[0] * e2[2]) * N[1] + (e1[0] * e2[1] - e1[1] * e2[0]) * N[2];
+        if (dn >= 0) K.tri(SL, A2, B3, R2, [0, 0, el / tile, 0, ur / tile, sl / tile]); else K.tri(SL, A2, R2, B3, [0, 0, ur / tile, sl / tile, el / tile, 0]); }
+      K.triTo(CHAR, a, b, R0, -N[0], -N[1], -N[2]);
+      K.quadTo(SL, a, b, off(b), off(a), mx, -0.5, mz, [0, 0, el / tile, 0, el / tile, 0.04, 0, 0.04]);
+    } }
+  // ridges: lead-grey ridge tiles where slates remain
+  const ridge = (y, zA, zB) => { if (zA - zB < 0.3) return; const sec = [[-0.22, y - 0.22 * tanR + 0.05], [-0.05, y + 0.14], [0.05, y + 0.14], [0.22, y - 0.22 * tanR + 0.05]]; for (let k2 = 0; k2 < 3; k2++) { const a = sec[k2], b = sec[k2 + 1]; K.quadTo(SL, [a[0], a[1], zB], [a[0], a[1], zA], [b[0], b[1], zA], [b[0], b[1], zB], 0, 1, 0, [zB / 2, 0, zA / 2, 0, zA / 2, 0.12, zB / 2, 0.12]); }
+    for (const [zq, sg] of [[zA, 1], [zB, -1]]) { K.triTo(SL, [sec[0][0], sec[0][1], zq], [sec[1][0], sec[1][1], zq], [sec[2][0], sec[2][1], zq], 0, 0, sg); K.triTo(SL, [sec[0][0], sec[0][1], zq], [sec[2][0], sec[2][1], zq], [sec[3][0], sec[3][1], zq], 0, 0, sg); } };
+  ridge(yRC + th / cosR, ZE, zc8 - 0.1); ridge(yRN + th / cosR, Math.min(burnZ(1, 1), burnZ(-1, 1)) - 0.5, ZE + T);
+
+  // ---- the nave's roof timbers: couples of rafters with their collars, charred, fewer toward the west; tie beams
+  // on the wall heads; what fell lies in the nave
+  { const full = (s, z) => info['top' + s + 'n'](z) >= HN - 0.01, nT = 12;
+    for (let k2 = 0; k2 < nT; k2++) {
+      const z = ZE + T + 0.45 + k2 * (ZW - ZE - 2 * T - 0.9) / (nT - 1), li = Math.min(7, Math.floor(k2 * 8 / nT)), has = [false, false];
+      [-1, 1].forEach((s, si) => {
+        const under = z < burnZ(s, 0.5) + 0.3 && !gone(s, z, 0.5, HN), lg = plan.raf[Math.min(4, li)][si], p = under ? 1 : (lg ? 0.62 : 0.3) - k2 * 0.02;
+        if (!full(s, z) || q() > p) { if (!under && q() < 0.5 && full(s, z)) K.beam(CHAR, [s * 4.0, HN + 0.1, z + q.range(-0.2, 0.2)], [s * q.range(0.3, 1.6), q.range(0.1, 0.5), z + q.range(-1.2, 1.2)], 0.16, 0.2, q.range(0, 1)); return; }
+        has[si] = true; const xa = 4.82, xb = 0.07, yl = (x) => HN + (WN - x) * tanR, P = [[xa, yl(xa)], [xb, yl(xb)], [xb - sinR * 0.2, yl(xb) - cosR * 0.2], [xa - sinR * 0.2, yl(xa) - cosR * 0.2]].map((p2) => [s * p2[0], p2[1]]);
+        K.prism(CHAR, s > 0 ? P : P.reverse(), z - 0.07, z + 0.07, [-s * cosR, sinR]);
+      });
+      if (has[0] && has[1]) { const y = HN + WN * tanR * 0.56, hw = WN * 0.44 - 0.2; K.box(CHAR, -hw, y - 0.1, z - 0.06, hw, y + 0.1, z + 0.06, 'x'); if (k2 % 3 === 0) K.box(CHAR, -0.08, y + 0.1, z - 0.06, 0.08, yRN - 0.3, z + 0.06, 'y'); }
+      if (k2 % 2 === 0 && plan.tie[li] && full(-1, z) && full(1, z)) K.box(CHAR, -4.3, HN - 0.27, z - 0.1, 4.3, HN - 0.03, z + 0.1, 'x');
+      else if (k2 % 2 === 0 && q() < 0.6) rest(CHAR, q.range(-2.5, 2.5), z, q.range(3, 6), 0.2, 0.22, q.range(-0.05, 0.05), q.range(-0.6, 0.6), q.range(-0.04, 0.04), 0, 0.01, 'x');
+    }
+    K.box(CHAR, -0.09, yRN - 0.36, ZE + T, 0.09, yRN - 0.14, Math.max(burnZ(1, 1), burnZ(-1, 1)) + 0.8, 'z');
+    for (let k2 = 0; k2 < 4; k2++) { const z = ZE - 0.6 - k2 * 1.1; for (const s of [-1, 1]) { const xa = 3.55, xb = 0.07, yl = (x) => HC + (XC - x) * tanR, P = [[xa, yl(xa)], [xb, yl(xb)], [xb - sinR * 0.18, yl(xb) - cosR * 0.18], [xa - sinR * 0.18, yl(xa) - cosR * 0.18]].map((p2) => [s * p2[0], p2[1]]); K.prism(CHAR, s > 0 ? P : P.reverse(), z - 0.06, z + 0.06, [-s * cosR, sinR]); } }
+    // slates slid off and smashed along the wall feet inside, and out under the eaves
+    for (let k2 = 0; k2 < 60; k2++) { const inn = q() < 0.6, s = q() < 0.5 ? -1 : 1, x = s * (inn ? q.range(1.5, 3.9) : q.range(5.1, 6.6)), z = q.range(1.0, 9.2); if (!inn && Math.abs(x) < 6.2 && [2, 6].some((b) => Math.abs(z - b) < 0.7)) continue; rest(SL, x, z, q.range(0.2, 0.36), 0.02, q.range(0.14, 0.24), q.range(-0.15, 0.15), q() * TAU, q.range(-0.15, 0.15), inn ? 0 : gH(x, z), 0.008); }
+  }
+
+  // ---- within: the altar on its step, the font by the door, the pews (as the plan threw them), fallen stone
+  K.box(ST, -0.8, 0.32, -9.0, 0.8, 1.2, -8.1); K.box(ST, -1.05, 1.2, -9.12, 1.05, 1.32, -7.98); col(0, -8.5, 1.0);
+  K.box(CHAR, -0.05, 1.32, -8.62, 0.05, 2.5, -8.52, 'y'); K.box(CHAR, -0.36, 2.0, -8.61, 0.36, 2.09, -8.53, 'x');
+  { const fx = -3.3, fz = 8.95, o8 = (r2) => { const p = []; for (let i = 0; i < 8; i++) { const a = (i + 0.5) / 8 * TAU; p.push([fx + Math.cos(a) * r2, fz + Math.sin(a) * r2]); } return p; };
+    slabXZ(K, ST, o8(0.6), 0, 0.14); slabXZ(K, ST, o8(0.26), 0.14, 0.62); slabXZ(K, ST, o8(0.5), 0.62, 1.02); slabXZ(K, 'dark', o8(0.38), 1.0, 1.024); col(fx, fz, 0.6); }
+  plan.pews.forEach((row, k2) => row.forEach((pw, si) => {
+    const sx = si ? 1 : -1, pz = -0.5 + k2 * 1.42;
+    K.rot(sx * 2.15 + (pw.over ? pw.dx : 0), pw.over ? 0.24 : 0, pz, pw.over ? PI / 2 - 0.1 : 0, pw.ry, 0);
+    K.box(CHAR, -1.5, 0.41, -0.22, 1.5, 0.49, 0.22, 'x'); K.box(CHAR, -1.5, 0.49, 0.18, 1.5, 1.02, 0.24, 'x'); for (const e of [-1.46, 1.46]) K.box(CHAR, e - 0.04, 0, -0.22, e + 0.04, 0.72, 0.24, 'y');
+    K.pop();
+  }));
+  for (const s of [-1, 1]) plan.bays[s < 0 ? 0 : 1].forEach((b, k) => {
+    if (!b.broken) return; const zc0 = -9 + 2 * k; if (!b.breach && !(zc0 > -1.5) && !(s > 0 && zc0 < -2.5 && zc0 > -8)) return;
+    const zc = b.breach ? (BR0 + BR1) / 2 : zc0, xw = zc0 < -2.5 ? XC - TC / 2 : WN - T / 2, tf = info['top' + s + (zc0 < -2.5 ? 'c' : 'n')];
+    for (const st of b.stones) { const z = zc + st.dz * (b.breach ? 1.6 : 1.1), sz = st.sz * 1.3; rest(ST, s * (xw + st.dx), z, sz, sz * 0.55, sz * 0.8, st.rx * 0.1, st.ry, st.rz * 0.1, tf(z), 0.015); }
+    for (const rb of b.rubble) { const x = s * (xw + rb.off), z = zc + rb.dz * (b.breach ? 1.15 : 1), sz = rb.sz * 1.25, ins = Math.abs(x) < (zc0 < -2.5 ? XC - TC : WN - T); if (b.breach && Math.abs(rb.off) < 0.75 && Math.abs(z - zc) < 0.9 && rb.sz > 0.3) continue;
+      rest(ST, x, z, sz, sz * 0.55, sz * 0.85, rb.rx * 0.12, rb.ry, rb.rz * 0.12, ins || Math.abs(rb.off) < 0.4 ? 0 : gH(x, z), sz * 0.1); }
+  });
+
+  // ---- what stops a knight: the walls (the breach and the two doorways left open), the buttress feet
+  for (const s of [-1, 1]) { for (const z of [9, 7, 5, 3]) col(s * 4.5, z, 1.0); if (s < 0) { col(-4.5, 1, 1.0); col(-4.5, -1, 1.0); } else { col(4.5, BR1 + 1.0, 1.0); col(4.5, BR0 - 0.62, 0.6); }
+    for (const z of [-3.1, -4.5, -5.9, -7.2]) col(s * (XC - 0.35), z, 0.75); col(s * 2.6, -8.95, 0.75); col(s * 1.0, -9.7, 0.7);
+    col(s * 4.25, ZE + 0.4, 0.7); col(s * 2.95, ZE + 0.4, 0.72);
+    for (const x of [4.3, 3.1, 1.95]) col(s * x, 10.0, 0.65); col(s * 2.0, 10.65, 0.65);
+    for (const z of [11.5, 12.7, 13.9, 14.95]) col(s * (TWH - 0.4), z, 0.62); col(s * 1.72, 15.05, 0.62);
+  }
+  col(0, -9.75, 0.7);
+  info.height = TOP + 12.7;
+  return info;
+}

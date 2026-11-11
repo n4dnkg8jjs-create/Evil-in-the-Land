@@ -90,21 +90,27 @@ function stoneMaterial() {
         c = mix(c, vec3(0.46, 0.47, 0.41), smoothstep(0.69, 0.72, sfbm(ldP * 9.0 + 31.0)) * 0.5 * (1.0 - ldCav));
         c = mix(c, vec3(0.42, 0.33, 0.12), smoothstep(0.72, 0.745, sfbm(ldP * 12.0 - 17.0)) * 0.45 * (1.0 - ldCav) * step(-0.2, ldUp));
         c *= mix(0.45, 1.0, smoothstep(0.08, 0.5, ldP.y + 0.14 * n1));
+        if (ldFig > 0.5) {   // the carved figure: pitted by the rain, fine runs down it, crusts of lichen on her face too
+          c *= 1.0 - 0.22 * smoothstep(0.6, 0.84, sn(ldP * 240.0)) * smoothstep(0.36, 0.58, n2);
+          c *= 1.0 - 0.22 * smoothstep(0.5, 0.72, sfbm(vec3(ldP.x * 70.0, ldP.y * 3.0, ldP.z * 70.0))) * (1.0 - abs(ldUp));
+          float fl = sfbm(vec3(vFace * 34.0, 4.0) + 2.0);
+          c = mix(c, vec3(0.43, 0.44, 0.37) * (0.8 + 0.4 * n3), smoothstep(0.57, 0.62, fl) * 0.5 * vDat.y * smoothstep(0.022, 0.045, abs(vFace.x) + max(0.0, -vFace.y - 0.07) * 0.5));
+          c = mix(c, c * vec3(0.5, 0.49, 0.46), smoothstep(0.3, 0.6, sfbm(vec3(vFace * 16.0, 9.0))) * 0.45 * vDat.y * smoothstep(0.02, -0.06, vFace.y)); }
         float ldTear = ladyTears(vFace, vDat.y);
         c = mix(c, vec3(0.035, 0.032, 0.028), ldTear);
         diffuseColor.rgb *= c;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.38, ldTear);')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        { float h = sfbm(vLP * 38.0) * 0.6 + sfbm(vLP * 9.0) * 0.4;
+        { float h = sfbm(vLP * 38.0) * 0.6 + sfbm(vLP * 9.0) * 0.4 + 0.18 * vDat.z * sn(vLP * 120.0);
           vec3 dX = dFdx(-vViewPosition), dY = dFdy(-vViewPosition); float hx = dFdx(h), hy = dFdy(h);
           vec3 r1 = cross(dY, normal), r2 = cross(normal, dX); float det = dot(dX, r1);
-          vec3 grad = sign(det) * (hx * r1 + hy * r2); normal = normalize(abs(det) * normal - grad * 0.009 * (1.0 - 0.5 * vDat.z)); }`)
+          vec3 grad = sign(det) * (hx * r1 + hy * r2); normal = normalize(abs(det) * normal - grad * 0.009 * (1.0 - 0.3 * vDat.z)); }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         { float cg = 0.0;
           for (int i = 0; i < 2; i++) { vec3 d = uCandle[i] - vLP; float r2 = dot(d, d); cg += max(dot(ldN, d * inversesqrt(r2)) * 0.8 + 0.2, 0.0) / (1.0 + r2 * 14.0); }
           totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.5, 0.17) * cg * uGlow * 0.4 * (1.0 - 0.6 * ldCav); }`);
   };
-  m.customProgramCacheKey = () => 'ladyStone2';
+  m.customProgramCacheKey = () => 'ladyStone7';
   return (STONE = m);
 }
 
@@ -239,6 +245,7 @@ function carve(hb) {
       if (RG.getX(v) === 4) continue;                                             // the model's eyeballs: she gets carved ones
       if (y > 1.757 || (y > 1.575 && z < 0.0) || z < -0.012) continue;          // under the veil
       if (Math.abs(x) < 0.034 && y > 1.552 && y < 1.628 && z > 0 && z < 0.122) continue;   // inside the mouth
+      if (y < 1.525 && Math.abs(x) > 0.056) continue;                             // the slope to the shoulders: under the gown's collar
       keep[v] = 1;
     } else if (d === HR || d === HL) keep[v] = 2;
     else if (d === FR || d === FL) { tmp.set(x, y, z); if (tmp.distanceTo(handBind[d === FR ? 0 : 1]) < 0.07) keep[v] = 2; }
@@ -276,6 +283,14 @@ function carve(hb) {
       const de = Math.min(wp[i].distanceTo(eyes[0]), wp[i].distanceTo(eyes[1])); nxt[i].copy(cur[i]).lerp(tmp, wk[i] === 1 ? lerp(0.05, 0.24, sstep(0.012, 0.03, de)) : 0.14); }
     for (let i = 0; i < nW; i++) cur[i].copy(nxt[i]);
   }
+  // what stands proud has taken the weather: the brow ridge and the bridge of the nose are rubbed down a little more
+  for (let i = 0; i < nW; i++) { const q = nb[i]; nxt[i].copy(cur[i]); if (wk[i] !== 1 || !q.length) continue; const o = wp[i], dx = Math.abs(o.x - fc.x), dy = o.y - fc.y, dz = o.z - fc.z;
+    const w = Math.max(sstep(0.006, 0.016, dy) * (1 - sstep(0.03, 0.05, dy)), (1 - sstep(0.008, 0.016, dx)) * sstep(-0.05, -0.03, dy) * (1 - sstep(0.0, 0.012, dy))) * sstep(-0.03, -0.005, dz); if (w <= 0) continue;
+    tmp.set(0, 0, 0); for (const j of q) tmp.add(cur[j]); nxt[i].lerp(tmp.multiplyScalar(1 / q.length), 0.45 * w); }
+  for (let i = 0; i < nW; i++) cur[i].copy(nxt[i]);
+  // and the tip of her nose is chipped: a small flat break, a little to one side
+  const chipN = V3(0.42, -0.3, 1).normalize(), chipD = chipN.dot(V3(fc.x + 0.002, fc.y - 0.034, fc.z + 0.0335)), chipped = new Uint8Array(nW);
+  for (let i = 0; i < nW; i++) { if (wk[i] !== 1) continue; const d = cur[i].dot(chipN) - chipD; if (d > 0 && Math.abs(cur[i].x - fc.x) < 0.02 && Math.abs(cur[i].y - fc.y + 0.034) < 0.02) { cur[i].addScaledVector(chipN, -d); chipped[i] = 1; } }
   // bake the pose into the stone
   const used = [...new Set(tris)], remap = new Map(); used.forEach((v, i) => remap.set(v, i));
   const BM = mesh.skeleton.bones.map((b, i) => new THREE.Matrix4().multiplyMatrices(b.matrixWorld, inv[i]).elements), SIa = SI.array, SWa = SW.array;
@@ -292,6 +307,7 @@ function carve(hb) {
       cav += 0.35 * Math.exp(-((dx / 0.02) ** 2) - (((dy + 0.0745) / 0.0035) ** 2));                              // between the lips
       cav += 0.4 * Math.exp(-(((dx - 0.009) / 0.006) ** 2) - (((dy + 0.047) / 0.005) ** 2)) * sstep(0.02, 0.03, o.z - fc.z + 0.01);   // the nostrils
       cav += 0.3 * sstep(-0.115, -0.15, dy) * sstep(0.0, 0.05, o.z);                                           // under the chin, the throat
+      if (chipped[wid[v]]) cav += 0.22;
     } else cav += 0.4 * (1 - sstep(0.004, 0.016, Math.abs(tmp.x)));                                            // between the palms
     sd[i * 4] = Math.min(1, cav); sd[i * 4 + 2] = 1;
   });
@@ -426,7 +442,7 @@ function carveBody(r, wr) {
   const C = blur(H.slice(), 5); for (let i = 0; i < C.length; i++) C[i] = clamp((C[i] - H[i]) / 0.015, 0, 1);
 
   // ---- read the surface: a ray from the axis outward at every angle and height
-  const NA = 112, NY = 124, pos = new Float32Array(NA * (NY + 1) * 3), cav = new Float32Array(NA * (NY + 1)), ind = [];
+  const NA = 110, NY = 120, pos = new Float32Array(NA * (NY + 1) * 3), cav = new Float32Array(NA * (NY + 1)), ind = [];
   for (let j = 0, v = 0; j <= NY; j++) {
     const y = (j / NY) * YTOP, ax = tab(AXIS, y), act = prims.filter((p) => y >= p.y0 && y <= p.y1); let tp = -1;
     for (let i = 0; i < NA; i++, v++) {
@@ -455,11 +471,12 @@ function carveBody(r, wr) {
 // free, slanting out to rest on the shoulders, fluted with folds, its front edges standing off the cheeks. It has
 // thickness: an inner face, and a band round the whole edge.
 function carveVeil(r, cv, sdf) {
-  const Cb = V3(0, 1.662, 0.05), RX = 0.108, RY = 0.128, RM = 0.115, D0 = 1.36 * RM, JD = 12, JZ = 8, ZC = D0 * JZ / JD, HREF = 0.3, NU = 44, NV = 30, TH = 0.0095;
+  const Cb = V3(0, 1.662, 0.05), RX = 0.1, RY = 0.128, RM = 0.115, D0 = 1.45 * RM, HREF = 0.3, NU = 44, TH = 0.0095;
+  const DOME = [0, 0.13, 0.26, 0.39, 0.52, 0.65, 0.74, 0.8, 0.806, 0.822, 0.85, 0.89, 0.94, 1], JZ = 7, JD = DOME.length - 1, NV = JD + 18, ZC = D0 * DOME[JZ];   // rings over the skull; the selvedge crosses the brow at ring JZ
+  const ringD = (j) => (j <= JD ? DOME[j] * D0 : D0 + ((j - JD) / (NV - JD)) * HREF), edgeAz = (j) => { const dr = ringD(j); return j > JZ ? Math.min(Math.acos(ZC / dr), 0.9 + 0.12 * sstep(D0, D0 + HREF, dr)) : 0; };
   const C = Cb.clone().applyMatrix4(cv.headM), p1 = r() * TAU, p2 = r() * TAU, q = new THREE.Vector3(), o = new THREE.Vector3();
   const f = (u, v, i, j) => {
-    const dr = j <= JD ? (j / JD) * D0 : D0 + ((j - JD) / (NV - JD)) * HREF;                  // the ring's distance over the cloth, from the crown
-    const azE = j > JZ ? Math.min(Math.acos(ZC / dr), 0.9 + 0.12 * sstep(D0, D0 + HREF, dr)) : 0, az = azE + u * (TAU - 2 * azE), sa = Math.sin(az), ca = Math.cos(az);   // the front edge is a straight selvedge across the brow
+    const dr = ringD(j), azE = edgeAz(j), az = azE + u * (TAU - 2 * azE), sa = Math.sin(az), ca = Math.cos(az);   // the ring's distance over the cloth from the crown; the front edge is a straight selvedge across the brow
     const phi = Math.min(dr, D0) / RM, rz = lerp(0.116, 0.107, (ca + 1) / 2);
     q.set(sa * Math.sin(phi) * RX, Math.cos(phi) * RY, ca * Math.sin(phi) * rz).add(Cb).applyMatrix4(cv.headM);
     let cav = 0.1;
@@ -479,7 +496,7 @@ function carveVeil(r, cv, sdf) {
   // which way is out: away from the head's centre
   let flip = 1; { const k = (NV - 2) * cols + (NU >> 1); if ((OP.getX(k) - C.x) * ON.getX(k) + (OP.getZ(k) - C.z) * ON.getZ(k) < 0) flip = -1; }
   // the inner face (only where it hangs free) and the band round the edge
-  const J0 = JZ, rows = NV - J0 + 1, ip = new Float32Array(rows * cols * 3), ic = new Float32Array(rows * cols).fill(0.8), ii = [];
+  const J0 = JZ, rows = NV - J0 + 1, ip = new Float32Array(rows * cols * 3), ic = new Float32Array(rows * cols).fill(0.6), ii = [];
   for (let j = J0; j <= NV; j++) for (let i = 0; i < cols; i++) { const k = j * cols + i, m = ((j - J0) * cols + i) * 3; ip[m] = OP.getX(k) - ON.getX(k) * TH * flip; ip[m + 1] = OP.getY(k) - ON.getY(k) * TH * flip; ip[m + 2] = OP.getZ(k) - ON.getZ(k) * TH * flip; }
   for (let j = 0; j < rows - 1; j++) for (let i = 0; i < NU; i++) { const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1; ii.push(a, c, b, b, c, d); }
   const inner = new THREE.BufferGeometry(); inner.setAttribute('position', new THREE.BufferAttribute(ip, 3)); inner.setAttribute('cavity', new THREE.BufferAttribute(ic, 1)); inner.setIndex(ii); inner.computeVertexNormals();
@@ -487,17 +504,36 @@ function carveVeil(r, cv, sdf) {
   const bp = [], bi = [];
   edge.forEach(([i, j], n) => { const k = j * cols + i, m = ((j - J0) * cols + i) * 3; bp.push(OP.getX(k), OP.getY(k), OP.getZ(k), ip[m], ip[m + 1], ip[m + 2]); if (n) { const a = (n - 1) * 2; bi.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } });
   const band = new THREE.BufferGeometry(); band.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3)); band.setIndex(bi); band.computeVertexNormals();
-  return [fin(outer, 0.1, 1), fin(inner, 0.8, 1), fin(band, 0.3, 1)];
+  // under its edge, the linen band that frames her face: from the veil's inner edge in to the brow, temples and
+  // cheeks (it runs on into the head, so no gap shows and the ears are covered), ending at the jaw
+  const iv = new THREE.Matrix4().copy(cv.headM).invert(), fp = [], fc = [], fi = [], A = new THREE.Vector3(), B = new THREE.Vector3(), Ab = new THREE.Vector3(); let nrow = 0;
+  const row = (i, j) => { const m = ((j - J0) * cols + i) * 3, sg = i ? -1 : 1; A.set(ip[m], ip[m + 1], ip[m + 2]); Ab.copy(A).applyMatrix4(iv);
+    if (j <= JD) { const az = sg * edgeAz(j), ph = ringD(j) / RM + 0.2 * Math.cos(az) ** 2; B.set(Math.sin(az) * Math.sin(ph) * 0.092, Math.cos(ph) * 0.105, Math.cos(az) * Math.sin(ph) * 0.068).add(Cb); }
+    else { const t = sstep(1.675, 1.6, Ab.y); B.set(sg * lerp(0.055, 0.046, t), Ab.y - 0.004, lerp(0.104, 0.09, t)); B.lerp(Ab, sstep(1.615, 1.585, Ab.y)); }
+    B.applyMatrix4(cv.headM);
+    for (let k = 0; k <= 2; k++) { fp.push(lerp(A.x, B.x, k / 2), lerp(A.y, B.y, k / 2), lerp(A.z, B.z, k / 2)); fc.push(0.22 + 0.2 * k + 0.5 * sstep(1.64, 1.59, Ab.y)); }
+    if (nrow++) { const a = (nrow - 2) * 3; for (let k = 0; k < 2; k++) fi.push(a + k, a + k + 3, a + k + 1, a + k + 1, a + k + 3, a + k + 4); }
+    return Ab.y; };
+  let JE = JD + 1; while (JE < NV - 1) { const m = ((JE - J0) * cols) * 3; if (Ab.set(ip[m], ip[m + 1], ip[m + 2]).applyMatrix4(iv).y < 1.585) break; JE++; }
+  for (let j = JE; j >= JZ; j--) row(0, j); for (let j = JZ + 1; j <= JE; j++) row(NU, j);
+  const fillet = new THREE.BufferGeometry(); fillet.setAttribute('position', new THREE.Float32BufferAttribute(fp, 3)); fillet.setAttribute('cavity', new THREE.Float32BufferAttribute(fc, 1)); fillet.setIndex(fi); fillet.computeVertexNormals();
+  return [fin(outer, 0.1, 1), fin(inner, 0.6, 1), fin(band, 0.3, 1), fin(fillet, 0.3, 1)];
 }
-// a low crown: a moulded band and lilies, some long since broken away
+// a low crown, worn: a turned band with a roll at each rim, and fleurons standing from it (tall lilies between small
+// trefoils), thinning to their tips; some snapped off at the stalk long ago
 function carveCrown(r, cv) {
-  const parts = [], R = 0.083, y0 = 1.742, band = prism([[R - 0.004, 0], [R + 0.004, 0], [R + 0.005, 0.006], [R + 0.001, 0.009], [R + 0.001, 0.021], [R + 0.005, 0.024], [R + 0.004, 0.03], [R - 0.004, 0.03], [R - 0.004, 0]], 20);
-  parts.push(fin(band, 0.25, 1));
-  const lily = (h, w) => { const s = new THREE.Shape([[-w * 0.5, 0], [w * 0.5, 0], [w * 0.28, h * 0.3], [w, h * 0.42], [w * 0.95, h * 0.62], [w * 0.3, h * 0.55], [w * 0.36, h * 0.8], [0, h], [-w * 0.36, h * 0.8], [-w * 0.3, h * 0.55], [-w * 0.95, h * 0.62], [-w, h * 0.42], [-w * 0.28, h * 0.3]].map(([x, y]) => new THREE.Vector2(x, y)));
-    const g = new THREE.ExtrudeGeometry(s, { depth: 0.008, bevelEnabled: false }); g.translate(0, 0, -0.004); g.deleteAttribute('uv'); return g; };
-  const L1 = lily(0.05, 0.017), L2 = lily(0.026, 0.01);
-  for (let i = 0; i < 16; i++) { const a = (i / 16) * TAU, big = i % 2 === 0, gone = r() < (big ? 0.22 : 0.3); if (gone && i !== 0) { if (big) parts.push(fin(at(cbox(0.016, 0.012, 0.008, 0.002), [Math.sin(a) * R, 0.034, Math.cos(a) * R], [0, a, 0.2]), 0.2, 1)); continue; }
-    parts.push(fin(at((big ? L1 : L2).clone(), [Math.sin(a) * R, 0.028, Math.cos(a) * R], [-0.12, a, 0]), 0.2, 1)); }
+  const parts = [], R = 0.083, y0 = 1.738;
+  parts.push(fin(new THREE.LatheGeometry([[R - 0.005, 0.001], [R + 0.002, -0.001], [R + 0.006, 0.003], [R + 0.006, 0.007], [R + 0.002, 0.01], [R + 0.0015, 0.02], [R + 0.006, 0.023], [R + 0.006, 0.028], [R + 0.002, 0.032], [R - 0.005, 0.031]].map(([a, b]) => new THREE.Vector2(a, b)), 32), 0.25, 1));
+  const fleuron = (half, H) => { const pts = half.concat(half.slice(0, -1).reverse().map(([x, y]) => [-x, y])), g = new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y))), { depth: 0.009, bevelEnabled: false });
+    g.translate(0, 0, -0.0045); g.deleteAttribute('uv'); const p = g.attributes.position; for (let i = 0; i < p.count; i++) p.setZ(i, p.getZ(i) * (1 - 0.55 * p.getY(i) / H)); return g; };
+  const LILY = fleuron([[0.0075, 0], [0.0065, 0.01], [0.0105, 0.0125], [0.0105, 0.0165], [0.0065, 0.019], [0.014, 0.019], [0.021, 0.0215], [0.0255, 0.027], [0.0265, 0.0325], [0.0235, 0.0365], [0.0185, 0.0355], [0.013, 0.0325], [0.009, 0.032], [0.0105, 0.039], [0.0115, 0.046], [0.0085, 0.053], [0.004, 0.0585], [0, 0.0615]], 0.0615);
+  const TREF = fleuron([[0.0045, 0], [0.004, 0.007], [0.009, 0.008], [0.012, 0.013], [0.0105, 0.018], [0.006, 0.019], [0.0045, 0.017], [0.006, 0.023], [0.0035, 0.029], [0, 0.032]], 0.032);
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * TAU, big = i % 2 === 0, gone = i !== 0 && r() < (big ? 0.25 : 0.3); if (gone && !big) continue;
+    const g = (big ? LILY : TREF).clone(), p = g.attributes.position;
+    if (gone) { const c0 = 0.014 + r() * 0.008, sl = (r() - 0.5) * 0.9; for (let k = 0; k < p.count; k++) { const x = clamp(p.getX(k), -0.0078, 0.0078), c = c0 + sl * x + 0.25 * p.getZ(k); p.setX(k, x); if (p.getY(k) > c) p.setY(k, c); } }   // snapped: only the stalk stands
+    g.computeVertexNormals(); parts.push(fin(at(g, [Math.sin(a) * R, 0.029, Math.cos(a) * R], [-0.14, a, (r() - 0.5) * 0.06], 0.94 + r() * 0.1), 0.22, 1));
+  }
   const m = new THREE.Matrix4().multiplyMatrices(cv.headM, xf([0, y0, 0.052], [-0.06, 0, 0]));
   for (const p of parts) p.applyMatrix4(m);
   return parts;
