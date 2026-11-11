@@ -274,6 +274,7 @@ export class Game {
     // ---- camera
     if (!this.cinema.update(rawDt)) this.updateCamera(rawDt, myInput);
     this.engine.camera.updateMatrixWorld(); setViewFrustum(this.engine.camera);   // off-screen cloth rests until it is seen
+    this.world?.cullTrees(this.engine.camera);
     this.engine.focusShadows(this.cinema.active ? this.cam.look : me.pos);
     // ---- net send
     this.netT -= rawDt;

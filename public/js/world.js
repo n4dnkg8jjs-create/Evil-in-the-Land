@@ -1179,8 +1179,17 @@ export class World {
       cb(x, z, this.heightAt(x, z)); placed++;
     }
   }
-  instanced(geo, mat, list, { shadow = true, receive = true } = {}) {
+  // cells: for things that never change after they are placed (trees, rocks), one instanced mesh per `cells`-metre
+  // square of the map instead of one for the whole map. A single mesh for all of them cannot be culled: every tree in
+  // the land was drawn every frame, and again into the shadow map, wherever the camera looked (about a million
+  // triangles of trees each way). By squares, only those in view, and those near enough to cast a shadow, are drawn.
+  instanced(geo, mat, list, { shadow = true, receive = true, cells = 0 } = {}) {
     if (!list.length) return null;
+    if (cells && list.length > 8) {
+      const by = new Map();
+      for (const it of list) { const k = Math.floor(it.x / cells) + ':' + Math.floor(it.z / cells); let l = by.get(k); if (!l) by.set(k, l = []); l.push(it); }
+      if (by.size > 1) { for (const l of by.values()) this.instanced(geo, mat, l, { shadow, receive }); return null; }
+    }
     const m = new THREE.InstancedMesh(geo, mat, list.length);
     const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3(), E = new THREE.Euler();
     list.forEach((it, i) => { E.set(it.rx || 0, it.ry || 0, it.rz || 0); Q.setFromEuler(E); S.setScalar(it.s || 1); if (it.sy) S.y = it.sy; if (it.sx) S.x = it.sx; if (it.sz) S.z = it.sz; P.set(it.x, it.y, it.z); M.compose(P, Q, S); m.setMatrixAt(i, M); });
@@ -1189,7 +1198,8 @@ export class World {
     this.group.add(m); return m;
   }
 
-  treeGeometry(seed, style = 'oak') {
+  // lod: the same tree limb for limb (the same random numbers are drawn), in a quarter of the triangles, for far off
+  treeGeometry(seed, style = 'oak', lod = false) {
     // a gnarled tree: a leaning trunk with flared roots, limbs that fork four
     // times down to bare twigs; bark scaled to each limb's length
     const r = rng(seed); const parts = []; const tips = [];
@@ -1203,7 +1213,7 @@ export class World {
         p = p.clone().addScaledVector(d, len / segs); pts.push(p);
       }
       const curve = new THREE.CatmullRomCurve3(pts);
-      const radial = depth === 0 ? 9 : depth === 1 ? 7 : 5, tub = depth === 0 ? 14 : 6;
+      const radial = lod ? (depth === 0 ? 6 : depth === 1 ? 4 : 3) : depth === 0 ? 9 : depth === 1 ? 7 : 5, tub = lod ? (depth === 0 ? 8 : depth === 1 ? 4 : 3) : depth === 0 ? 14 : 6;
       const tg = new THREE.TubeGeometry(curve, tub, rad, radial, false);
       const pos = tg.attributes.position, uv = tg.attributes.uv; const v = new THREE.Vector3();
       for (let i = 0; i < pos.count; i++) {
@@ -1236,9 +1246,10 @@ export class World {
     if (!pine) for (let k = 0; k < 4; k++) {
       const a = (k / 4) * TAU + r.range(-0.4, 0.4); const pts = [];
       for (let s = 0; s <= 5; s++) { const t = s / 5; pts.push(new THREE.Vector3(Math.cos(a + t * 0.3) * (0.15 + t * 1.6), -0.05 - t * 0.3 + Math.sin(t * 7) * 0.04, Math.sin(a + t * 0.3) * (0.15 + t * 1.6))); }
-      const c = new THREE.CatmullRomCurve3(pts); const tg = new THREE.TubeGeometry(c, 8, 0.09, 5, false);
+      const rt = lod ? 4 : 8, rr = lod ? 3 : 5;
+      const c = new THREE.CatmullRomCurve3(pts); const tg = new THREE.TubeGeometry(c, rt, 0.09, rr, false);
       const pos = tg.attributes.position, v = new THREE.Vector3();
-      for (let i = 0; i < pos.count; i++) { const t = Math.floor(i / 6) / 8; const cc = c.getPoint(t); v.fromBufferAttribute(pos, i).sub(cc).multiplyScalar(1 - t * 0.8).add(cc); pos.setXYZ(i, v.x, v.y, v.z); }
+      for (let i = 0; i < pos.count; i++) { const t = Math.floor(i / (rr + 1)) / rt; const cc = c.getPoint(t); v.fromBufferAttribute(pos, i).sub(cc).multiplyScalar(1 - t * 0.8).add(cc); pos.setXYZ(i, v.x, v.y, v.z); }
       tg.computeVertexNormals(); parts.push(tg);
     }
     return { geo: merge(parts), tips };
@@ -1271,7 +1282,17 @@ export class World {
           leafList.push({ x: x + (tip.x * c + tip.z * sn) * s, y: y + tip.y * s, z: z + (-tip.x * sn + tip.z * c) * s, s: 0, target: r.range(1.4, 2.3) * s, ry: r() * TAU });
         }
       });
-      variants.forEach((v, i) => this.instanced(v.geo, barkMat, lists[i]));
+      // Each kind of tree is two instanced meshes: the full tree for those near the camera (they cast the shadows),
+      // and its coarse twin for the rest, of which only those in view are drawn (cullTrees, every frame). One mesh
+      // holding every tree could not be culled: the whole wood was drawn each frame, and again into the shadow map.
+      this.trees = variants.map((v, i) => {
+        const L = lists[i]; if (!L.length) return null;
+        const lo = this.treeGeometry(this.ch.seed * 7 + i, i >= 4 && P.pines ? 'oak' : style, true).geo;
+        const hi = this.instanced(v.geo, barkMat, L), far = this.instanced(lo, barkMat, L, { shadow: false });
+        hi.frustumCulled = far.frustumCulled = false; far.count = 0;
+        hi.instanceMatrix.setUsage(THREE.DynamicDrawUsage); far.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        return { hi, far, n: L.length, all: hi.instanceMatrix.array.slice(), at: L.map((t) => [t.x, t.y + 5 * t.s, t.z, 9 * t.s]) };
+      }).filter(Boolean);
       // foliage (hidden until healed)
       // leaf clusters: three crossed cards carrying a painted spray of leaves
       const cards = []; for (let k = 0; k < 3; k++) { const q = new THREE.PlaneGeometry(1.6, 1.6); q.rotateY((k / 3) * PI); q.rotateX(0.35 * (k - 1)); cards.push(q); }
@@ -1303,7 +1324,7 @@ export class World {
         const dark = snowyRock(stoneMat.clone()); dark.color = new THREE.Color(0x77726e); dark.flatShading = true;
         jag.forEach((g, i) => this.instanced(g, dark, jl[i])); spires.forEach((g, i) => this.instanced(g, dark, sl[i]));
       }
-      rocks.forEach((g, i) => this.instanced(g, stoneMat, lists[i]));
+      rocks.forEach((g, i) => this.instanced(g, stoneMat, lists[i], { cells: 90 }));
     }
     // --- gravestones & wooden crosses
     if (P.graves) {
@@ -2322,6 +2343,24 @@ export class World {
       fog: false,
     });
     const m = new THREE.Mesh(g, mat); m.position.y = -150; this.group.add(m);
+  }
+
+  // trees: the full model within NEAR metres of the camera, the coarse one beyond and only where it is in view
+  cullTrees(camera) {
+    if (!this.trees) return;
+    const NEAR2 = 52 * 52, F = (this._fr || (this._fr = new THREE.Frustum())), S = (this._sp || (this._sp = new THREE.Sphere()));
+    F.setFromProjectionMatrix((this._pm || (this._pm = new THREE.Matrix4())).multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const cx = camera.position.x, cz = camera.position.z;
+    for (const T of this.trees) {
+      const A = T.all, H = T.hi.instanceMatrix.array, L = T.far.instanceMatrix.array; let nh = 0, nl = 0;
+      for (let i = 0; i < T.n; i++) {
+        const p = T.at[i], dx = p[0] - cx, dz = p[2] - cz;
+        if (dx * dx + dz * dz < NEAR2) { for (let k = 0, o = i * 16, q = nh * 16; k < 16; k++) H[q + k] = A[o + k]; nh++; continue; }
+        S.center.set(p[0], p[1], p[2]); S.radius = p[3]; if (!F.intersectsSphere(S)) continue;
+        for (let k = 0, o = i * 16, q = nl * 16; k < 16; k++) L[q + k] = A[o + k]; nl++;
+      }
+      T.hi.count = nh; T.far.count = nl; T.hi.instanceMatrix.needsUpdate = true; T.far.instanceMatrix.needsUpdate = true;
+    }
   }
 
   // ---------------------------------------------------------------- the land heals
