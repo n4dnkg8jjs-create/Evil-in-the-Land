@@ -1,6 +1,7 @@
 // Deterministic world generation per chapter: heightfield, the blight / life
 // terrain shader, props, altars, colliders, water and the healing of the land.
 import { bakeClusters } from './batch.js';
+import { Kit, buildHouse, lotSeed, sootMaterial } from './buildings.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { icoSmooth } from './demons.js';
@@ -1631,18 +1632,19 @@ export class World {
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     let lo = 1e9, hi = -1e9;
     for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) { const [px, pz] = toW((i / 4 - 0.5) * (w + 0.8), (j / 4 - 0.5) * (dpt + 0.8)); const h = this.heightAt(px, pz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
-    const y = hi + 0.12;              // the floor sits just above the (levelled) ground
+    const y = hi + 0.05;              // the floor sits just clear of the (levelled) ground
     const footing = y - lo + 0.9;     // and the footing reaches below the lowest
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = yaw;
-    const walls = [], timber = [], plaster = [], dark = [];
-    const glass = [], iron = [], thatch = [], slate = [], cloth = [], hay = [], water = [], lamp = [], broken = [];
+    const walls = [], timber = [], iron = [], cloth = [], hay = [], water = [];
     // loose debris rests on what is under each of its points: the house's floor (the footing's top) inside, the ground outside
-    const gH = (lx, lz) => (Math.abs(lx) < w / 2 + 0.35 && Math.abs(lz) < dpt / 2 + 0.35) ? 0.12 : this.heightAt(...toW(lx, lz)) - y;
-    const sH = (geo, sink = 0.02) => { const P = geo.attributes.position; let m = 1e9; for (let i = 0; i < P.count; i++) m = Math.min(m, P.getY(i) - gH(P.getX(i), P.getZ(i))); geo.translate(0, -m - sink, 0); return geo; };
-    walls.push(xf(new THREE.BoxGeometry(w + 0.7, footing, dpt + 0.7), [0, -footing / 2 + 0.12, 0]));
+    const gH = (lx, lz) => (Math.abs(lx) < w / 2 + 0.35 && Math.abs(lz) < dpt / 2 + 0.35) ? 0 : this.heightAt(...toW(lx, lz)) - y;
+    // What the world's own random stream decides for this house, drawn in the order it always was (so nothing
+    // after it in the world shifts): standing or burnt, its roofing, where each wall is breached and how far down,
+    // which bays have windows, the debris. buildings.js makes the house from this plan; all the detail that is
+    // new there comes from the lot's own generator.
     const intact = big || r() < 0.4;   // some still stand to the eaves; barns are whole
     const roofKind = r() < 0.55 ? 'thatch' : r() < 0.6 ? 'slate' : 'shingle';
-    const eave = 4.8;
+    const plan = { intact, roofKind, walls: [], corners: [], rafters: [], panels: [], shingles: [], rubble: [], broken: [], beams: [], stones14: [], chimney: null, porch: false };
     const wall = (len, cx, cz, rot, front) => {
       const segs = Math.max(3, Math.round(len / 1.15)); const sw = len / segs;
       const door = front ? Math.floor(segs / 2) : -1;
@@ -1654,189 +1656,95 @@ export class World {
         for (let b = 0; b < nb; b++) br.push({ c: r.range(0, segs - 1), hw: r.range(1.0, 2.4), d: r.range(1.3, 2.3) });
         for (let sg = 0; sg < segs; sg++) { let t = r.range(2.3, 2.6); for (const b of br) t = Math.min(t, 2.6 - b.d * smooth(clamp(1 - Math.abs(sg - b.c) / b.hw, 0, 1))); prof.push(Math.max(0.35, t)); }
       }
-      const P0 = (gx, gy, gz) => { const c = Math.cos(rot), s2 = Math.sin(rot); return [cx + gx * c + gz * s2, gy, cz - gx * s2 + gz * c]; };
-      // the upper storey: timber frame with plaster panels, on a standing house only
-      const upper = (lx, sg, P) => {
-          // jettied out over the street on the long walls of a standing house, its joists' ends showing under the
-          // jetty; studs, a middle rail and a brace in each bay, daub panels between
-          const fy = 2.6, fh = eave - fy, out = Math.sign(cz || cx) || 1, jt = rot === 0 ? 0.42 * out : 0;
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.24, 0.3), P(lx, fy, 0.14 + jt), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.04, 0.2, 0.3), P(lx, eave, 0.14 + jt), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(0.18, fh, 0.3), P(lx - sw / 2 + 0.09, fy + fh / 2, 0.14 + jt), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw, 0.14, 0.26), P(lx, fy + fh * 0.5, 0.15 + jt), [0, rot, 0]));
-          const diag = new THREE.BoxGeometry(0.14, Math.hypot(sw, fh) * 0.95, 0.28);
-          timber.push(xf(diag, P(lx, fy + fh / 2, 0.14 + jt), [0, rot, (sg % 2 ? 1 : -1) * Math.atan2(sw, fh)]));
-          plaster.push(xf(new THREE.BoxGeometry(sw + 0.02, fh, 0.2), P(lx, fy + fh / 2, 0.02 + jt), [0, rot, 0]));
-          if (jt) { timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, 0.7), P(lx, fy - 0.2, out * 0.3), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(0.18, 0.5, 0.18), P(lx, fy - 0.42, out * 0.42), [0, rot, out * 0.6])); }
-          // an upper window in alternate bays, leaded, with a sill
-          if (sg % 2 === 0 && sg !== door) {
-            glass.push(xf(new THREE.BoxGeometry(sw * 0.5, fh * 0.42, 0.06), P(lx, fy + fh * 0.48, 0.25 * out + jt), [0, rot, 0]));
-            timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.08, 0.36), P(lx, fy + fh * 0.25, 0.2 * out + jt), [0, rot, 0]));
-            timber.push(xf(new THREE.BoxGeometry(0.05, fh * 0.42, 0.08), P(lx, fy + fh * 0.48, 0.27 * out + jt), [0, rot, 0]));
-          }
-      };
+      const P = (gx, gy, gz) => { const c = Math.cos(rot), s2 = Math.sin(rot); return [cx + gx * c + gz * s2, gy, cz - gx * s2 + gz * c]; };
+      const WP = { sw, rot, segs: [] }; plan.walls.push(WP);
       for (let sg = 0; sg < segs; sg++) {
         const lx = -len / 2 + (sg + 0.5) * sw;
-        const P = P0;
         const top = intact ? 2.6 : prof[sg];
         const ruin = !intact && top < 2.1;
-        if (ruin) { const [rx0, , rz0] = P(lx, 0, 0); broken.push({ x: rx0, z: rz0, rot, top, sw }); }
-        // a burnt house's front door: where the wall over it still stands, a charred lintel and the opening; where
-        // it has come down, just the gap with the rubble in it
-        if (sg === door && !intact && top < 2.45) {
-          for (const sx of [-1, 1]) walls.push(xf(new THREE.BoxGeometry(0.22, Math.max(0.3, top * 0.8), 0.52), P(lx + sx * (sw / 2 - 0.11), Math.max(0.3, top * 0.8) / 2, 0), [0, rot, 0]));
-          continue;
-        }
-        if (sg === door) { // doorway with a heavy lintel
-          walls.push(xf(new THREE.BoxGeometry(sw, 0.5, 0.5), P(lx, 2.35, 0), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw + 0.3, 0.22, 0.56), P(lx, 2.1, 0), [0, rot, 0]));
-          if (intact) upper(lx, sg, P);
-          if (intact) dark.push(xf(new THREE.BoxGeometry(sw - 0.2, 2.0, 0.08), P(lx, 1.0, 0.0), [0, rot, 0]));
-          if (intact) {
-            const out = Math.sign(cz || cx) || 1, dw = sw - 0.25;
-            timber.push(xf(new THREE.BoxGeometry(dw, 1.95, 0.07), P(lx, 1.0, 0.27 * out), [0, rot, 0]));
-            for (const hy of [0.4, 1.0, 1.6]) iron.push(xf(new THREE.BoxGeometry(dw * 0.8, 0.05, 0.02), P(lx - dw * 0.08, hy, 0.315 * out), [0, rot, 0]));
-            iron.push(xf(new THREE.TorusGeometry(0.06, 0.012, 6, 14), P(lx + dw * 0.3, 1.0, 0.33 * out), [0, rot, 0]));
-            walls.push(xf(new THREE.BoxGeometry(sw + 0.2, 0.18, 0.6), P(lx, 0.0, 0.55 * out), [0, rot, 0]));   // the step
-            iron.push(xf(new THREE.BoxGeometry(0.04, 0.04, 0.35), P(lx + sw * 0.62, 2.25, 0.4 * out), [0, rot, 0]));   // a lantern on its bracket
-            lamp.push(xf(new THREE.BoxGeometry(0.16, 0.24, 0.16), P(lx + sw * 0.62, 2.05, 0.55 * out), [0, rot, 0]));
-            iron.push(xf(new THREE.ConeGeometry(0.13, 0.12, 4), P(lx + sw * 0.62, 2.23, 0.55 * out), [0, rot + PI / 4, 0]));
-            if (r() < 0.5) {   // a little porch roof over the door on two posts
-              for (const px of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.14, 2.45, 0.14), P(lx + px * (sw / 2 + 0.25), 1.22, 1.15 * out), [0, rot, 0]));
-              (roofKind === 'thatch' ? thatch : slate).push(xf(new THREE.BoxGeometry(sw + 1.0, 0.12, 1.5), P(lx, 2.62, 0.75 * out), [out * 0.32, rot, 0]));
-            }
-            continue;
-          }
-          // the door itself, boarded, hanging open on one hinge (or gone)
-          if (r() < 0.75) { const sw2 = sw - 0.25, open = r.range(0.5, 1.5); const hx = lx - sw2 / 2; const [dx, , dz] = P(hx + Math.cos(open) * sw2 / 2, 0, 0.28 + Math.sin(open) * sw2 / 2); timber.push(xf(new THREE.BoxGeometry(sw2, 1.95, 0.06), [dx, 1.0, dz], [0, rot - open, r.range(-0.04, 0.04)])); }
+        const [wx, , wz] = P(lx, 0, 0);
+        const sp = { lx, top, ruin, isDoor: sg === door, win: false, stones: [], wx, wz }; WP.segs.push(sp);
+        if (ruin) plan.broken.push({ x: wx, z: wz, rot, top, sw });
+        if (sg === door) {   // the doorway: no wall to walk into
+          if (!intact && top < 2.45) continue;                       // the wall over it has come down: just the gap
+          if (intact) { plan.porch = r() < 0.5; continue; }
+          if (r() < 0.75) sp.leaf = { open: r.range(0.5, 1.5), tilt: r.range(-0.04, 0.04) };   // the door, hanging open on one hinge
           continue;
         }
         const win = !ruin && sg % 2 === 1 && r() < 0.7;
-        if (win) {
-          walls.push(xf(new THREE.BoxGeometry(sw + 0.02, 1.0, 0.5), P(lx, 0.5, 0), [0, rot, 0]));
-          walls.push(xf(new THREE.BoxGeometry(sw + 0.02, top - 2.0, 0.5), P(lx, 2.0 + (top - 2.0) / 2, 0), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw * 0.8, 0.12, 0.6), P(lx, 1.02, 0), [0, rot, 0]));
-          timber.push(xf(new THREE.BoxGeometry(sw * 0.9, 0.16, 0.58), P(lx, 1.95, 0), [0, rot, 0]));
-          for (const sx of [-1, 1]) timber.push(xf(new THREE.BoxGeometry(0.08, 0.95, 0.56), P(lx + sx * sw * 0.34, 1.48, 0), [0, rot, 0]));
-          if (intact) glass.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.9, 0.08), P(lx, 1.48, 0), [0, rot, 0]));
-          if (intact) { timber.push(xf(new THREE.BoxGeometry(0.06, 0.9, 0.14), P(lx, 1.48, 0), [0, rot, 0])); timber.push(xf(new THREE.BoxGeometry(sw * 0.62, 0.06, 0.14), P(lx, 1.62, 0), [0, rot, 0])); }
-          // shutters: thrown open, one hanging by a hinge, one sometimes fallen
-          for (const sx of [-1, 1]) {
-            const fate = r(); if (fate < 0.2) continue;
-            const hw = sw * 0.32, ang = fate < 0.4 ? 0.35 : 1.35;
-            const [sx0, , sz0] = P(lx + sx * (sw * 0.31 + Math.cos(ang) * hw / 2), 0, 0.3 + Math.sin(ang) * hw / 2);
-            timber.push(xf(new THREE.BoxGeometry(hw, 0.9, 0.04), [sx0, fate < 0.4 ? 1.35 : 1.48, sz0], [0, rot - sx * ang, fate < 0.4 ? sx * 0.35 : 0]));
-          }
-        } else if (intact) {
-          walls.push(xf(new THREE.BoxGeometry(sw + 0.02, top, 0.52), P(lx, top / 2, 0), [0, rot, 0]));
-        } else {
-          // a burnt wall: each half of the bay meets its neighbour's height, so the top steps down into a breach
-          // course by course; loose stones lie on the broken top
-          const hl = (prof[Math.max(0, sg - 1)] + top) / 2, hr = (prof[Math.min(segs - 1, sg + 1)] + top) / 2;
-          for (const [hx, hh] of [[-1, hl * 0.5 + top * 0.5], [1, hr * 0.5 + top * 0.5]]) walls.push(xf(new THREE.BoxGeometry(sw / 2 + 0.02, hh, 0.52), P(lx + hx * sw / 4, hh / 2, 0), [0, rot, 0]));
+        if (win) { sp.win = true; sp.fates = [r(), r()]; }
+        else if (!intact) {
+          // a burnt wall: loose stones on the broken top, the charred ends of the studs and joists that stood on it
           const nst = ruin ? 3 : 1;
-          for (let q = 0; q < nst; q++) { const qx = r.range(-sw / 2.4, sw / 2.4), hh = qx < 0 ? hl * 0.5 + top * 0.5 : hr * 0.5 + top * 0.5, sz = r.range(0.22, 0.42); walls.push(xf(lumpy(icoSmooth(1), 0.3, 700 + sg * 7 + q), P(lx + qx, hh + sz * 0.15, r.range(-0.1, 0.1)), [r() * 3, rot, r() * 3], [sz, sz * 0.6, sz * 0.8])); }
-          // the charred ends of the floor joists and studs that stood on the wall, sticking up out of it
-          if (!ruin && r() < 0.6) { const ht = r.range(0.25, 1.3); timber.push(xf(new THREE.BoxGeometry(0.16, ht, 0.18), P(lx + r.range(-sw / 3, sw / 3), top + ht / 2 - 0.05, 0.05), [r.range(-0.15, 0.15), rot, r.range(-0.25, 0.25)])); }
-          if (r() < 0.35) timber.push(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(0.6, 1.1)), P(lx, Math.min(hl, hr) - 0.12, 0.25), [r.range(-0.2, 0.2), rot, 0]));   // a joist end through the wall
-          // where a window was, its charred head-beam still spans the burnt wall
-          if (!ruin && sg % 2 === 1 && r() < 0.5) timber.push(xf(new THREE.BoxGeometry(sw * 0.85, 0.16, 0.56), P(lx, Math.min(hl, hr) - 0.35, 0), [0, rot, 0]));
-          // a burning house burns at its wall tops and window heads too
-          if (!ruin && r() < 0.22) { const [wx0, , wz0] = P(lx, 0, 0); const [fx, fz] = toW(wx0, wz0); (this.wallFires || (this.wallFires = [])).push({ x: fx, y: y + Math.min(hl, hr), z: fz, s: r.range(0.45, 0.75), yaw: yaw + rot, wall: true }); }
+          for (let q = 0; q < nst; q++) sp.stones.push({ qx: r.range(-sw / 2.4, sw / 2.4), sz: r.range(0.22, 0.42), pz: r.range(-0.1, 0.1), rx: r() * 3, rz: r() * 3 });
+          if (!ruin && r() < 0.6) sp.stud = { ht: r.range(0.25, 1.3), px: r.range(-sw / 3, sw / 3), rx: r.range(-0.15, 0.15), rz: r.range(-0.25, 0.25) };
+          if (r() < 0.35) sp.joist = { len: r.range(0.6, 1.1), rx: r.range(-0.2, 0.2) };
+          if (!ruin && sg % 2 === 1 && r() < 0.5) sp.head = true;
+          if (!ruin && r() < 0.22) sp.fire = { s: r.range(0.45, 0.75) };   // a burning house burns at its wall tops too
         }
-        if (intact && top >= 2.5 && sg !== door) upper(lx, sg, P);
-        const C2 = Math.cos(yaw), S2 = Math.sin(yaw); const [wx, , wz] = P(lx, 0, 0);
-        this.addCollider(x + wx * C2 + wz * S2, z - wx * S2 + wz * C2, 0.6);
+        this.addCollider(...toW(wx, wz), 0.6);
       }
     };
     wall(w, 0, dpt / 2, 0, true); wall(w, 0, -dpt / 2, 0, false); wall(dpt, w / 2, 0, PI / 2, false); wall(dpt, -w / 2, 0, PI / 2, false);
-    // quoins: dressed stones up each corner
-    for (const [cx, cz] of [[-w / 2, -dpt / 2], [w / 2, -dpt / 2], [-w / 2, dpt / 2], [w / 2, dpt / 2]]) {
-      const top = intact ? eave : r.range(2.6, 3.1);   // the corners stand longest: never lower than the walls they close
-      for (let k = 0; k < top / 0.45; k++) walls.push(xf(new THREE.BoxGeometry(0.66 + (k % 2) * 0.12, 0.42, 0.66 - (k % 2) * 0.12), [cx, 0.21 + k * 0.45, cz]));
-    }
-    // gable ends and roof timbers
-    if (intact) {
-      for (const sz of [-1, 1]) { const gb = new THREE.BufferGeometry(); const hw = w / 2;
-        const gz = sz * (dpt / 2 + 0.44); gb.setAttribute('position', new THREE.Float32BufferAttribute([-hw, eave, gz, hw, eave, gz, 0, eave + 2.6, gz], 3)); gb.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0.5, 0.5], 2)); gb.setIndex([0, 1, 2]); gb.computeVertexNormals(); plaster.push(gb); }
-      timber.push(xf(new THREE.BoxGeometry(0.24, 0.24, dpt + 1.4), [0, eave + 2.6, 0]));
-      // where the jetty runs out past the side walls, the corners of the upper storey are closed with a panel and a post
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-        plaster.push(xf(new THREE.BoxGeometry(0.24, eave - 2.6, 0.62), [sx * w / 2, (eave + 2.6) / 2, sz * (dpt / 2 + 0.27)]));
-        timber.push(xf(new THREE.BoxGeometry(0.22, eave - 2.5, 0.22), [sx * w / 2, (eave + 2.6) / 2, sz * (dpt / 2 + 0.5)]));
-      }
-    }
-    const rafters = intact ? 7 : 5, rise = 2.6, slope = Math.atan2(rise, w / 2), rlen = Math.hypot(w / 2, rise) + 0.5;
-    const roofs = [];
-    for (let k = 0; k < rafters; k++) {
-      const lz = -dpt / 2 + (k + 0.5) * dpt / rafters;
+    for (let k = 0; k < 4; k++) plan.corners.push(intact ? 2.6 : r.range(2.6, 3.1));   // the corners stand longest
+    for (let k = 0, n = intact ? 7 : 5; k < n; k++) {
+      const lz = -dpt / 2 + (k + 0.5) * dpt / n;
       for (const sx of [-1, 1]) {
-        if (intact) {
-          // from the wall plate up to the ridge
-          if (r() < 0.2) continue;
-          timber.push(xf(new THREE.BoxGeometry(rlen, 0.16, 0.16), [sx * w / 4, eave + rise / 2 + 0.05, lz], [0, 0, -sx * slope]));
-        } else if (r() < 0.35) {
-          // fallen in: one end on the floor, the other against the broken wall
-          const lean = r.range(0.5, 0.9); const L2 = 2.2 / Math.sin(lean);
-          timber.push(xf(new THREE.BoxGeometry(L2, 0.16, 0.16), [sx * (w / 2 - Math.cos(lean) * L2 / 2 - 0.3), 1.1 + 0.05, lz + r.range(-0.3, 0.3)], [r.range(-0.1, 0.1), r.range(-0.2, 0.2), sx * lean]));
-        }
+        if (intact) { r(); continue; }
+        if (r() < 0.35) plan.rafters.push({ lz, sx, lean: r.range(0.5, 0.9), dz: r.range(-0.3, 0.3), rx: r.range(-0.1, 0.1), ry: r.range(-0.2, 0.2) });   // fallen in
       }
-    }
-    // a standing house is roofed whole: deep thatch with a ridge roll, or slates/shingles with a wooden gutter
-    if (intact && roofKind === 'thatch') {
-      for (const sx of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(rlen + 0.9, 0.42, dpt + 1.9), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.28, 0], [0, 0, -sx * slope]));
-      thatch.push(xf(new THREE.CylinderGeometry(0.3, 0.3, dpt + 2.0, 10), [0, eave + rise + 0.42, 0], [PI / 2, 0, 0]));
-      for (const sz of [-1, 1]) thatch.push(xf(new THREE.BoxGeometry(w + 0.8, 0.3, 0.5), [0, eave + 0.05, sz * (dpt / 2 + 0.5)], [0, 0, 0], [1, 1, 1]));
-    } else if (intact) {
-      for (const sx of [-1, 1]) {
-        slate.push(xf(new THREE.BoxGeometry(rlen + 0.5, 0.1, dpt + 1.7), [sx * (w / 4 + 0.05), eave + rise / 2 + 0.17, 0], [0, 0, -sx * slope]));
-        timber.push(xf(new THREE.CylinderGeometry(0.09, 0.09, dpt + 1.7, 8, 1, true, 0, PI), [sx * (w / 2 + 0.45), eave - 0.08, 0], [PI / 2, 0, sx < 0 ? 0 : PI]));   // the gutter
-      }
-      slate.push(xf(new THREE.BoxGeometry(0.3, 0.18, dpt + 1.8), [0, eave + rise + 0.18, 0]));   // ridge tiles
     }
     // a burnt house's roof has come down: charred panels of it slid in off the wall tops and lying against them,
     // and shingles strewn over the floor and out round the walls
     if (!intact) {
       for (const sx of [-1, 1]) for (let k = 0; k < 5; k++) {
         if (r() < 0.35) continue;
-        const lz = -dpt / 2 + (k + 0.5) * dpt / 5 + r.range(-0.3, 0.3), top = r.range(1.0, 2.0), len = r.range(2.0, 3.4);
-        const lean = Math.asin(clamp((top - 0.08) / len, 0.15, 0.95));
-        roofs.push(xf(new THREE.BoxGeometry(len, 0.08, dpt / 5 + r.range(-0.2, 0.3)), [sx * (w / 2 - 0.3 - Math.cos(lean) * len / 2), top / 2 + 0.06, lz], [r.range(-0.08, 0.08), r.range(-0.15, 0.15), sx * lean]));
+        plan.panels.push({ sx, lz: -dpt / 2 + (k + 0.5) * dpt / 5 + r.range(-0.3, 0.3), top: r.range(1.0, 2.0), len: r.range(2.0, 3.4), wd: dpt / 5 + r.range(-0.2, 0.3), rx: r.range(-0.08, 0.08), ry: r.range(-0.15, 0.15) });
       }
       for (let k = 0; k < 40; k++) {
         const out = r() < 0.4, lx = out ? (r() < 0.5 ? -1 : 1) * (w / 2 + r.range(0.4, 1.8)) : r.range(-w / 2 + 0.4, w / 2 - 0.4), lz = r.range(-dpt / 2 - (out ? 1.5 : -0.4), dpt / 2 + (out ? 1.5 : -0.4));
-        const [px, pz] = toW(lx, lz), gy0 = out ? this.heightAt(px, pz) - y : 0;
-        roofs.push(sH(xf(new THREE.BoxGeometry(r.range(0.18, 0.3), 0.025, r.range(0.12, 0.22)), [lx, gy0 + 0.02 + r() * 0.04, lz], [r.range(-0.12, 0.12), r() * TAU, r.range(-0.12, 0.12)]), 0.012));
+        plan.shingles.push({ lx, lz, a: r.range(0.18, 0.3), b: r.range(0.12, 0.22), yj: r() * 0.04, rx: r.range(-0.12, 0.12), ry: r() * TAU, rz: r.range(-0.12, 0.12) });
       }
     }
-    // rubble: stone fallen from each broken stretch of wall, heaped at its foot inside and out, the heap highest
-    // under the break
-    for (const b of broken) {
+    // rubble: stone fallen from each broken stretch of wall, heaped at its foot inside and out
+    for (const b of plan.broken) {
       for (let k = 0; k < 9; k++) {
         const side = k % 2 ? 1 : -1, c = Math.cos(b.rot), s2 = Math.sin(b.rot);
         const along = r.range(-b.sw * 0.7, b.sw * 0.7), off = side * r.range(0.35, 1.3), lx = b.x + along * c + off * s2, lz = b.z - along * s2 + off * c;
-        const [px, pz] = toW(lx, lz), inside = Math.abs(lx) < w / 2 && Math.abs(lz) < dpt / 2, gy0 = inside ? 0.1 : this.heightAt(px, pz) - y;
-        const sz = r.range(0.16, 0.36) * (1.3 - Math.abs(off) * 0.4), st = lumpy(icoSmooth(1), 0.32, 900 + k + Math.floor(b.x * 10));
-        walls.push(sH(xf(st, [lx, gy0 + sz * 0.3, lz], [r() * 3, r() * 3, r() * 3], [sz, sz * r.range(0.55, 0.85), sz * r.range(0.8, 1.2)]), sz * 0.12));
+        const sz = r.range(0.16, 0.36) * (1.3 - Math.abs(off) * 0.4);
+        plan.rubble.push({ lx, lz, sz, rx: r() * 3, ry: r() * 3, rz: r() * 3, sy: r.range(0.55, 0.85), sz2: r.range(0.8, 1.2) });
       }
     }
     // chimney stack at one end
-    if (r() < 0.7) { const cx = (r() < 0.5 ? -1 : 1) * (w / 2 - 0.5), ch = intact ? 8 : r.range(4, 7); walls.push(xf(new THREE.BoxGeometry(1.1, ch, 0.9), [cx, ch / 2, 0])); walls.push(xf(new THREE.BoxGeometry(1.3, 0.25, 1.1), [cx, ch, 0])); if (intact) { slate.push(xf(new THREE.CylinderGeometry(0.16, 0.2, 0.55, 10), [cx, ch + 0.4, 0])); } }
+    if (r() < 0.7) plan.chimney = { sx: r() < 0.5 ? -1 : 1, h: intact ? 8 : r.range(4, 7) };
     // fallen beams and rubble about the floor
-    for (let k = 0; k < 4; k++) timber.push(sH(xf(new THREE.BoxGeometry(0.16, 0.16, r.range(2, 4)), [r.range(-w / 3, w / 3), 0.2, r.range(-dpt / 3, dpt / 3)], [r.range(-0.08, 0.08), r() * TAU, r.range(-0.08, 0.08)]), 0.01));
-    for (let k = 0; k < 14; k++) { const sz = r.range(0.2, 0.55), lx = r.range(-w / 2 - 1.2, w / 2 + 1.2), lz = r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2); const inside = Math.abs(lx) < w / 2 + 0.35 && Math.abs(lz) < dpt / 2 + 0.35; const [px, pz] = toW(lx, lz); walls.push(sH(xf(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), [lx, sz * 0.2 + (inside ? 0 : this.heightAt(px, pz) - y), lz], [r() * 0.4, r() * 3, r() * 0.4]), sz * 0.15)); }
+    for (let k = 0; k < 4; k++) plan.beams.push({ len: r.range(2, 4), lx: r.range(-w / 3, w / 3), lz: r.range(-dpt / 3, dpt / 3), rx: r.range(-0.08, 0.08), ry: r() * TAU, rz: r.range(-0.08, 0.08) });
+    for (let k = 0; k < 14; k++) plan.stones14.push({ sz: r.range(0.2, 0.55), lx: r.range(-w / 2 - 1.2, w / 2 + 1.2), lz: r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2), rx: r() * 0.4, ry: r() * 3, rz: r() * 0.4 });
     // the yard: barrels, crates, a woodpile against the wall, a cart, a fence
     this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind, toW, y });
     // a burnt house still burning: a fire in the wreck on its floor; or its timbers heaped and smouldering
     if (!intact && !big) {
       const lx = r.range(-w / 4, w / 4), lz = r.range(-dpt / 4, dpt / 4), [px, pz] = toW(lx, lz);
-      ((r() < 0.6 ? this.fireSpots : this.charSpots) || []).push({ x: px, y: y + 0.12, z: pz, s: r.range(0.8, 1.15), yaw: yaw + r() * TAU });
+      ((r() < 0.6 ? this.fireSpots : this.charSpots) || []).push({ x: px, y, z: pz, s: r.range(0.8, 1.15), yaw: yaw + r() * TAU });
     }
+    // ---- the house itself (buildings.js), from the plan and the lot's own generator
+    const K = new Kit();
+    const info = buildHouse(K, { w, d: dpt, big, plan, q: rng(lotSeed(lot)), gH, village: !!lot.village, footing });
+    lot.intact = intact; lot.style = info.style;
+    for (const [hx, hz, cr] of info.colliders) this.addCollider(...toW(hx, hz), cr);
+    // and the burning houses burn along their wall tops, wherever those now are
+    plan.walls.forEach((WP, li) => { for (const sp of WP.segs) if (sp.fire) { const [fx, fz] = toW(sp.wx, sp.wz); (this.wallFires || (this.wallFires = [])).push({ x: fx, y: y + info.tops[[0, 2, 1, 3][li]](li === 1 || li === 3 ? -sp.lx : sp.lx), z: fz, s: sp.fire.s, yaw: yaw + WP.rot, wall: true }); } });
     const B = this.buildingMats();
     const voidMat = this.voidMat || (this.voidMat = new THREE.MeshStandardMaterial({ color: 0x050403, roughness: 1 }));
-    for (const [list, m, tile] of [[walls, B.stone, 1.6], [timber, intact ? B.oak : B.charred, 1.1], [plaster, B.plaster, 2.0], [dark, voidMat, 1], [roofs, B.shingleBurnt, 2.2],
-      [glass, B.glass, 0.8], [iron, B.iron, 0.6], [thatch, B.thatch, 2.4], [slate, roofKind === 'shingle' ? B.shingle : B.slate, 2.0], [cloth, B.sacking, 1.0], [hay, B.hay, 1.6], [water, B.water, 1], [lamp, B.lamp, 1]]) {
-      if (!list.length) continue; const geo = boxUV(merge(list), tile); const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.lamp && m !== B.water; mesh.receiveShadow = true; g.add(mesh);
+    const boardMat = this.boardMat || (this.boardMat = buildingMat(woodTextures(256, [92, 80, 66]), { key: 'board', moss: 0.3, damp: 0.5 }));
+    const sootMat = this.sootMat || (this.sootMat = sootMaterial());
+    const frameMat = intact ? B.oak : B.charred;
+    for (const [list, m, tile] of [[walls, B.stone, 1.6], [timber, frameMat, 1.1], [iron, B.iron, 0.6], [cloth, B.sacking, 1.0], [hay, B.hay, 1.6], [water, B.water, 1]]) {
+      if (!list.length) continue; const geo = boxUV(merge(list), tile); const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.water; mesh.receiveShadow = true; g.add(mesh);
+    }
+    for (const [k, m, tile] of [['stone', B.stone, 1.6], ['timber', frameMat, 1.1], ['board', boardMat, 1.1], ['plaster', B.plaster, 2.0], ['dark', voidMat, 1], ['glass', B.glass, 0.8], ['iron', B.iron, 0.6],
+      ['thatch', B.thatch, 2.4], ['roof', roofKind === 'shingle' ? B.shingle : B.slate, 2.0], ['roofBurnt', B.shingleBurnt, 2.2], ['lamp', B.lamp, 1], ['soot', sootMat, 1]]) {
+      const geo = K.geometry(k, tile); if (!geo) continue; const mesh = new THREE.Mesh(geo, m); mesh.castShadow = m !== B.lamp && m !== sootMat; mesh.receiveShadow = m !== sootMat; g.add(mesh);
     }
     g.userData.bake = true; this.group.add(g);
     (this.ruinSpots || (this.ruinSpots = [])).push({ x, z });
