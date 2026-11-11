@@ -341,18 +341,19 @@ function closeHand(wp, wbone, nb, HB, M) {
   const F = fs.map((m, k) => { const base = m.filter((a) => L[a * 3] < cuts[k] + 0.008), B = V3(mean(base, 0), mean(base, 1), mean(base, 2)); let tip = B, td = 0; for (const a of m) { const d = P3(a).distanceTo(B); if (d > td) { td = d; tip = P3(a); } }
     return { m, B, d: tip.clone().sub(B).normalize(), len: td, cut: cuts[k] }; });
   // where each should lie: the middle finger straight up the hand, the others closed against it, all bent a touch toward the palm
-  const lean = 0.1 * pm, tgt = (f, across) => V3(f.len, across - f.B.y, lean * f.len).normalize();
+  // (their roots are drawn together a little as well, or wide slots are left between the knuckles)
+  const lean = 0.1 * pm, tgt = (f, across) => V3(f.len, across - f.B.y - f.sh, lean * f.len).normalize(); [0.0075, 0.005, 0, -0.0055].forEach((d, k) => { F[k].sh = st * d; });
   F[2].T = tgt(F[2], F[2].B.y);
   F[3].T = tgt(F[3], F[2].B.y + st * 0.0135); F[1].T = tgt(F[1], F[2].B.y - st * 0.0135);
-  F[0].T = tgt(F[0], F[1].B.y + (F[1].T.y / F[1].T.x) * (F[0].B.x + F[0].len - F[1].B.x) - st * 0.0135);
+  F[0].T = tgt(F[0], F[1].B.y + F[1].sh + (F[1].T.y / F[1].T.x) * (F[0].B.x + F[0].len - F[1].B.x) - st * 0.013);
   const q = new THREE.Quaternion(), qi = new THREE.Quaternion(), ec = new THREE.Vector3(), et = new THREE.Vector3(), o = new THREE.Vector3();
   const put = (a) => { v.set(o.z, -o.x, o.y).applyMatrix4(Mi); wp[a].copy(v); };   // back from the hand's frame
   for (const f of F) {
     q.setFromUnitVectors(f.d, f.T); ec.set(0, 1, 0).addScaledVector(f.T, -f.T.y).normalize(); et.crossVectors(f.T, ec);
-    for (const a of f.m) { const w = sstep(f.cut, f.cut + 0.014, L[a * 3]); if (w <= 0) continue;
+    for (const a of f.m) { const w = sstep(f.cut, f.cut + 0.009, L[a * 3]); if (w <= 0) continue;
       o.set(L[a * 3], L[a * 3 + 1], L[a * 3 + 2]).sub(f.B).applyQuaternion(qi.identity().slerp(q, w));
-      const s = o.dot(f.T), t = clamp(s / f.len, 0, 1), c = (o.dot(ec)) * (1 + w * lerp(0.2, 0.58, t)), h = (o.dot(et)) * (1 + w * lerp(0.1, 0.3, t));
-      o.copy(f.B).addScaledVector(f.T, s * (1 - 0.06 * w)).addScaledVector(ec, c).addScaledVector(et, h); put(a); }
+      const s = o.dot(f.T), t = clamp(s / f.len, 0, 1), c = (o.dot(ec)) * (1 + Math.sqrt(w) * lerp(0.42, 0.58, t)), h = (o.dot(et)) * (1 + w * lerp(0.12, 0.3, t));
+      o.copy(f.B).addScaledVector(f.T, s * (1 - 0.06 * w)).addScaledVector(ec, c).addScaledVector(et, h); o.y += f.sh * w; put(a); }
   }
   if (th) {   // the thumb: swung back from before the palm to lie along the forefinger's side
     const root = th.filter((a) => Math.abs(L[a * 3 + 2]) < 0.03), Pv = V3(mean(root, 0), mean(root, 1), mean(root, 2)); let tip = Pv, td = 0; for (const a of th) { const d = P3(a).distanceTo(Pv); if (d > td) { td = d; tip = P3(a); } }
