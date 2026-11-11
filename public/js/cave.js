@@ -374,6 +374,9 @@ export class Cave {
     tg.position.set(tx, W.heightAt(tx, tz) + 0.03, tz); tg.rotation.set(Math.PI / 2 - 0.08, 0, 0.6); this.group.add(tg);
     this.torchSpot = V(tx, W.heightAt(tx, tz), tz);
     const glint = new THREE.PointLight(0xff9040, 0, 3, 2); glint.position.copy(this.torchSpot).add(V(0, 0.4, 0)); this.group.add(glint); this.glint = glint;
+    // the torches' two lights wait here, dark, from the start: a light that first appears when the torch is lit makes
+    // the renderer rebuild every lit shader at once (a freeze at the moment the pitch takes the flame)
+    this.torchLights = [0, 1].map(() => { const L = new THREE.PointLight(0xff8a3a, 0, 22, 1.5); L.castShadow = false; L.position.copy(this.torchSpot); this.group.add(L); return L; });
   }
   mergeAll(list) {
     const parts = list.map((g) => (g.index ? g.toNonIndexed() : g)); let n = 0; for (const g of parts) n += g.attributes.position.count;
@@ -460,7 +463,7 @@ export class Cave {
       const head = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.035, 0.14, 10), new THREE.MeshStandardMaterial({ color: 0x1a120a, roughness: 0.9 })); head.position.y = 0.47; grp.add(head);
       const tip = new THREE.Object3D(); tip.position.y = 0.53; grp.add(tip);   // where the flame stands (it burns upright, in the world)
       const fl = makeFlame({ height: 0.46, width: 0.2, tongues: 3, sparks: 26 }); this.group.add(fl.group);
-      let L = null; if (light) { L = new THREE.PointLight(0xff8a3a, light, 22, 1.5); L.position.y = 0.6; L.castShadow = false; grp.add(L); }
+      let L = null; if (light) { L = this.torchLights?.pop() || new THREE.PointLight(0xff8a3a, light, 22, 1.5); L.intensity = light; L.position.set(0, 0.6, 0); L.castShadow = false; grp.add(L); }
       grp.position.set(0.0, -0.06, 0.02); grp.rotation.set(0.9, 0, 0); k.rig.j.handL.add(grp);
       return { grp, tip, fl, L, k, base: light };
     };

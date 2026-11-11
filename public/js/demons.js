@@ -673,6 +673,14 @@ export class Horde {
     for (const d of this.list) if (!seen.has(d.id) && d.alive && d.snapInit) { d.die(null); }
   }
   clear() { for (const d of this.list) d.dispose(); this.list.length = 0; this.byId.clear(); }
+  // One of each kind is kept in the scene for the whole game, hidden. Every demon has its own material, so when the
+  // last of a kind was banished its shaders were thrown away and had to be built again for the next wave (a stall as
+  // each wave came in); the kept one holds them, and its skin and mesh stay on the graphics card.
+  keepWarm(show) {
+    if (!this.keepers) this.keepers = TYPE_LIST.map((t) => { try { const d = new Demon(t, -1, this.scene); d.mesh.position.set(0, -40, 0); d.mesh.updateMatrixWorld(true); return d; } catch (e) { console.warn('keeper', t, e); return null; } }).filter(Boolean);
+    for (const d of this.keepers) d.mesh.visible = show;
+  }
+  dropKeepers() { for (const d of this.keepers || []) d.dispose(); this.keepers = null; }
 }
 export { ST };
 

@@ -1108,7 +1108,9 @@ export class World {
       const wax = new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.6, emissive: 0x302010 });
       const flameMat = new THREE.MeshBasicMaterial({ color: 0xffc070 });
       for (let k = 0; k < 6; k++) { const ang = (k / 6) * TAU; const c = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.24 + (k % 3) * 0.06, 8), wax); c.position.set(Math.cos(ang) * 0.75, 0.9 + c.geometry.parameters.height / 2, Math.sin(ang) * 0.75); candles.add(c); const f = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), flameMat); f.scale.y = 2; f.position.copy(c.position); f.position.y += c.geometry.parameters.height / 2 + 0.03; candles.add(f); }
-      const cl = new THREE.PointLight(0xffb060, 0, 9, 2); cl.position.y = 1.5; candles.add(cl); candles.userData.light = cl;
+      // the lights an altar will ever need are in the scene from the start, dark until wanted: a light that appears
+      // later makes the renderer rebuild every lit shader at once, which froze the game as the land was cleansed
+      const cl = new THREE.PointLight(0xffb060, 0, 9, 2); cl.position.y = 1.5; g.add(cl); candles.userData.light = cl;
       g.add(candles);
       // prayer circle on the ground
       const circleMat = new THREE.ShaderMaterial({
@@ -1126,8 +1128,10 @@ export class World {
       const circle = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), circleMat); circle.rotation.x = -PI / 2; circle.position.y = 0.06; g.add(circle);
       // a red glow from the corruption
       const evil = new THREE.PointLight(0xff3010, 6, 14, 2); evil.position.y = 2; g.add(evil);
+      const hk = this.ch.terrain?.kind; let shaftLight = null;
+      if (hk === 'mountain' || hk === 'peak') { shaftLight = new THREE.PointLight(0xffe6c0, 0, 26, 1.6); shaftLight.position.y = 7; g.add(shaftLight); }
       this.group.add(g);
-      this.altars.push({ i, x: a.x, y: a.y, z: a.z, group: g, corr, candles, circle, evilLight: evil, crossMesh: cross, state: 'blighted', progress: 0, radius: 7.2 });
+      this.altars.push({ i, x: a.x, y: a.y, z: a.z, group: g, corr, candles, circle, evilLight: evil, shaftLight, crossMesh: cross, state: 'blighted', progress: 0, radius: 7.2 });
     }
   }
 
@@ -2349,7 +2353,7 @@ export class World {
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
     });
     const m = new THREE.Mesh(geo, mat); m.position.set(a.x, a.y - 0.5, a.z); m.renderOrder = 3; m.frustumCulled = false; this.group.add(m);
-    const light = new THREE.PointLight(0xffe6c0, 0, 26, 1.6); light.position.set(a.x, a.y + 7, a.z); this.group.add(light);
+    let light = a.shaftLight; if (!light) { light = new THREE.PointLight(0xffe6c0, 0, 26, 1.6); light.position.set(a.x, a.y + 7, a.z); this.group.add(light); }
     (this.shafts || (this.shafts = [])).push({ m, light, mat });
     return { m, light, mat };
   }

@@ -8,9 +8,11 @@ export class Cinema {
     this.cam = engine.camera; this.lb = 0; this.skippable = true;
   }
   // shots: [{ dur, track?: fn -> Vector3, anchor?: Vector3, ground?: fn(x, z) -> y, from:{pos,look}, to:{pos,look}, fov?, fovTo?, ease?, text?, title?, shake?, at?: fn, tick?: fn(dt, k) }]
-  play(shots, onDone, { skippable = true } = {}) {
-    this.shots = shots; this.t = 0; this.idx = 0; this.onDone = onDone; this.active = true; this.skippable = skippable; this.fired = new Set();
-    this.ui.letterbox(true); this.ui.hint(skippable ? 'Hold Space to skip' : '');
+  // local: a shot only this player sees (the others play on), so skipping it is this player's own business
+  play(shots, onDone, { skippable = true, local = false } = {}) {
+    this.shots = shots; this.t = 0; this.idx = 0; this.onDone = onDone; this.active = true; this.skippable = skippable; this.local = local; this.fired = new Set();
+    this.age = 0;   // seconds since it began: a press of Space from the fight just before must not skip it
+    this.ui.letterbox(true); this.ui.hint(skippable ? 'Press Space to skip' : '');
   }
   skip() { if (!this.active || !this.skippable) return; this.finish(); }
   finish() {
@@ -28,7 +30,7 @@ export class Cinema {
       if (s.at) s.at();
       if (s.shake) this.engine.shake(s.shake, s.dur);
     }
-    this.t += dt;
+    this.t += dt; this.age += dt;
     const k = clamp(this.t / s.dur, 0, 1); const e = (s.ease || easeInOut)(k);
     const fp = s.from.pos, tp = s.to.pos, fl = s.from.look, tl = s.to.look;
     this.cam.position.set(fp.x + (tp.x - fp.x) * e, fp.y + (tp.y - fp.y) * e, fp.z + (tp.z - fp.z) * e);

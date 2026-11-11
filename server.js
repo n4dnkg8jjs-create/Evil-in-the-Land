@@ -90,7 +90,7 @@ const server = http.createServer(async (req, res) => {
   if (url === '/') url = '/index.html';
   const file = path.normalize(path.join(ROOT, url));
   if (!file.startsWith(ROOT)) return send(res, 403, 'Forbidden');
-  if (url === '/index.html') {
+  if (url === '/index.html' || url === '/dev.html') {
     // the page loads Three.js from the CDN; served from here it uses the local cache instead,
     // so friends on your network don't need internet
     return fs.readFile(file, 'utf8', (err, html) => {

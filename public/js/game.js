@@ -45,6 +45,9 @@ export class Game {
     this.time = 0; this.netT = 0; this.snapT = 0; this.paused = false; this.stats = { kills: 0, start: performance.now() };
     this.projectiles = []; this.consecrations = []; this.chapterIdx = -1; this.obj = null; this.boss = null;
     this.reviveSend = 0; this.hitstop = 0; this.lastHurt = 0; this.musicMood = 'dread';
+    // two lights for the cutscenes, in the scene from the start and dark until a shot wants them: a light added in the
+    // middle of a game makes the renderer rebuild every lit shader at once (a long freeze on the cut)
+    this.cineLights = [new THREE.PointLight(0x9fb0c8, 0, 7, 2), new THREE.PointLight(0x5a6890, 0, 9, 2)]; for (const l of this.cineLights) this.scene.add(l);
     this.prayerLine = 0; this.prayerLineT = 0; this.downedShown = false;
     // roster: humans + companions (same ids on every machine)
     for (const p of opts.players) this.addKnight(p);
@@ -72,6 +75,7 @@ export class Game {
     this.chT0 = performance.now(); this.myDowns = 0; this.secondWindUsed = false; this.burns = [];
     this.ui.fade(true);
     this.chapterIdx = n; const ch = CHAPTERS[n];
+    if (this.cinema.active) this.cinema.finish();   // a cutscene still running ends properly (what it changed is put back)
     if (this.world) this.world.dispose();
     this.horde.clear(); this.projectiles.length = 0; this.consecrations.length = 0;
     if (this.boss) { this.boss.dispose(); this.boss = null; }
@@ -101,6 +105,12 @@ export class Game {
     this.cam.yaw = face; this.cam.pitch = 0.2;
     this.audio.setAmbience(ch.id === 'peak' || ch.id === 'ascent' ? 0.9 : 0.55, 0.05);
     this.setMood('dread', 0);
+    // Behind the black: the chapter's bosses are built now and wait hidden (building one in the middle of the game
+    // stalled it just as its cutscene began), one demon of each kind is put out, and one frame is drawn with nothing
+    // culled, so every shader, mesh and texture is ready before the opening shots.
+    this.readyBosses(ch); this.horde.keepWarm(true);
+    this.engine.warmUp();
+    this.horde.keepWarm(false); for (const B of this.bossReady.values()) for (const o of B.roots) { o.userData.shown = o.visible; o.visible = false; }
     setTimeout(() => this.ui.fade(false), 200);
     if (skipIntro) { this.obj.ph = 'travel'; if (this.isHost && ch.boss === 'dragon') this.spawnBoss('dragon'); return; }
     this.playIntro(n);
@@ -149,7 +159,7 @@ export class Game {
       if (!this.isHost) return;
       if (ch.boss === 'dragon') this.spawnBoss('dragon');
       else this.obj.ph = 'travel';
-    }, { skippable: this.isHost });
+    }, { skippable: true });
   }
 
   // ================================================================ net
@@ -166,7 +176,8 @@ export class Game {
     n.on('k:rev', (m) => { const k = this.knights.get(m.to); if (k && this.owns(k) && k.downed) { k.reviveProgress = Math.max(k.reviveProgress, m.p); if (k.reviveProgress >= 1) this.reviveKnight(k); } });
     n.on('k:relic', (m) => this.onRelic(m, false));
     n.on('k:gear', (m) => { const k = this.knights.get(m.id); if (k && k !== this.me) { k.setWeapon(m.weapon, this.engine.q); if (m.maxHp) k.maxHp = m.maxHp; } });
-    n.on('k:skip', () => { if (this.cinema.active) this.cinema.finish(); });
+    n.on('k:skip', () => { if (this.cinema.active && !this.cinema.local) this.cinema.finish(); });
+    n.on('k:skipreq', () => { if (this.isHost && this.cinema.active && this.cinema.skippable && !this.cinema.local) { this.cinema.skip(); this.net.send('skip'); } });
     n.on('k:kc', () => account.record('kill'));
     // a knight whose player drops out keeps fighting: a companion takes up their place
     n.on('left', (m) => { for (const [id, k] of this.knights) if (!k.isAI && k !== this.me && !m.players.find((p) => p.id === id)) this.knightToAI(k); });
@@ -208,8 +219,13 @@ export class Game {
     if (this.paused) dt = 0;
     this.time += dt;
     const I = this.input;
-    // cinematic skip (host decides for all)
-    if (this.cinema.active && I.held('Space')) { this.skipHold = (this.skipHold || 0) + rawDt; if (this.skipHold > 0.6 && this.isHost) { this.skipHold = 0; this.cinema.skip(); if (!this.opts.solo) this.net.send('skip'); } } else this.skipHold = 0;
+    // Space skips a cutscene. One that everyone is watching ends for everyone: the host's press does it, a guest's
+    // asks the host to. One that only this player sees (the Devil on the ridge) ends for this player alone.
+    if (this.cinema.active && this.cinema.skippable && this.cinema.age > 0.35 && I.pressed('Space')) {
+      if (this.cinema.local || this.opts.solo) this.cinema.skip();
+      else if (this.isHost) { this.cinema.skip(); this.net.send('skip'); }
+      else this.net.send('skipreq');
+    }
 
     // ---- local player
     const inCine = this.cinema.active || (this.obj && this.obj.ph === 'intro');
@@ -509,7 +525,8 @@ export class Game {
     const n = this.chapterIdx; this.obj.ph = 'outro';
     this.saveProgress(n + 1);
     this.bcast('outro', { n });
-    setTimeout(() => { if (this.chapterIdx === n && this.obj.ph === 'outro' && n + 1 < CHAPTERS.length) this.bcast('chapter', { n: n + 1 }); }, 14000);
+    // a backstop only: the next chapter is called when the outro's last shot ends (playOutro)
+    setTimeout(() => { if (this.chapterIdx === n && this.obj.ph === 'outro' && n + 1 < CHAPTERS.length) this.bcast('chapter', { n: n + 1 }); }, 40000);
   }
   saveProgress(next) { if (next > account.get('evil.progress', 0)) account.set('evil.progress', Math.min(next, CHAPTERS.length - 1)); }
   // every knight's own profile keeps what they did (host and guests alike)
@@ -537,12 +554,26 @@ export class Game {
   wipeFx() { this.ui.fade(true); this.audio.bell(null, 0.5, 0.6); this.setMood('dread', 0); this.ui.subtitle(['The darkness takes the land.', 'You will rise at the last consecrated altar.'], 4); }
 
   // ================================================================ bosses
-  createBoss(kind, pos) {
+  makeBoss(kind) {
     const n = this.knightList.length;
-    if (kind === 'hound') this.boss = new Hound(this.scene, n);
-    else if (kind === 'serpent') this.boss = new Serpent(this.scene, n);
-    else if (kind === 'cryptid') this.boss = new Cryptid(this.scene, n, this.fx);
-    else if (kind === 'dragon') this.boss = new Dragon(this.scene, n, this.fx);
+    if (kind === 'hound') return new Hound(this.scene, n);
+    if (kind === 'serpent') return new Serpent(this.scene, n);
+    if (kind === 'cryptid') return new Cryptid(this.scene, n, this.fx);
+    return new Dragon(this.scene, n, this.fx);
+  }
+  // build this chapter's bosses ahead of time; what each one put into the scene is remembered so it can be hidden
+  readyBosses(ch) {
+    this.dropReadyBosses(); this.bossReady = new Map();
+    if (this.engine.headless) return;
+    for (const kind of [].concat(ch.miniboss || [], ch.boss || [])) {
+      try { const before = new Set(this.scene.children); const b = this.makeBoss(kind); this.bossReady.set(kind, { b, roots: this.scene.children.filter((o) => !before.has(o)) }); } catch (e) { console.warn('boss ahead of time', kind, e); }
+    }
+  }
+  dropReadyBosses() { for (const B of this.bossReady?.values() || []) { try { B.b.dispose(); } catch {} } this.bossReady = null; }
+  createBoss(kind, pos) {
+    const B = this.bossReady?.get(kind);
+    if (B) { this.bossReady.delete(kind); this.boss = B.b; for (const o of B.roots) o.visible = o.userData.shown ?? true; }
+    else this.boss = this.makeBoss(kind);
     this.boss.world = this.world;
     this.boss.pos.copy(pos);
     if (kind === 'serpent') this.boss.placeAt(pos);   // coiled under the ground there, about to rise
@@ -570,12 +601,12 @@ export class Game {
       this.cinema.play([
         { dur: 4, from: { pos: V(lead.x - 6, lead.y + 2, lead.z - 6), look: V(0, 30, 10) }, to: { pos: V(lead.x - 5, lead.y + 1.6, lead.z - 7), look: V(0, 12, 14) }, fov: 48, at: () => this.audio.roar(V(0, 20, 10), 1.2, 3) },
         { dur: 5, from: { pos: V(-14, 4, 2), look: V(0, 4, 18) }, to: { pos: V(-9, 3, 6), look: V(0, 5, 18) }, fov: 40, text: ['Draco magnus rufus…', 'A great red dragon, having seven heads and ten horns.'], shake: 0.25 },
-      ], null, { skippable: this.isHost });
+      ], null, { skippable: true });
       this.audio.bell(null, 0.4, 0.6);
     } else {
       // (the great ones are framed from further off, looking up at them)
       const bp = b.pos, h = b.camH || 1.2, f = b.camD || 1;
-      this.cinema.play([{ dur: kind === 'hound' ? 3.5 : 4.2, from: { pos: V(bp.x + 6 * f, bp.y + 2.5 + h * 0.2, bp.z + 8 * f), look: V(bp.x, bp.y + h, bp.z) }, to: { pos: V(bp.x + 4 * f, bp.y + 1.8 + h * 0.1, bp.z + 6 * f), look: V(bp.x, bp.y + h * 1.1, bp.z) }, fov: 42 }], null, { skippable: this.isHost });
+      this.cinema.play([{ dur: kind === 'hound' ? 3.5 : 4.2, from: { pos: V(bp.x + 6 * f, bp.y + 2.5 + h * 0.2, bp.z + 8 * f), look: V(bp.x, bp.y + h, bp.z) }, to: { pos: V(bp.x + 4 * f, bp.y + 1.8 + h * 0.1, bp.z + 6 * f), look: V(bp.x, bp.y + h * 1.1, bp.z) }, fov: 42 }], null, { skippable: true });
     }
   }
   bossSfx(kind) {
@@ -1071,7 +1102,7 @@ export class Game {
     this.cinema.play([
       { dur: 3.2, from: { pos: V(m.x - dir.x * 2.5 + dir.z * 0.8, m.y + 2.0, m.z - dir.z * 2.5 - dir.x * 0.8), look: face.clone() }, to: { pos: V(m.x - dir.x * 2.2 + dir.z * 0.7, m.y + 1.9, m.z - dir.z * 2.2 - dir.x * 0.7), look: face.clone() }, fov: 40, fovTo: 22, text: LINES[key] || LINES.vale, trackLook: true, track: trk, anchor: face.clone(), ground: gnd },
       { dur: 3.4, from: { pos: near, look: face.clone() }, to: { pos: V(face.x - dir.x * 6, hy + 0.15, face.z - dir.z * 6), look: face.clone().setY(hy - 0.05) }, fov: 30, fovTo: 18, text: '', at: () => this.audio.whisper?.(V(p.x, hy, p.z), 2.6, 0.7), track: trk, anchor: face.clone(), ground: gnd },
-    ], null, { skippable: true });
+    ], null, { skippable: true, local: true });
   }
   playOutro(n) {
     { const mins = this.chT0 ? (performance.now() - this.chT0) / 60000 : 99; let bonus = 0; const why = ['the road is won'];
@@ -1117,20 +1148,22 @@ export class Game {
             sc.fog.color.setHex(0x010102); sc.fog.density = 0.1; e.sun.intensity *= 0.15; e.hemi.intensity *= 0.35; e.fill.intensity = 0;
             const dark = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 10), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, fog: false }));
             dark.position.set(best.x, gy, best.z); sc.add(dark);
-            const key = new THREE.PointLight(0x9fb0c8, 14, 7, 2);
-            const rim = new THREE.PointLight(0x5a6890, 30, 9, 2); rim.position.set(best.x - fx * 2.5 - fz * 2.2, gy + 4, best.z - fz * 2.5 + fx * 2.2); sc.add(rim); key.position.set(best.x + fx * 2.2 + fz * 1.4, gy + 3.6, best.z + fz * 2.2 - fx * 1.4); sc.add(key);
+            const [key, rim] = this.cineLights; key.intensity = 14; rim.intensity = 30;
+            rim.position.set(best.x - fx * 2.5 - fz * 2.2, gy + 4, best.z - fz * 2.5 + fx * 2.2); key.position.set(best.x + fx * 2.2 + fz * 1.4, gy + 3.6, best.z + fz * 2.2 - fx * 1.4);
             this.audio.whisper(V(best.x, gy + 3, best.z), 3, 0.6); this.audio.setAmbience?.(1.1, 0.2);
             undo = () => {
               sc.fog.color.copy(saved.fc); sc.fog.density = saved.fd; e.sun.intensity = saved.sun; e.hemi.intensity = saved.hemi; e.fill.intensity = saved.fill; e.renderer.toneMappingExposure = saved.exp;
-              dark.removeFromParent(); dark.geometry.dispose(); dark.material.dispose(); key.removeFromParent(); rim.removeFromParent();
+              dark.removeFromParent(); dark.geometry.dispose(); dark.material.dispose(); key.intensity = 0; rim.intensity = 0;
               robeWind(0, 0); D.state = 'hidden'; D.mesh.visible = false; D.cool = 20;
             };
           } });
-        // compile his shaders now, so the shot does not hitch when he first appears
-        D.mesh.visible = true; D.mesh.position.set(best.x, gy, best.z); try { this.engine.renderer.compile(this.scene, this.engine.camera); } catch {} D.mesh.visible = false;
       }
     }
-    this.cinema.play(shots, () => { undo?.(); this.ui.fade(true); }, { skippable: false });
+    // the road goes on when the last shot ends (or the moment the cutscene is skipped), not after a fixed wait
+    this.cinema.play(shots, () => {
+      undo?.(); this.ui.fade(true);
+      if (this.isHost) setTimeout(() => { if (this.chapterIdx === n && this.obj.ph === 'outro' && n + 1 < CHAPTERS.length) this.bcast('chapter', { n: n + 1 }); }, 900);
+    }, { skippable: true });
   }
   victory() {
     const b = this.boss; this.setMood('triumph', 0);
@@ -1146,7 +1179,7 @@ export class Game {
       orbitShot(p, 22, 8, 0, 1.2, 8, 3, { text: ['Et proiectus est draco ille magnus, serpens antiquus.', 'And that great dragon was cast out, that old serpent, called the Devil and Satan.'] }),
       orbitShot(me, 7, 1.8, 2.4, 3.4, 7, 1.6, { text: ['The land lives.', ''] }),
       { dur: 9, from: { pos: V(me.x, me.y + 4, me.z - 6), look: V(me.x, me.y + 2, me.z) }, to: { pos: V(me.x - 60, me.y + 70, me.z - 120), look: V(0, -20, 0) }, fov: 50, text: ['Deo gratias.', 'Thanks be to God.'] },
-    ], () => this.credits(), { skippable: false });
+    ], () => this.credits(), { skippable: true });
   }
   credits() {
     const mins = Math.round((performance.now() - this.stats.start) / 60000);
@@ -1227,11 +1260,12 @@ export class Game {
   dispose() {
     for (const k of this.knightList) k.dispose();
     for (const t of this.trails.values()) t.dispose(this.scene);
-    this.horde.clear(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
+    this.horde.clear(); this.horde.dropKeepers(); this.dropReadyBosses(); if (this.boss) this.boss.dispose(); if (this.world) this.world.dispose();
     if (this.watcher) this.scene.remove(this.watcher.mesh);
     if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
+    for (const l of this.cineLights) this.scene.remove(l);
     this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; this.weather?.dispose(); this.weather = null; for (const k of this.fallenKnights || []) k.dispose();
-    for (const k of ['k:sv', 'k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'k:kc', 'left']) this.net?.off(k);
+    for (const k of ['k:sv', 'k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'k:skipreq', 'k:kc', 'left']) this.net?.off(k);
   }
 }
 

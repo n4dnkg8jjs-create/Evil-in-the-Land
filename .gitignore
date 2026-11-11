@@ -4,3 +4,4 @@ vendor/
 Thumbs.db
 *.log
 node_modules
+__pycache__/

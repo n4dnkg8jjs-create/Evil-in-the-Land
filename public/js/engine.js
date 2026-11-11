@@ -202,18 +202,34 @@ export class Engine {
 
   // Reflection environment for metal: render the sky into a PMREM cube.
   buildEnvironment() {
-    const envScene = new THREE.Scene();
-    const sky = makeSky();
-    for (const k in this.sky.uniforms) { const v = this.sky.uniforms[k].value; sky.uniforms[k].value = v && v.clone ? v.clone() : v; }
-    sky.mesh.scale.setScalar(0.1);
-    envScene.add(sky.mesh);
-    // a dim ground disc so reflections show earth below the horizon
-    const ground = new THREE.Mesh(new THREE.CircleGeometry(80, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color(this.baseAtmos?.hemiGround ?? 0x1a1210).multiplyScalar(0.6) }));
-    ground.rotation.x = -Math.PI / 2; ground.position.y = -5; envScene.add(ground);
-    if (this.envRT) this.envRT.dispose();
-    this.envRT = this.pmrem.fromScene(envScene, 0.02, 0.1, 200);
+    // the little scene the reflections are rendered from is kept: building and discarding it each time the sky
+    // changed threw its shaders away with it, to be compiled again on the next change
+    let E = this.envScene;
+    if (!E) {
+      E = this.envScene = { scene: new THREE.Scene(), sky: makeSky() };
+      E.sky.mesh.scale.setScalar(0.1); E.scene.add(E.sky.mesh);
+      // a dim ground disc so reflections show earth below the horizon
+      E.ground = new THREE.Mesh(new THREE.CircleGeometry(80, 32), new THREE.MeshBasicMaterial());
+      E.ground.rotation.x = -Math.PI / 2; E.ground.position.y = -5; E.scene.add(E.ground);
+    }
+    for (const k in this.sky.uniforms) { const v = this.sky.uniforms[k].value, t = E.sky.uniforms[k]; if (v && v.copy && t.value && t.value.copy) t.value.copy(v); else t.value = v && v.clone ? v.clone() : v; }
+    E.ground.material.color.set(this.baseAtmos?.hemiGround ?? 0x1a1210).multiplyScalar(0.6);
+    const old = this.envRT;
+    this.envRT = this.pmrem.fromScene(E.scene, 0.02, 0.1, 200);
     this.scene.environment = this.envRT.texture;
-    sky.mesh.geometry.dispose(); sky.mesh.material.dispose(); ground.geometry.dispose(); ground.material.dispose();
+    if (old) old.dispose();
+  }
+
+  // Behind the loading screen: build every shader the scene needs and send every mesh and texture to the graphics
+  // card, by drawing one frame with nothing left out for being off screen. Otherwise each of them is done the first
+  // time a thing comes into view, which is a hitch at every camera cut of a cutscene and at every corner turned.
+  warmUp() {
+    if (this.headless) return;
+    const sc = this.scene, held = [];
+    try { this.renderer.compile(sc, this.camera); } catch (e) { console.warn('warm-up compile', e); }
+    sc.traverse((o) => { if (o.frustumCulled && (o.isMesh || o.isPoints || o.isLine || o.isSprite)) { o.frustumCulled = false; held.push(o); } });
+    try { this.render(0); } catch (e) { console.warn('warm-up draw', e); }
+    for (const o of held) o.frustumCulled = true;
   }
 
   // keep the shadow frustum centred on the action
