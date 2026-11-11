@@ -230,14 +230,15 @@ function carve(hb) {
   const set = (j, x, y = 0, z = 0) => J[j].rotation.set(x * D2R, y * D2R, z * D2R, 'YXZ');
   set('spine', 1); set('chest', 2); set('neck', 8, 3, 4); set('head', 12, 4, 7);
   root.updateMatrixWorld(true);
-  { const up = V3(0, 1, 0.3).normalize(), X = V3(1, 0, 0), Y = up.clone().negate(), Z = new THREE.Vector3().crossVectors(X, Y).normalize();
+  const handUp = V3(0, 1, 0.42).normalize();
+  { const up = handUp, X = V3(1, 0, 0), Y = up.clone().negate(), Z = new THREE.Vector3().crossVectors(X, Y).normalize();
     const hq = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z)), ch = J.chest.getWorldPosition(new THREE.Vector3());
-    for (const [k, s] of [['R', -1], ['L', 1]]) { rig.solveArm(k, V3(s * 0.016, ch.y - 0.075, ch.z + 0.2), V3(s * 0.7, -1, -0.25), hq); root.updateMatrixWorld(true); } }
+    for (const [k, s] of [['R', -1], ['L', 1]]) { rig.solveArm(k, V3(s * 0.016, ch.y - 0.075, ch.z + 0.175), V3(s * 0.7, -1, -0.25), hq); root.updateMatrixWorld(true); } }
   const g = P.geo, PA = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, RG = g.attributes.region, idx = g.index.array;
   const ji = (n) => JOINTS.indexOf(n), HEAD = ji('head'), NECK = ji('neck'), HR = ji('handR'), HL = ji('handL'), FR = ji('fArmR'), FL = ji('fArmL');
   const inv = mesh.skeleton.boneInverses, handBind = [HR, HL].map((b) => new THREE.Vector3().setFromMatrixPosition(inv[b].clone().invert()));
   const eyes = (P.eyes || [[0.0306, 1.6512, 0.123], [-0.0306, 1.6512, 0.123]]).map((e) => V3(...e)), fc = eyes[0].clone().add(eyes[1]).multiplyScalar(0.5);
-  const tmp = new THREE.Vector3(), N = PA.count, keep = new Uint8Array(N);
+  const tmp = new THREE.Vector3(), N = PA.count, keep = new Uint8Array(N), domB = new Uint8Array(N);
   for (let v = 0; v < N; v++) {
     let d = 0, w = -1; for (let c = 0; c < 4; c++) { const ww = SW.array[v * 4 + c]; if (ww > w) { w = ww; d = SI.array[v * 4 + c]; } }
     const x = PA.getX(v), y = PA.getY(v), z = PA.getZ(v);
@@ -248,15 +249,17 @@ function carve(hb) {
       if (y < 1.525 && Math.abs(x) > 0.056) continue;                             // the slope to the shoulders: under the gown's collar
       keep[v] = 1;
     } else if (d === HR || d === HL) keep[v] = 2;
-    else if (d === FR || d === FL) { tmp.set(x, y, z); if (tmp.distanceTo(handBind[d === FR ? 0 : 1]) < 0.07) keep[v] = 2; }
+    else if (d === FR || d === FL) { tmp.set(x, y, z); if (tmp.distanceTo(handBind[d === FR ? 0 : 1]) < 0.022) keep[v] = 2; }
+    if (keep[v] === 2) domB[v] = d;
   }
   // weld by position, so wear and morphs run across the model's seams
-  const key = new Map(), wid = new Int32Array(N).fill(-1), wp = [], wk = [];
+  const key = new Map(), wid = new Int32Array(N).fill(-1), wp = [], wk = [], wbone = [];
   for (let v = 0; v < N; v++) { if (!keep[v]) continue; const x = PA.getX(v), y = PA.getY(v), z = PA.getZ(v), k = (Math.round(x * 2e4) + 16000) * 1.6e9 + Math.round(y * 2e4) * 40000 + Math.round(z * 2e4) + 16000;
-    let id = key.get(k); if (id === undefined) { id = wp.length; key.set(k, id); wp.push(V3(x, y, z)); wk.push(keep[v]); } wid[v] = id; }
+    let id = key.get(k); if (id === undefined) { id = wp.length; key.set(k, id); wp.push(V3(x, y, z)); wk.push(keep[v]); wbone.push(domB[v]); } wid[v] = id; }
   const nW = wp.length, nb = Array.from({ length: nW }, () => []), tris = [];
   for (let i = 0; i < idx.length; i += 3) { const a = idx[i], b = idx[i + 1], c = idx[i + 2]; if (!keep[a] || !keep[b] || !keep[c]) continue; tris.push(a, b, c);
     const A = wid[a], B = wid[b], C = wid[c]; nb[A].push(B, C); nb[B].push(A, C); nb[C].push(A, B); }
+  for (const hbone of [HR, HL]) closeHand(wp, wbone, nb, hbone, inv[hbone]);
   // toward the sweet round face of a Gothic Madonna: a finer nose, fuller lips, a narrow jaw and small round chin,
   // soft cheeks; and heavy upper lids, half lowered
   const EC = eyes.map((e) => V3(e.x, e.y, e.z - 0.0065)), ER = 0.0149;
@@ -280,7 +283,7 @@ function carve(hb) {
   const cur = wp.map((p) => p.clone()), nxt = wp.map((p) => p.clone());
   for (let it = 0; it < 2; it++) {
     for (let i = 0; i < nW; i++) { const q = nb[i]; if (!q.length) continue; tmp.set(0, 0, 0); for (const j of q) tmp.add(cur[j]); tmp.multiplyScalar(1 / q.length);
-      const de = Math.min(wp[i].distanceTo(eyes[0]), wp[i].distanceTo(eyes[1])); nxt[i].copy(cur[i]).lerp(tmp, wk[i] === 1 ? lerp(0.05, 0.24, sstep(0.012, 0.03, de)) : 0.14); }
+      const de = Math.min(wp[i].distanceTo(eyes[0]), wp[i].distanceTo(eyes[1])); nxt[i].copy(cur[i]).lerp(tmp, wk[i] === 1 ? lerp(0.05, 0.24, sstep(0.012, 0.03, de)) : 0.24); }
     for (let i = 0; i < nW; i++) cur[i].copy(nxt[i]);
   }
   // what stands proud has taken the weather: the brow ridge and the bridge of the nose are rubbed down a little more
@@ -314,7 +317,49 @@ function carve(hb) {
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setAttribute('sdat', new THREE.BufferAttribute(sd, 4)); geo.setIndex(tris.map((v) => remap.get(v))); geo.computeVertexNormals();
   const headM = new THREE.Matrix4().multiplyMatrices(J.head.matrixWorld, inv[HEAD]), wp2 = (nm) => J[nm].getWorldPosition(new THREE.Vector3());
-  return { geo, headM, eyes, EC, ER, wr: { R: wp2('handR'), L: wp2('handL') } };
+  return { geo, headM, eyes, EC, ER, wr: { R: wp2('handR'), L: wp2('handL') }, handUp, handAcross: V3(1, 0, 0).cross(handUp.clone().negate()).normalize() };
+}
+// The model's hand is at rest: fingers spread and a little curled, the thumb standing out before the palm. For
+// prayer (and for stone) it is closed: each finger is found as its own island beyond the webs, turned at its root
+// to lie straight against its neighbour, made a little fuller and shorter; the thumb is laid alongside the
+// forefinger. All in the hand bone's own frame: [along the hand, across it, through it].
+function closeHand(wp, wbone, nb, HB, M) {
+  const n = wp.length, L = new Float32Array(n * 3), inH = new Uint8Array(n), v = new THREE.Vector3(), Mi = M.clone().invert();
+  for (let i = 0; i < n; i++) if (wbone[i] === HB) { v.copy(wp[i]).applyMatrix4(M); L[i * 3] = -v.y; L[i * 3 + 1] = v.z; L[i * 3 + 2] = v.x; inH[i] = 1; }
+  const islands = (pred, min = 20) => { const seen = new Uint8Array(n), out = [];
+    for (let i = 0; i < n; i++) { if (!inH[i] || seen[i] || !pred(i)) continue; const st = [i], m = []; seen[i] = 1; while (st.length) { const a = st.pop(); m.push(a); for (const b of nb[a]) if (inH[b] && !seen[b] && pred(b)) { seen[b] = 1; st.push(b); } } if (m.length >= min) out.push(m); }
+    return out; };
+  const mean = (m, k) => { let s = 0; for (const a of m) s += L[a * 3 + k]; return s / m.length; }, P3 = (a) => V3(L[a * 3], L[a * 3 + 1], L[a * 3 + 2]);
+  const fs = islands((i) => L[i * 3] > 0.105); if (fs.length !== 4) return;   // not the hand we know: leave it be
+  fs.sort((a, b) => mean(a, 1) - mean(b, 1));
+  const reach = (m) => { let x = 0; for (const a of m) x = Math.max(x, L[a * 3]); return x; };
+  if (reach(fs[0]) > reach(fs[3])) fs.reverse();                              // now: little finger, ring, middle, fore
+  const st = Math.sign(mean(fs[3], 1) - mean(fs[0], 1)), cuts = [0.09, 0.105, 0.105, 0.105];
+  { const lf = islands((i) => L[i * 3] > 0.09).find((m) => m.length < 400 && m.includes(fs[0][0])); if (lf) fs[0] = lf; else cuts[0] = 0.105; }
+  const th = islands((i) => Math.abs(L[i * 3 + 2]) > 0.022 && L[i * 3] < 0.1).filter((m) => mean(m, 1) * st > 0).sort((a, b) => b.length - a.length)[0];
+  const pm = th ? Math.sign(mean(th, 2)) : -1;                                // which way the palm faces
+  const F = fs.map((m, k) => { const base = m.filter((a) => L[a * 3] < cuts[k] + 0.008), B = V3(mean(base, 0), mean(base, 1), mean(base, 2)); let tip = B, td = 0; for (const a of m) { const d = P3(a).distanceTo(B); if (d > td) { td = d; tip = P3(a); } }
+    return { m, B, d: tip.clone().sub(B).normalize(), len: td, cut: cuts[k] }; });
+  // where each should lie: the middle finger straight up the hand, the others closed against it, all bent a touch toward the palm
+  const lean = 0.1 * pm, tgt = (f, across) => V3(f.len, across - f.B.y, lean * f.len).normalize();
+  F[2].T = tgt(F[2], F[2].B.y);
+  F[3].T = tgt(F[3], F[2].B.y + st * 0.0135); F[1].T = tgt(F[1], F[2].B.y - st * 0.0135);
+  F[0].T = tgt(F[0], F[1].B.y + (F[1].T.y / F[1].T.x) * (F[0].B.x + F[0].len - F[1].B.x) - st * 0.0135);
+  const q = new THREE.Quaternion(), qi = new THREE.Quaternion(), ec = new THREE.Vector3(), et = new THREE.Vector3(), o = new THREE.Vector3();
+  const put = (a) => { v.set(o.z, -o.x, o.y).applyMatrix4(Mi); wp[a].copy(v); };   // back from the hand's frame
+  for (const f of F) {
+    q.setFromUnitVectors(f.d, f.T); ec.set(0, 1, 0).addScaledVector(f.T, -f.T.y).normalize(); et.crossVectors(f.T, ec);
+    for (const a of f.m) { const w = sstep(f.cut, f.cut + 0.014, L[a * 3]); if (w <= 0) continue;
+      o.set(L[a * 3], L[a * 3 + 1], L[a * 3 + 2]).sub(f.B).applyQuaternion(qi.identity().slerp(q, w));
+      const s = o.dot(f.T), t = clamp(s / f.len, 0, 1), c = (o.dot(ec)) * (1 + w * lerp(0.2, 0.58, t)), h = (o.dot(et)) * (1 + w * lerp(0.1, 0.3, t));
+      o.copy(f.B).addScaledVector(f.T, s * (1 - 0.06 * w)).addScaledVector(ec, c).addScaledVector(et, h); put(a); }
+  }
+  if (th) {   // the thumb: swung back from before the palm to lie along the forefinger's side
+    const root = th.filter((a) => Math.abs(L[a * 3 + 2]) < 0.03), Pv = V3(mean(root, 0), mean(root, 1), mean(root, 2)); let tip = Pv, td = 0; for (const a of th) { const d = P3(a).distanceTo(Pv); if (d > td) { td = d; tip = P3(a); } }
+    const d = tip.clone().sub(Pv).normalize(), S = V3(Pv.x + 0.004, F[3].B.y + st * 0.012, pm * 0.007), T = V3(0.96, st * 0.2, -pm * 0.03).normalize(); q.setFromUnitVectors(d, T);
+    for (const a of th) { o.set(L[a * 3], L[a * 3 + 1], L[a * 3 + 2]).sub(Pv); const w = sstep(-0.002, 0.022, o.dot(d)); if (w <= 0) continue;
+      o.applyQuaternion(qi.identity().slerp(q, w)); o.add(Pv).addScaledVector(v.copy(S).sub(Pv), w); put(a); }
+  }
 }
 // the eyes: carved balls behind the lids, an incised ring for the iris and a drilled pupil, looking down
 function carvedEyes(cv) {
@@ -362,16 +407,16 @@ function sample(F, a, y) {
 const HEM = [[-PI, 0.15], [-2.3, 0.16], [-1.8, 0.24], [-1.0, 0.31], [-0.45, 0.31], [0.15, 0.4], [0.6, 0.53], [0.86, 0.64], [1.6, 0.6], [1.95, 0.3], [2.4, 0.18], [PI, 0.15]];
 const PIPES = [[-1.63, 0.13, -1.3, 0.34], [-1.38, 0.13, -1.3, 0.2], [-1.13, 0.13, -1.3, 0.37], [0.98, 0.12, 1.12, 0.7], [1.22, 0.12, 1.12, 0.55], [1.46, 0.12, 1.12, 0.68], [1.7, 0.12, 1.12, 0.5]];   // [angle at the foot, half-width, angle where it is gathered, foot]
 const hemY = (a) => { for (const [pa, pw, , pb] of PIPES) { const q = (a - pa) / pw; if (q > -1 && q <= 1) return pb + 0.035 * q * q; } return tab(HEM, a); };
-const yokeY = (a) => 1.055 + 0.035 * (a / 1.1) ** 2;            // its upper edge, turned over, where it is drawn across under her hands
-const OPEN = [[1.0, 0.5], [1.12, 0.44], [1.25, 0.34], [1.4, 0.3], [1.56, 0.3]];   // where it parts over the breast
+const yokeY = (a) => 1.02 + 0.035 * (a / 1.1) ** 2;            // its upper edge, turned over, where it is drawn across under her hands
+const OPEN = [[1.0, 1.22], [1.1, 1.12], [1.2, 0.9], [1.3, 0.64], [1.4, 0.46], [1.5, 0.36], [1.56, 0.33]];   // where it parts over the breast
+const ELBOW = { R: [-0.165, 1.06, 0.03], L: [0.165, 1.06, 0.03] };
 const AXIS = [[0, -0.01], [0.5, -0.03], [0.93, -0.05], [1.3, 0.012], [1.56, 0]], AZ = -0.01;                  // the S of the figure
 
-function carveBody(r, wr) {
+function carveBody(r) {
   // ---- the big forms: round cones in a smooth union
   const prims = [];
   const cone = (a, b, ra, rb, k = 0.055, sz = 1) => { const dx = b[0] - a[0], dy = b[1] - a[1], dz = (b[2] - a[2]) / sz, m = Math.max(ra, rb) + k + 0.02;
     prims.push({ ax: a[0], ay: a[1], az: a[2], dx, dy, dz, il: 1 / (dx * dx + dy * dy + dz * dz || 1e-9), ra, dr: rb - ra, k, sz, y0: Math.min(a[1], b[1]) - m, y1: Math.max(a[1], b[1]) + m }); };
-  const EL = { R: [-0.165, 1.06, 0.03], L: [0.165, 1.06, 0.03] };
   cone([-0.01, 0.02, -0.005], [-0.05, 0.93, -0.01], 0.18, 0.155, 0.05, 0.88);         // the skirt
   cone([-0.1, 0.9, 0], [0.01, 0.9, 0], 0.135, 0.13, 0.06, 0.9);                        // hips, swung to her right
   cone([-0.045, 0.93, -0.01], [0.012, 1.3, -0.012], 0.145, 0.128, 0.06, 0.8);            // waist and back
@@ -379,11 +424,7 @@ function carveBody(r, wr) {
   cone([-0.115, 1.405, -0.02], [0.125, 1.41, -0.02], 0.06, 0.06, 0.05);                  // narrow, sloping shoulders
   cone([0.003, 1.38, 0], [0, 1.462, 0.014], 0.115, 0.072, 0.04);                            // up to the neckline
   cone([0, 1.46, 0.01], [0, 1.62, 0.02], 0.035, 0.035, 0.01);
-  for (const [k, s] of [['R', -1], ['L', 1]]) {
-    const e = EL[k], w = wr[k], d = V3(w.x - e[0], w.y - e[1], w.z - e[2]).normalize();
-    cone([s * 0.14, 1.39, -0.02], e, 0.058, 0.055, 0.045);                               // upper arm, under the mantle
-    cone(e, [w.x - d.x * 0.03, w.y - d.y * 0.03, w.z - d.z * 0.03], 0.052, 0.04, 0.03);  // forearm
-  }
+  for (const s of [-1, 1]) cone([s * 0.14, 1.39, -0.02], ELBOW[s < 0 ? 'R' : 'L'], 0.058, 0.055, 0.045);   // upper arms, under the mantle (the forearms are cut free: carveSleeves)
   cone([-0.205, 1.0, 0.03], [-0.24, 0.34, 0.01], 0.05, 0.045, 0.04);                       // the mantle hanging from her right arm
   cone([0.19, 1.0, 0.04], [0.2, 0.68, 0.04], 0.045, 0.04, 0.04);                         // and gathered under her left
   cone([0.06, 0.93, 0.02], [0.095, 0.52, 0.15], 0.09, 0.072, 0.05);                     // the free leg: thigh,
@@ -399,12 +440,12 @@ function carveBody(r, wr) {
   const knee = (a, y) => 1 - 0.85 * Math.exp(-(((a - 0.42) / 0.3) ** 2) - ((y - 0.56) / 0.17) ** 2);   // the knee presses the cloth smooth
   // bowl folds, slung from the tuck under her left elbow to her right hip, each hanging lower than the last
   for (let k = 0; k < 5; k++) {
-    const aL = 1.0 - 0.035 * k, yL = 1.03 - 0.035 * k, aR = -1.0 - 0.02 * k, yR = 1.0 - 0.07 * k, a0 = -0.1 - 0.075 * k + (r() - 0.5) * 0.06, y0 = 0.905 - 0.125 * k, pts = [];
+    const aL = 1.0 - 0.035 * k, yL = 1.0 - 0.035 * k, aR = -1.0 - 0.02 * k, yR = 0.975 - 0.07 * k, a0 = -0.1 - 0.075 * k + (r() - 0.5) * 0.06, y0 = 0.905 - 0.125 * k, pts = [];
     for (let i = 0; i <= 16; i++) { const a = lerp(aR, aL, i / 16), s = a < a0 ? (a0 - a) / (a0 - aR) : (a - a0) / (aL - a0); pts.push([a, y0 + ((a < a0 ? yR : yL) - y0) * Math.pow(s, 1.85)]); }
     stroke(M, pts, { h: (t) => 0.036 * sstep(0, 0.1, t) * sstep(1, 0.93, t) * (1 - 0.1 * k), w: 0.03, kL: 2.4, pow: 1.35, fade: knee });
   }
   // short creases pulling out of the tuck
-  for (let k = 0; k < 4; k++) { const a1 = 0.55 - k * 0.1 + r() * 0.05, y1 = 0.99 - k * 0.07; stroke(M, [[0.98, 1.02 - k * 0.025], [lerp(0.98, a1, 0.5), lerp(1.02, y1, 0.5) - 0.012], [a1, y1]], { h: (t) => 0.016 * (1 - t), w: 0.016, pow: 1.2 }); }
+  for (let k = 0; k < 4; k++) { const a1 = 0.55 - k * 0.1 + r() * 0.05, y1 = 0.99 - k * 0.07; stroke(M, [[0.98, 0.995 - k * 0.025], [lerp(0.98, a1, 0.5), lerp(0.995, y1, 0.5) - 0.012], [a1, y1]], { h: (t) => 0.016 * (1 - t), w: 0.016, pow: 1.2 }); }
   // its upper edge, rolled over
   { const pts = []; for (let i = 0; i <= 12; i++) { const a = lerp(-1.12, 1.0, i / 12); pts.push([a, yokeY(a) - 0.016]); } stroke(M, pts, { h: 0.024, w: 0.02, kR: 2.2, pow: 1.1 }); }
   // the cascades: pipes hanging from each arm
@@ -412,10 +453,9 @@ function carveBody(r, wr) {
   // long folds down her back
   for (let i = 0, a = 1.98; a < TAU - 1.9; i++, a += 0.33 + r() * 0.12) { const p1 = ph(); const pts = []; for (let q = 0; q <= 6; q++) { const y = lerp(1.36, 0.14, q / 6); pts.push([a + 0.05 * Math.sin(y * 4 + p1), y]); }
     stroke(M, pts, { h: (t) => 0.024 * sstep(0, 0.3, t), w: (t) => lerp(0.028, 0.05, t), round: true }); }
-  // over the arms: folds fanning up from the crook of each elbow to the shoulder, and hanging across the forearms
+  // over the upper arms: folds fanning up from the crook of each elbow to the shoulder
   for (const s of [-1, 1]) {
     for (const [a1, y1, h] of [[0.72, 1.4, 0.016], [1.02, 1.44, 0.02], [1.38, 1.43, 0.02], [1.75, 1.38, 0.016]]) stroke(M, [[s * 1.14, 1.15], [s * lerp(1.14, a1, 0.5) + s * 0.04, lerp(1.15, y1, 0.5)], [s * a1, y1]], { h: (t) => h * Math.sin(Math.min(1, t * 1.25) * PI), w: (t) => lerp(0.016, 0.03, t), pow: 1.25 });
-    for (const [t0, h] of [[0.3, 0.014], [0.52, 0.016], [0.74, 0.012]]) { const a = lerp(1.42, 0.2, t0), y = lerp(1.07, 1.24, t0); stroke(M, [[s * (a + 0.16), y + 0.085], [s * (a + 0.05), y], [s * (a + 0.02), y - 0.075]], { h: (t) => h * Math.sin(t * PI), w: 0.02, pow: 1.2 }); }
   }
   // the gown: long tubular folds to the ground, breaking sideways on the base
   for (const a0 of [-2.95, -2.5, -2.08, -1.66, -1.27, -0.9, -0.54, -0.18, 0.74, 1.1, 1.5, 1.92, 2.38, 2.82]) {
@@ -459,11 +499,41 @@ function carveBody(r, wr) {
   for (let j = 0; j < NY; j++) for (let i = 0; i < NA; i++) { const i1 = (i + 1) % NA, a = j * NA + i, b = j * NA + i1, c = (j + 1) * NA + i, d = (j + 1) * NA + i1; ind.push(a, b, c, b, d, c); }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('cavity', new THREE.BufferAttribute(cav, 1)); g.setIndex(ind); g.computeVertexNormals();
   const parts = [g];
-  // the sleeves' cuffs, and the figure's own base: an eight-sided slab she was cut with
-  for (const [k, s] of [['R', -1], ['L', 1]]) { const e = EL[k], w = wr[k], d = V3(w.x - e[0], w.y - e[1], w.z - e[2]).normalize(), t = new THREE.TorusGeometry(0.036, 0.0075, 6, 14);
-    t.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), d)); t.translate(w.x - d.x * 0.035 + s * 0.008, w.y - d.y * 0.035, w.z - d.z * 0.035); t.deleteAttribute('uv'); parts.push(fin(t, 0.35, 1)); }
+  // the figure's own base: an eight-sided slab she was cut with
   parts.push(fin(prism([[0, -0.07], [0.335, -0.07], [0.335, -0.022], [0.318, -0.004], [0, -0.004]], 8, PI / 8), 0.3, 1));
   return { parts, sdf: (x, y, z) => dist(x, y, z, prims) };
+}
+
+// ---------------------------------------------------------------- the forearms
+// Each forearm rises from the elbow (under the mantle) to the joined hands, cut free of the body. It wears the
+// kirtle's close sleeve, ending at the wrist in a plain narrow cuff; over that the gown's wide sleeve, open below
+// the forearm: it hangs from the arm with its own thickness, a dark inside, and a heavy turned edge.
+function carveSleeves(r, cv) {
+  const parts = [], dn = V3(0, -1, 0), P = new THREE.Vector3();
+  for (const [k, s] of [['R', -1], ['L', 1]]) {
+    const E = V3(...ELBOW[k]), W = cv.wr[k].clone().add(V3(-s * 0.0045, 0, 0)).addScaledVector(cv.handAcross, -0.002), u = W.clone().sub(E), Lf = u.length(); u.normalize();   // to the middle of the wrist
+    // the close sleeve: oval like the wrist it covers (wide the way the hand is wide)
+    const b1 = cv.handAcross.clone().addScaledVector(u, -cv.handAcross.dot(u)).normalize(), b2 = new THREE.Vector3().crossVectors(u, b1);
+    const TS = [0.36, 0.5, 0.64, 0.78, 0.9, 0.94, 0.945, 1.0, 1.006, 1.016], RS = [1.36, 1.27, 1.17, 1.08, 1.0, 0.99, 1.07, 1.07, 0.99, 0.72];   // the last rings: the cuff band, standing a thread proud, then turned in to the wrist
+    parts.push(fin(grid(12, TS.length - 1, (uu, v, i, j) => { const a = uu * TAU, t = TS[j], wr = 1 + 0.03 * Math.sin(t * 60 + s) * (j < 5 ? 1 : 0), c = Math.cos(a) * 0.0295 * RS[j] * wr, d = Math.sin(a) * 0.0195 * lerp(RS[j], 1.9, sstep(0.9, 0.36, t)) * wr;
+      return [E.x + u.x * t * Lf + b1.x * c + b2.x * d, E.y + u.y * t * Lf + b1.y * c + b2.y * d, E.z + u.z * t * Lf + b1.z * c + b2.z * d, j === 9 ? 0.7 : j === 5 || j === 6 ? 0.4 : 0.16 + 0.2 * Math.max(0, -Math.sin(t * 60 + s))]; }, true), 0.2, 1));
+    // the wide sleeve: round at the elbow, then its underside hangs away from the arm; the mouth is cut slanting, the lower lip trailing back
+    const n1 = dn.clone().addScaledVector(u, -dn.dot(u)).normalize(), n2 = new THREE.Vector3().crossVectors(u, n1), NU = 16, NV = 11, TM = 0.6, p1 = r() * TAU;
+    const outer = grid(NU, NV, (uu, v, i, j) => { const a = uu * TAU, ca = Math.cos(a), low = Math.pow((1 + ca) / 2, 1.5), tq = j / NV, t = lerp(0.0, TM, tq) - 0.1 * sstep(0.3, 1, tq) * low;
+      const fold = 1 + 0.07 * sstep(0.2, 1, tq) * Math.cos(a * 3 + p1), r0 = lerp(0.043, 0.057, sstep(0, 0.45, tq)) * fold + (j === NV ? 0.004 : 0), droop = 0.05 * Math.pow(sstep(0.1, 1, tq), 1.3) * low;
+      P.copy(E).addScaledVector(u, t * Lf).addScaledVector(n1, ca * r0).addScaledVector(n2, Math.sin(a) * r0).addScaledVector(dn, droop);
+      return [P.x, P.y, P.z, 0.14 + 0.35 * sstep(0.2, 1, tq) * Math.max(0, -Math.cos(a * 3 + p1)) + 0.25 * low * sstep(0.5, 1, tq)]; }, true);
+    const OP = outer.attributes.position, ON = outer.attributes.normal; let flip = 1;
+    { const kk = 3 * NU; if ((OP.getX(kk) - (E.x + u.x * 0.1)) * ON.getX(kk) + (OP.getY(kk) - (E.y + u.y * 0.1)) * ON.getY(kk) + (OP.getZ(kk) - (E.z + u.z * 0.1)) * ON.getZ(kk) < 0) flip = -1; }
+    const J0 = NV - 5, TH = 0.011, ip = [], ii = [], bp = [], bi = [];
+    for (let j = J0; j <= NV; j++) for (let i = 0; i < NU; i++) { const kk = j * NU + i; ip.push(OP.getX(kk) - ON.getX(kk) * TH * flip, OP.getY(kk) - ON.getY(kk) * TH * flip, OP.getZ(kk) - ON.getZ(kk) * TH * flip); }
+    for (let j = 0; j < NV - J0; j++) for (let i = 0; i < NU; i++) { const a = j * NU + i, b = j * NU + (i + 1) % NU, c = a + NU, d = b + NU; ii.push(a, c, b, b, c, d); }
+    for (let i = 0; i <= NU; i++) { const kk = NV * NU + (i % NU), m = ((NV - J0) * NU + (i % NU)) * 3; bp.push(OP.getX(kk), OP.getY(kk), OP.getZ(kk), ip[m], ip[m + 1], ip[m + 2]); if (i) { const a = (i - 1) * 2; bi.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } }
+    const inner = new THREE.BufferGeometry(); inner.setAttribute('position', new THREE.Float32BufferAttribute(ip, 3)); inner.setIndex(ii); inner.computeVertexNormals();
+    const lip = new THREE.BufferGeometry(); lip.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3)); lip.setIndex(bi); lip.computeVertexNormals();
+    parts.push(fin(outer, 0.15, 1), fin(inner, 0.72, 1), fin(lip, 0.25, 1));
+  }
+  return parts;
 }
 
 // ---------------------------------------------------------------- veil and crown
@@ -543,8 +613,8 @@ function carveCrown(r, cv) {
 function buildFigure(seed) {
   const hb = humanBody({}, 'lady'); if (!hb) return null;
   const r = rng(seed), cv = carve(hb); hb.mesh.material?.dispose?.();
-  const body = carveBody(r, cv.wr);
-  const parts = [fin(cv.geo, 0.1, 1), ...carvedEyes(cv).map((g) => fin(g, 0.2, 1)), ...body.parts.map((g) => fin(g, 0.15, 1)), ...carveVeil(r, cv, body.sdf), ...carveCrown(r, cv)];
+  const body = carveBody(r);
+  const parts = [fin(cv.geo, 0.1, 1), ...carvedEyes(cv).map((g) => fin(g, 0.2, 1)), ...body.parts.map((g) => fin(g, 0.15, 1)), ...carveSleeves(r, cv), ...carveVeil(r, cv, body.sdf), ...carveCrown(r, cv)];
   const out = { geo: mergeGeometries(parts), head: V3(0, 1.66, 0.09).applyMatrix4(cv.headM) };
   for (const p of parts) p.dispose();
   return out;

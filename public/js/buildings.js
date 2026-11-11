@@ -573,7 +573,7 @@ export function buildHouse(K, o) {
     const dW = Ws[0], dIdx = dW.segs.findIndex((s) => s.isDoor);
     let yU0 = 0;       // where the upper storey's frame starts (0: there is none)
     const band = (y, both = true) => Ws.forEach((W, i) => inW(i, () => {   // the floor between the storeys: joist ends over the street, a beam on the other walls
-      const fl = f0 + 0, uL = -(W.half + f0), uR = W.half + f0;
+      const uL = -(W.half + f0), uR = W.half + f0;
       if (jet[i] > 0) {
         K.box(TIM, uL + FD, y, f0 - FD, uR, y + 0.2, f0 - 0.06, 'x'); K.box(BRD, uL, y + 0.16, f0 - 0.06, uR, y + 0.2, f0 + jet[i] - FD + 0.01, 'x');
         const nj = Math.max(3, Math.round((uR - uL - 0.3) / 0.62)); for (let j = 0; j <= nj; j++) { const u = uL + 0.11 + (uR - uL - 0.22) * j / nj; K.box(TIM, u - 0.07, y + 0.012, f0 - 0.3, u + 0.07, y + 0.2, f0 + jet[i] - 0.02, 'z'); }
@@ -964,7 +964,7 @@ export function buildChurch(K, o) {
     const oct = []; for (let i = 0; i < 8; i++) { const c = [[1, -t8], [1, t8], [t8, 1], [-t8, 1], [-1, t8], [-1, -t8], [-t8, -1], [t8, -1]][i]; oct.push([c[0] * a, ya, TZ + c[1] * a]); }
     const apex = [0, y2, TZ];
     for (let i = 0; i < 8; i++) slTri(oct[i], oct[(i + 1) % 8], apex);
-    const hb = 3.0; for (const [sx, sz] of [[1, 1], [-1, 1], [-1, -1], [1, -1]]) { const cn = [sx * a, ya, TZ + sz * a], p1 = [sx * a, ya, TZ + sz * a * t8], p2 = [sx * a * t8, ya, TZ + sz * a], m = 0.7071 * a * (1 + t8) / 1.4142 * 1.4142 / 1, bq = [sx * (a * (1 + t8) / 2) * (1 - hb / H2), ya + hb, TZ + sz * (a * (1 + t8) / 2) * (1 - hb / H2)]; slTri(p1, cn, bq); slTri(cn, p2, bq); }
+    const hb = 3.0; for (const [sx, sz] of [[1, 1], [-1, 1], [-1, -1], [1, -1]]) { const cn = [sx * a, ya, TZ + sz * a], p1 = [sx * a, ya, TZ + sz * a * t8], p2 = [sx * a * t8, ya, TZ + sz * a], bq = [sx * (a * (1 + t8) / 2) * (1 - hb / H2), ya + hb, TZ + sz * (a * (1 + t8) / 2) * (1 - hb / H2)]; slTri(p1, cn, bq); slTri(cn, p2, bq); }
     const sqr = (h, y) => [[h, y, TZ - h], [h, y, TZ + h], [-h, y, TZ + h], [-h, y, TZ - h]], S0 = sqr(a, ya), S1 = sqr(ae, ye);
     for (let i = 0; i < 4; i++) { const j = (i + 1) % 4, mx = (S1[i][0] + S1[j][0]) / 2, mz = (S1[i][2] + S1[j][2]) / 2 - TZ; K.quadTo(SL, S1[i], S1[j], S0[j], S0[i], mx, 1.2, mz, [0, 0, 2 * ae / tile, 0, 2 * ae / tile, 0.16, 0, 0.16]); K.quadTo(OAK, S1[i], S1[j], [S0[j][0] * 0.9, ye, TZ + (S0[j][2] - TZ) * 0.9], [S0[i][0] * 0.9, ye, TZ + (S0[i][2] - TZ) * 0.9], 0, -1, 0); }
     K.lathe('iron', [[0, y2 - 0.3], [0.1, y2 - 0.25], [0.2, y2 - 0.05], [0.24, y2 + 0.12], [0.2, y2 + 0.3], [0.08, y2 + 0.42], [0.03, y2 + 0.5]], 10, 0, 0, TZ);

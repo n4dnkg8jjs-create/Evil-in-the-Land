@@ -131,6 +131,9 @@ Testing gotchas:
   - Heightfield, `heightAt` and `normalAt`.
   - The blight/life terrain shader: healing, the road painted into the terrain, mountain snow.
   - Props, Saint Aldric's village, altars, colliders, water, the cave plan (`CavePlan`).
+- `buildings.js`: the church of Saint Aldric, the houses, barns and burnt wrecks, as real geometry (Fachwerk frames,
+  jetties, traceried windows, buttresses, the broach spire). `placeHouse` and `placeChurch` in `world.js` call it.
+  It draws its own detail randomness from a generator seeded per lot, so it does not shift the rest of the world.
 - `weather.js`: rain, snow, splashes, the water ripple simulation (shared by every water surface), wading wakes, the
   calm near healed ground.
 - `vista.js`: the far city and mountain, lightning (`onThunder`).
@@ -244,6 +247,21 @@ Testing gotchas:
 
 ## Performance notes
 
+- **Never add or reveal a light in the middle of a game.** Three.js builds each lit shader for an exact number of
+  lights, so a light that is added to the scene, or whose hidden parent becomes visible, makes every lit material
+  recompile in one frame (this was the multi-second freeze when an altar was cleansed). Lights that will be needed
+  later are created at load with intensity 0 and left in the scene: the altars' candle and shaft lights
+  (`world.js`), `game.cineLights` for cutscenes, `cave.torchLights`, the `fx` and `world.fireLights` pools.
+- `engine.warmUp()` runs at the end of `loadChapter`, behind the black: it compiles the whole scene and draws one
+  frame with nothing culled, so shaders, meshes and textures are ready before the opening shots. Before it runs,
+  the chapter's bosses are built and wait hidden (`game.readyBosses`, used by `createBoss`), and one demon of each
+  kind is put out (`horde.keepWarm`); the kept demons stay hidden all game so their shaders are not thrown away
+  between waves (each demon has its own material).
+- To find a hitch, watch `renderer.info.programs.length` across the event: if it rises, something compiled.
+- Trees: each kind is two instanced meshes, the full tree within 52 m and a quarter-weight twin beyond, refilled
+  each frame with only the trees in view (`world.cullTrees`, called from `game.update` after the camera moves).
+  `world.instanced(..., { cells })` splits static instances by map square so they can be culled (rocks).
+
 - Draw calls were cut 35–76%, with no visual change:
   - each knight's rigid armour pieces are skinned into one mesh per material;
   - the village is merged in 24 m cells per material;
@@ -262,8 +280,14 @@ All reported or flagged, none confirmed fixed by the owner:
   unknown rate limits (the host sends each guest a snapshot 15 times a second through them). A link that dies in
   the middle of a game still sends that player to the title; there is no rejoin. An owned relay (Supabase Realtime,
   a Cloudflare Worker, or a paid TURN) would be the robust fix.
-- **Fen Lady statue:** third pass, better but not perfect. The veil still hugs the head like a cap, the gown reads a
-  little columnar from the front, and the eyes are blank stone.
+- **Fen Lady statue:** rebuilt (fourth pass, `statue.js`): S-curve Madonna, free-hanging veil, lily crown, carved
+  eyes with tear streaks, a Gothic aedicule. Above the brow the veil is still a smooth dome; the owner asked for the
+  cuffs and hands to be redone.
+- **Church and houses:** rebuilt in `buildings.js`. Standing-house interiors are empty (a door ajar shows black),
+  wrecks are all of the stone-ground-storey kind, house colliders still let you walk through a closed door, and
+  barns have not been seen in-game.
+- **Cutscenes:** Space (a press) skips any of them; a guest's press asks the host (`k:skipreq`). Shots only one
+  player sees are played with `{ local: true }`.
 - **Bosses:** difficulty is tuned only against a test bot. The Serpent's open lower jaw reads as a flat pink slab.
   The back of the Devil's robe hem lifts on deep bows.
 - **Cave:** never visually checked in-game (renders ran out of memory). Companion herding through the bends is
