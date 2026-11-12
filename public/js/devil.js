@@ -928,7 +928,7 @@ export class Hound extends Boss {
 }
 
 // ================================================================ THE OLD SERPENT
-import { buildSerpentHead } from './serpent_model.js';   // (imports are hoisted: kept here, beside the class that uses them)
+import { buildSerpentHead, serpentSkin, SCALE_COLS, SCALE_ROWS_M, NECK } from './serpent_model.js';   // (imports are hoisted: kept here, beside the class that uses them)
 // "That old serpent, called the Devil, and Satan" (Rev. 12:9). Sixty metres of him: one closed, scaled body that runs
 // along its own path over the ground and under it (each part of him passes where the head went), a viper's head with
 // hinged fangs, slit-pupilled eyes and a forked tongue. He rears like a cobra, the neck rising out of the coils.
@@ -939,76 +939,7 @@ function serpentRad(f) {   // f: node index from the head (fractional)
   const back = s < 0.42 ? 1 : Math.max(0.03, 1 - Math.pow((s - 0.42) / 0.58, 1.25));
   return SRAD * front * back;
 }
-// The hide: overlapping keeled scales drawn as a height field, each scale's free edge lying over the base of the one
-// behind it like slates on a roof, turned into colour, normal, roughness and (in the crevices) ember maps. u runs round
-// the body (the spine at u = 0.25, the belly at 0.75, broad ventral plates there), v along it from the head.
-let _hide = null;
-function serpentHide() {
-  if (_hide) return _hide;
-  const W = 512, H = 512, COLS = 24, ROWS = 12, VB0 = 0.63, VB1 = 0.87;
-  const hgt = new Float32Array(W * H), rgb = new Float32Array(W * H * 3), rough = new Float32Array(W * H), glow = new Float32Array(W * H);
-  const hs = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
-  const wrap = (d) => d - Math.round(d), fr = (x) => x - Math.floor(x);
-  // one scale's colour, from where its centre lies in the pattern: a chain of black, bone-rimmed diamonds down the
-  // spine, dark blotches low on the flanks, olive-umber between
-  const dorsal = (cu, cv, h) => {
-    const du = Math.abs(wrap(cu - 0.25)), q = Math.abs(fr(cv * 2) - 0.5), dm = du / 0.13 + q / 0.5;
-    let c = [0.11, 0.1, 0.072];
-    if (dm < 0.8) c = [0.03, 0.027, 0.025]; else if (dm < 1.0) c = [0.055, 0.048, 0.038]; else if (dm < 1.24) c = [0.36, 0.31, 0.21];
-    const fu = Math.min(Math.abs(wrap(cu - 0.02)), Math.abs(wrap(cu - 0.48))), fq = Math.abs(fr(cv * 2 + 0.5) - 0.5);
-    if (fu / 0.065 + fq / 0.2 < 1) c = [0.035, 0.03, 0.026];
-    const k = 0.78 + h * 0.44; return [c[0] * k, c[1] * k * (0.97 + h * 0.06), c[2] * k];
-  };
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const u = (x + 0.5) / W, v = (y + 0.5) / H, i = y * W + x;
-    let h, col, rg, gl;
-    if (u > VB0 && u < VB1) {
-      // the belly: broad plates across it, the one ahead lying over the one behind
-      const rows = ROWS * 2, fy = v * rows, r0 = Math.floor(fy), across = (u - VB0) / (VB1 - VB0) * 2 - 1, edge = 1.3 - 0.2 * across * across;
-      let r = r0, s = fy - r0; if (fy - (r0 - 1) < edge) { r = r0 - 1; s = fy - r; }
-      const t = clamp(s / edge, 0, 1), side = 1 - Math.pow(Math.abs(across), 8);
-      const rim = smooth(clamp((1 - t) / 0.1, 0, 1)) * smooth(clamp((1 - Math.abs(across)) / 0.06, 0, 1));
-      h = (0.3 + 0.7 * Math.pow(t, 0.7)) * (0.4 + 0.6 * rim) * (0.75 + 0.25 * side);
-      const rr = ((r % rows) + rows) % rows, n = hs(rr * 3.1, 7.7), sp = hs(x * 0.37 + 1, y * 0.71) > 0.985 ? 0.35 : 1;
-      const dk = Math.pow(Math.abs(across), 3);
-      col = [lerp(0.46, 0.13, dk) * (0.85 + n * 0.3) * sp, lerp(0.41, 0.115, dk) * (0.85 + n * 0.3) * sp, lerp(0.31, 0.09, dk) * (0.85 + n * 0.3) * sp];
-      col = col.map((c) => c * (0.5 + 0.5 * rim)); rg = 0.42 + 0.35 * (1 - rim); gl = Math.pow(1 - rim, 2) * 0.5;
-    } else {
-      const fy = v * ROWS, r0 = Math.floor(fy);
-      let best = null;
-      for (const r of [r0 - 1, r0]) {
-        const off = (r & 1) * 0.5, s = fy - r; if (s < 0 || s > 1.45) continue;
-        const cc = Math.round(u * COLS - off);
-        for (const c of [cc - 1, cc, cc + 1]) {
-          const cu = (c + off) / COLS, w = wrap(u - cu) * COLS, hw = 0.64 * Math.sqrt(Math.max(0, 1 - ((s - 0.5) / 0.95) ** 2)), m = hw - Math.abs(w);
-          if (m <= 0) continue;
-          if (!best || m / hw > best.m / best.hw) best = { r, c, s, w, hw, m, cu };
-        }
-        if (best) break;   // the row ahead lies on top
-      }
-      if (!best) best = { r: r0, c: 0, s: 0, w: 0.5, hw: 0.5, m: 0, cu: u };
-      const t = best.s / 1.45, rim = smooth(clamp(best.m / 0.075, 0, 1));
-      const keel = 0.14 * Math.pow(1 - Math.abs(best.w) / Math.max(1e-3, best.hw), 2) * smooth(clamp((t - 0.2) / 0.5, 0, 1));
-      h = (0.2 + 0.8 * Math.pow(t, 0.8) + keel) * (0.32 + 0.68 * rim);
-      const rr = ((best.r % ROWS) + ROWS) % ROWS, cc = ((best.c % COLS) + COLS) % COLS;
-      col = dorsal(best.cu, best.r / ROWS, hs(rr * 1.3, cc * 2.9)).map((c) => c * (0.42 + 0.58 * rim) * (0.92 + keel * 1.2));
-      rg = 0.36 + 0.42 * (1 - rim) + (hs(rr, cc) - 0.5) * 0.08; gl = Math.pow(1 - rim, 2);
-    }
-    hgt[i] = h; rgb[i * 3] = col[0]; rgb[i * 3 + 1] = col[1]; rgb[i * 3 + 2] = col[2]; rough[i] = rg; glow[i] = gl;
-  }
-  const map = new Uint8Array(W * H * 4), nrm = new Uint8Array(W * H * 4), rgh = new Uint8Array(W * H * 4), emi = new Uint8Array(W * H * 4);
-  const lin2s = (c) => Math.round(255 * Math.pow(clamp(c, 0, 1), 1 / 2.2));
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const i = y * W + x, o = i * 4, at = (xx, yy) => hgt[((yy + H) % H) * W + ((xx + W) % W)];
-    const dx = (at(x + 1, y) - at(x - 1, y)) * 3.2, dy = (at(x, y + 1) - at(x, y - 1)) * 3.2, l = Math.hypot(dx, dy, 1);
-    nrm[o] = Math.round((-dx / l * 0.5 + 0.5) * 255); nrm[o + 1] = Math.round((-dy / l * 0.5 + 0.5) * 255); nrm[o + 2] = Math.round((1 / l * 0.5 + 0.5) * 255); nrm[o + 3] = 255;
-    map[o] = lin2s(rgb[i * 3]); map[o + 1] = lin2s(rgb[i * 3 + 1]); map[o + 2] = lin2s(rgb[i * 3 + 2]); map[o + 3] = 255;
-    rgh[o] = rgh[o + 1] = rgh[o + 2] = Math.round(clamp(rough[i], 0, 1) * 255); rgh[o + 3] = 255;
-    emi[o] = Math.round(glow[i] * 255); emi[o + 1] = Math.round(glow[i] * 70); emi[o + 2] = Math.round(glow[i] * 15); emi[o + 3] = 255;
-  }
-  const tex = (data, srgb) => { const t = new THREE.DataTexture(data, W, H, THREE.RGBAFormat); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; return t; };
-  return (_hide = { map: tex(map, true), normal: tex(nrm, false), rough: tex(rgh, false), glow: tex(emi, true) });
-}
+// The hide (scales, belly plates, pattern, scars) is drawn by the skin shader in serpent_model.js.
 export class Serpent extends Boss {
   constructor(scene, partySize) {
     super(scene, 'serpent');
@@ -1022,27 +953,29 @@ export class Serpent extends Boss {
     const NG = SN + 24; this.gc = []; this.gd = new Float32Array(NG).fill(1); for (let i = 0; i < NG; i++) this.gc.push(new THREE.Vector3(0, 0, -i * SSP));
     this.vis = []; this.visD = new Float32Array(SN).fill(1); for (let i = 0; i < SN; i++) this.vis.push(new THREE.Vector3(0, -20, 0));
     this.chain = this.vis;
-    const hide = serpentHide();
-    this.mat = new THREE.MeshStandardMaterial({ map: hide.map, normalMap: hide.normal, normalScale: new THREE.Vector2(1.25, 1.25), roughnessMap: hide.rough, roughness: 1, metalness: 0.04, emissiveMap: hide.glow, emissive: 0xff3a10, emissiveIntensity: 0, side: THREE.DoubleSide });
-    // the body: rings round the path (two to each joint of the chain), closed at the neck and drawn to a point at the tail
+    this.mat = serpentSkin(false);   // the scales are drawn by the shader, along the body's own UVs
+    // the body: rings round the path (two to each joint of the chain), closed at the neck and drawn to a point at the tail.
+    // Its cross-section is a snake's: round over the back, the belly flat (the profile and its normals, once)
     const M = this.M = (SN - 1) * SSUB + 1, R2 = SRADIAL + 1, nV = M * R2 + 2;
     const uv = new Float32Array(nV * 2), idx = []; this.ringR = new Float32Array(M);
+    const pf = (a) => { const ca = Math.cos(a), sa = Math.sin(a); return sa >= 0 ? [1.05 * ca, sa] : [1.05 * ca, -0.74 * Math.pow(-sa, 0.8)]; };
+    this.prof = Array.from({ length: R2 }, (_, k) => { const a = k / SRADIAL * TAU, p = pf(a), p0 = pf(a - 1e-3), p1 = pf(a + 1e-3), nx = p1[1] - p0[1], ny = -(p1[0] - p0[0]), l = Math.hypot(nx, ny); return [p[0], p[1], nx / l, ny / l]; });
     let v = 0;
     for (let j = 0; j < M; j++) {
-      const r = this.ringR[j] = serpentRad(j / SSUB);
-      if (j > 0) v += (SSP / SSUB) / (4.0 * Math.max(0.3, r / SRAD));   // scales shrink with the body, so they stay scale-shaped
-      for (let k = 0; k <= SRADIAL; k++) { uv[(j * R2 + k) * 2] = k / SRADIAL; uv[(j * R2 + k) * 2 + 1] = v; }
+      const r = this.ringR[j] = serpentRad(j / SSUB) * lerp(NECK.r / (SRAD * 0.6), 1, smooth(clamp(j / 7, 0, 1)));   // the neck narrow behind the broad head
+      if (j > 0) v += (SSP / SSUB) * SCALE_ROWS_M / Math.max(0.3, r / SRAD);   // scales shrink with the body, so they stay scale-shaped
+      for (let k = 0; k <= SRADIAL; k++) { uv[(j * R2 + k) * 2] = k / SRADIAL * SCALE_COLS; uv[(j * R2 + k) * 2 + 1] = v; }
     }
     for (let j = 0; j < M - 1; j++) for (let k = 0; k < SRADIAL; k++) { const a = j * R2 + k, b = a + 1, c = a + R2, d = c + 1; idx.push(a, c, b, b, c, d); }
     const HC = M * R2, TT = HC + 1;
-    for (let k = 0; k < SRADIAL; k++) { idx.push(HC, k, k + 1); const a = (M - 1) * R2 + k; idx.push(TT, a + 1, a); }
-    uv[HC * 2] = 0.25; uv[HC * 2 + 1] = 0; uv[TT * 2] = 0.25; uv[TT * 2 + 1] = v;
+    for (let k = 0; k < SRADIAL; k++) { const a = (M - 1) * R2 + k; idx.push(TT, a + 1, a); }   // (the neck is left open: its end is inside the head, where the throat goes into it)
+    uv[HC * 2] = 0.25 * SCALE_COLS; uv[HC * 2 + 1] = 0; uv[TT * 2] = 0.25 * SCALE_COLS; uv[TT * 2 + 1] = v;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nV * 3), 3).setUsage(THREE.DynamicDrawUsage));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nV * 3), 3).setUsage(THREE.DynamicDrawUsage));
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setIndex(idx);
     this.geo = g; this.mesh = new THREE.Mesh(g, this.mat); this.mesh.castShadow = true; this.mesh.receiveShadow = true; this.mesh.frustumCulled = false; scene.add(this.mesh);
-    const H = buildSerpentHead(this.mat); this.head = H.head; this.hparts = H.parts; scene.add(this.head);
+    const H = buildSerpentHead(); this.head = H.head; this.hparts = H.parts; this.hmat = H.parts.skin; scene.add(this.head);
     this.headPos = new THREE.Vector3(); this.headDir = new THREE.Vector3(0, 0, 1); this.rear = -4; this.burrowed = true; this.jawOpen = 0; this.jawVis = 0; this.pitch = 0; this.tongueT = 2; this.flick = -1;
     this.spheres = [];
     for (let i = 3; i < SN; i += 3) this.spheres.push({ name: 'body', i, r: serpentRad(i) + 0.3, mul: 0.7, c: new THREE.Vector3() });
@@ -1375,7 +1308,7 @@ export class Serpent extends Boss {
 
   // ---------------------------------------------------------------- the body (every client)
   buildBody(P, time) {
-    const M = this.M, R2 = SRADIAL + 1, pos = this.geo.attributes.position.array, nrm = this.geo.attributes.normal.array;
+    const M = this.M, R2 = SRADIAL + 1, pos = this.geo.attributes.position.array, nrm = this.geo.attributes.normal.array, PR = this.prof;
     const C = this._Cc || (this._Cc = Array.from({ length: M }, () => new THREE.Vector3()));
     for (let i = 0; i < SN - 1; i++) {
       const p0 = P[Math.max(0, i - 1)], p1 = P[i], p2 = P[i + 1], p3 = P[Math.min(SN - 1, i + 2)];
@@ -1385,6 +1318,18 @@ export class Serpent extends Boss {
       }
     }
     C[M - 1].copy(P[SN - 1]);
+    // the first rings run straight back out of the head along its own axis, and bend from there into the path
+    // (along a smooth curve that leaves the head straight back, clear of the jaw however wide it gapes, and meets the
+    // path a few metres on, going its way)
+    const JB = 11, hq = this.head.quaternion, hx = this._hx || (this._hx = new THREE.Vector3()), hv = this._hv || (this._hv = new THREE.Vector3()), bw = (j) => smooth(clamp(j / JB, 0, 1));
+    hx.set(1, 0, 0).applyQuaternion(hq);
+    {
+      const q0 = hv.set(0, NECK.y, NECK.z).applyQuaternion(hq).add(this.head.position), d0 = this._hd0 || (this._hd0 = new THREE.Vector3()), d3 = this._hd3 || (this._hd3 = new THREE.Vector3());
+      d0.set(0, 0, -1).applyQuaternion(hq); d3.subVectors(C[JB + 1], C[JB - 1]).normalize();
+      const q3 = C[JB], hl = q0.distanceTo(q3) * 0.42, B = this._nb || (this._nb = Array.from({ length: 25 }, () => new THREE.Vector3())), BL = this._nbl || (this._nbl = new Float32Array(25));
+      for (let m = 0; m < 25; m++) { const t = m / 24, a = (1 - t) ** 3, b = 3 * (1 - t) ** 2 * t, c = 3 * (1 - t) * t * t, d = t ** 3; for (const ax of ['x', 'y', 'z']) B[m][ax] = a * q0[ax] + b * (q0[ax] + d0[ax] * hl) + c * (q3[ax] - d3[ax] * hl) + d * q3[ax]; BL[m] = m ? BL[m - 1] + B[m].distanceTo(B[m - 1]) : 0; }
+      let m = 1; for (let j = 0; j < JB; j++) { const sj = BL[24] * j / JB; while (m < 24 && BL[m] < sj) m++; const f = (sj - BL[m - 1]) / Math.max(1e-6, BL[m] - BL[m - 1]); C[j].lerpVectors(B[m - 1], B[m], f); }
+    }
     const t = this._vt || (this._vt = new THREE.Vector3()), s = this._vs || (this._vs = new THREE.Vector3()), n = this._vn || (this._vn = new THREE.Vector3()), ps = this._vps || (this._vps = new THREE.Vector3());
     const t0 = this._t0 || (this._t0 = new THREE.Vector3()), t1 = this._t1 || (this._t1 = new THREE.Vector3());
     // frames from the tail (always lying on the ground) up to the neck (which may stand straight up), so they never twist
@@ -1393,19 +1338,21 @@ export class Serpent extends Boss {
       s.set(-t.z, 0, t.x); const sl = s.length();
       if (j < M - 1) { ps.addScaledVector(t, -ps.dot(t)); if (ps.lengthSq() < 1e-8) ps.copy(s); ps.normalize(); if (sl > 0.3) s.divideScalar(sl).lerp(ps, 0.5).normalize(); else s.copy(ps); }
       else if (sl > 1e-4) s.divideScalar(sl); else s.set(1, 0, 0);
+      if (j < JB) { hv.copy(hx).addScaledVector(t, -hx.dot(t)); if (hv.lengthSq() > 1e-6) s.lerp(hv.normalize(), 1 - bw(j)).normalize(); }   // turned with the head
       ps.copy(s); n.crossVectors(s, t).normalize();
       if (j === 0) t0.copy(t); if (j === M - 1) t1.copy(t);
       const r = this.ringR[j] * (1 + 0.022 * Math.sin(time * 2.1 - j * 0.11)), c = C[j], base = j * R2, hd = j < 44 ? this.hood * Math.exp(-(((j - 15) / 9) ** 2)) : 0;   // the neck spread flat below the head when he threatens
+      const fw = 1 + 0.6 * hd, fy = 1 - 0.22 * hd;
       for (let k = 0; k <= SRADIAL; k++) {
-        const ang = k / SRADIAL * TAU, ca = Math.cos(ang), sa = Math.sin(ang), fy = (sa < 0 ? 0.72 : 1) * (1 - 0.22 * hd), fw = 1.06 + 0.6 * hd, o = (base + k) * 3;
-        pos[o] = c.x + (n.x * sa * fy + s.x * ca * fw) * r; pos[o + 1] = c.y + (n.y * sa * fy + s.y * ca * fw) * r; pos[o + 2] = c.z + (n.z * sa * fy + s.z * ca * fw) * r;
-        let nx = n.x * sa / fy + s.x * ca / fw, ny = n.y * sa / fy + s.y * ca / fw, nz = n.z * sa / fy + s.z * ca / fw; const l = Math.hypot(nx, ny, nz) || 1;
-        nrm[o] = nx / l; nrm[o + 1] = ny / l; nrm[o + 2] = nz / l;
+        const q = PR[k], X = q[0] * fw * r, Y = q[1] * fy * r, o = (base + k) * 3;
+        pos[o] = c.x + n.x * Y + s.x * X; pos[o + 1] = c.y + n.y * Y + s.y * X; pos[o + 2] = c.z + n.z * Y + s.z * X;
+        const nx = q[2] / fw, ny = q[3] / fy; let ax = n.x * ny + s.x * nx, ay = n.y * ny + s.y * nx, az = n.z * ny + s.z * nx; const l = Math.hypot(ax, ay, az) || 1;
+        nrm[o] = ax / l; nrm[o + 1] = ay / l; nrm[o + 2] = az / l;
       }
     }
-    // the cap inside the neck, and the point of the tail
+    // the cap inside the head, and the point of the tail
     const HC = M * R2, TT = HC + 1, r0 = this.ringR[0], c0 = C[0], cT = C[M - 1];
-    pos[HC * 3] = c0.x - t0.x * r0 * 0.6; pos[HC * 3 + 1] = c0.y - t0.y * r0 * 0.6; pos[HC * 3 + 2] = c0.z - t0.z * r0 * 0.6; nrm[HC * 3] = -t0.x; nrm[HC * 3 + 1] = -t0.y; nrm[HC * 3 + 2] = -t0.z;
+    pos[HC * 3] = c0.x + t0.x * r0 * 0.3; pos[HC * 3 + 1] = c0.y + t0.y * r0 * 0.3; pos[HC * 3 + 2] = c0.z + t0.z * r0 * 0.3; nrm[HC * 3] = -t0.x; nrm[HC * 3 + 1] = -t0.y; nrm[HC * 3 + 2] = -t0.z;
     pos[TT * 3] = cT.x + t1.x * 0.5; pos[TT * 3 + 1] = cT.y + t1.y * 0.5; pos[TT * 3 + 2] = cT.z + t1.z * 0.5; nrm[TT * 3] = t1.x; nrm[TT * 3 + 1] = t1.y; nrm[TT * 3 + 2] = t1.z;
     this.geo.attributes.position.needsUpdate = true; this.geo.attributes.normal.needsUpdate = true;
   }
@@ -1419,7 +1366,7 @@ export class Serpent extends Boss {
     }
     this.tele.update(dt, W, fx);
     this.hitFlash = Math.max(0, this.hitFlash - dt * 4);
-    this.mat.emissiveIntensity = (this.phase >= 3 ? 0.45 + 0.3 * Math.sin(time * 2.6) : 0) + this.hitFlash * 2.4;
+    this.mat.emissiveIntensity = (this.phase >= 3 ? 0.45 + 0.3 * Math.sin(time * 2.6) : 0) + this.hitFlash * 2.4; this.hparts.setGlow(this.mat.emissiveIntensity);
     const st = this.state; this.hood = damp(this.hood, st === 'death' || this.burrowed ? 0 : st === 'strike' ? (this.rear > 4.5 ? 1 : 0) : st === 'loom' ? 0.5 : st === 'spit' || st === 'brood' || st === 'rain' || st === 'intro' ? 0.85 : st === 'thrash' ? 0.6 : 0, 5, dt);
     const P = this._P || (this._P = this.vis.map(() => new THREE.Vector3()));
     for (let i = 0; i < SN; i++) P[i].copy(this.vis[i]);
@@ -1437,20 +1384,24 @@ export class Serpent extends Boss {
       this.deathT += dt; const k = Math.max(0, this.deathT - 1.2);
       for (let i = 0; i < SN; i++) P[i].y += Math.sin(time * 9 + i * 0.5) * 0.12 * Math.max(0, 1 - this.deathT / 1.5) - k * (1.1 + 0.6 * i / SN);
     }
-    this.buildBody(P, time);
-    // the head
+    // the head (first: the neck is laid out from it)
     const yaw = Math.atan2(this.headDir.x, this.headDir.z);
     this.head.position.copy(P[0]); this.head.rotation.set(this.pitch, yaw, 0, 'YXZ');
+    this.buildBody(P, time);
     this.jawVis = damp(this.jawVis, this.jawOpen, 14, dt);
     const H = this.hparts; H.gape(this.jawVis, time);
-    // tasting the air: now and then the tongue slips out through the notch in the lips, flickers, and is gone
+    // tasting the air: every second or two the tongue slides out of its sheath, through the notch in the lips, whips up
+    // and down and is drawn back. With the jaws wide it lies in its sheath on the floor of the mouth, the forks showing.
     this.tongueT -= dt;
-    if (this.flick < 0 && this.tongueT <= 0 && this.jawVis < 0.2 && !this.burrowed && this.state !== 'death') { this.flick = 0; this.tongueT = 1.6 + R() * 2.4; }
+    const canFlick = !this.burrowed && st !== 'death' && st !== 'dive' && st !== 'under' && st !== 'surface';
+    if (this.flick < 0 && this.tongueT <= 0 && canFlick && this.jawVis < 0.55) { this.flick = 0; this.tongueT = 1.1 + R() * 1.3; }
+    let ext = 0;
     if (this.flick >= 0) {
-      this.flick += dt; const e = Math.sin(Math.PI * clamp(this.flick / 0.75, 0, 1));
-      H.tongue.scale.setScalar(e > 0.02 ? 1 : 0.001); H.tongue.position.z = 1.15 + e * 1.45; H.tongue.rotation.x = Math.sin(time * 46) * 0.14 * e - 0.05;
-      if (this.flick > 0.75 || this.jawVis > 0.35) { this.flick = -1; H.tongue.scale.setScalar(0.001); }
+      this.flick += dt; const f = this.flick / 0.95;
+      ext = smooth(clamp(f / 0.16, 0, 1)) * (1 - smooth(clamp((f - 0.76) / 0.24, 0, 1)));
+      if (f >= 1 || !canFlick) { this.flick = -1; ext = 0; }
     }
+    if (ext > 0 || this._ext !== 0) { H.setTongue(ext, ext, time); this._ext = ext; }
     // dust where he goes into the earth and comes out of it, and over him as he runs beneath it
     if (fx && W) {
       this.dustT = (this.dustT || 0) - dt;
@@ -1460,16 +1411,18 @@ export class Serpent extends Boss {
         if (this.state === 'under' || this.state === 'surface' || this.state === 'dive') { const g = this.headPos; fx.dust(new THREE.Vector3(g.x, W.heightAt(g.x, g.z), g.z), 5, [0.25, 0.22, 0.18]); }
       }
     }
-    // the venom where it lies, black on the ground (its sick sheen is the telegraph drawn over it)
+    // the venom where it lies, black on the ground (its sick sheen is the telegraph drawn over it): draped over the
+    // ground at the size it has now, so it lies on a slope as it spreads and does not hang over it
     let pn = 0;
     if (W) for (const T of this.tele.map.values()) {
       if (T.shape !== 'pool' || pn >= this.pools.length) continue; const M = this.pools[pn++], h0 = W.heightAt(T.x, T.z);
-      if (M.userData.id !== T.id) {   // draped over the ground it fell on, ragged at the edge
-        M.userData.id = T.id; const A = M.geometry.attributes.position, NS = 26; A.setXYZ(0, 0, 0, 0);
-        for (let r = 0; r < 3; r++) for (let k = 0; k < NS; k++) { const a = k / NS * TAU, rr = T.a * [0.4, 0.76, 1][r] * (r ? 0.84 + 0.16 * Math.sin(a * 3 + T.id) * Math.cos(a * 5 + T.id * 1.7) + 0.08 * Math.sin(a * 9 + T.id * 0.3) : 1), x = Math.sin(a) * rr, z = Math.cos(a) * rr; A.setXYZ(1 + r * NS + k, x, W.heightAt(T.x + x, T.z + z) - h0, z); }
+      const k = clamp(T.t / 0.35, 0, 1) * clamp((T.dur - T.t) / 0.8, 0, 1), sc = 0.3 + 0.7 * k;
+      if (M.userData.id !== T.id || Math.abs(M.userData.sc - sc) > 0.004) {
+        M.userData.id = T.id; M.userData.sc = sc; const A = M.geometry.attributes.position, NS = 26; A.setXYZ(0, 0, 0.03, 0);
+        for (let r = 0; r < 3; r++) for (let q = 0; q < NS; q++) { const a = q / NS * TAU, rr = sc * T.a * [0.4, 0.76, 1][r] * (r ? 0.84 + 0.16 * Math.sin(a * 3 + T.id) * Math.cos(a * 5 + T.id * 1.7) + 0.08 * Math.sin(a * 9 + T.id * 0.3) : 1), x = Math.sin(a) * rr, z = Math.cos(a) * rr; A.setXYZ(1 + r * NS + q, x, W.heightAt(T.x + x, T.z + z) - h0 + 0.03, z); }
         A.needsUpdate = true;
       }
-      const k = clamp(T.t / 0.35, 0, 1) * clamp((T.dur - T.t) / 0.8, 0, 1); M.position.set(T.x, h0 + 0.05, T.z); M.scale.set(0.3 + 0.7 * k, 1, 0.3 + 0.7 * k); M.visible = k > 0.01;
+      M.position.set(T.x, h0, T.z); M.scale.set(1, 1, 1); M.visible = k > 0.01;
     }
     for (; pn < this.pools.length; pn++) { const M = this.pools[pn]; if (M.userData.id !== -1) { M.userData.id = -1; M.position.y = -999; } }
     // what a blade can find
