@@ -1457,11 +1457,14 @@ export class World {
     // as deep in the slope (measured square to it) as it was meant to lie in level ground: its centre stands that far
     // off the slope's plane, which on a slope is further down the vertical through it
     const c = _seatU.dot(n), e = Math.sqrt(sy * sy * c * c + s * s * (1 - c * c)), y0 = it.y - h;
-    it.y = h + (y0 + e - sy) / Math.max(n.y, 0.35);
+    it.y = h + (y0 + e - sy) / lerp(1, Math.max(n.y, 0.35), smooth(clamp((0.85 - n.y) / 0.3, 0, 1)));   // (on a gentle slope it keeps its height)
     // and let down wherever the ground under its rim falls away below that plane
     let dip = 0, lo = h; const R = s * 0.9, gx = -n.x / n.y, gz = -n.z / n.y;
     for (let k = 0; k < 8; k++) { const dx = Math.cos(k * PI / 4) * R, dz = Math.sin(k * PI / 4) * R, gh = this.heightAt(it.x + dx, it.z + dz); lo = Math.min(lo, gh); dip = Math.min(dip, gh - (h + gx * dx + gz * dz)); }
-    it.y += Math.max(dip, -0.75 * sy);   // (never so far that it sinks out of sight)
+    it.y += Math.max(dip, -lerp(0.12, 0.3, smooth(clamp((0.9 - n.y) / 0.2, 0, 1))) * sy);   // (never so far that it sinks out of sight)
+    // on a steep slope or the brink of a drop, its rim (as tilted) goes no higher than the ground under it anywhere round
+    const ws = smooth(clamp((0.85 - n.y) / 0.25, 0, 1));
+    if (ws > 0 && follow > 0) { let rim = 1e9; const ux = -_seatU.x / _seatU.y, uz = -_seatU.z / _seatU.y; for (let k = 0; k < 12; k++) { const dx = Math.cos(k * PI / 6) * s * 1.15, dz = Math.sin(k * PI / 6) * s * 1.15; rim = Math.min(rim, this.heightAt(it.x + dx, it.z + dz) - (ux * dx + uz * dz)); } it.y = lerp(it.y, Math.min(it.y, rim - 0.05), ws); }
     // on a face too steep to rest on, it is a block standing out of the rock: set into the face as low as its foot
     return (it.y = lerp(it.y, Math.min(it.y, lo + y0), smooth(clamp((0.55 - n.y) / 0.25, 0, 1)))), it;
   }
