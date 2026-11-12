@@ -280,21 +280,27 @@ All reported or flagged, none confirmed fixed by the owner:
   unknown rate limits (the host sends each guest a snapshot 15 times a second through them). A link that dies in
   the middle of a game still sends that player to the title; there is no rejoin. An owned relay (Supabase Realtime,
   a Cloudflare Worker, or a paid TURN) would be the robust fix.
-- **Fen Lady statue:** rebuilt (fourth pass, `statue.js`): S-curve Madonna, free-hanging veil, lily crown, carved
-  eyes with tear streaks, a Gothic aedicule. Above the brow the veil is still a smooth dome; the owner asked for the
-  cuffs and hands to be redone.
+- **Fen Lady statue:** fifth pass (`statue.js`): hair and crown, relief texture for crisp drapery, black tears,
+  aged and painted stone. Face still smooth up close, eyes read closed, hair tresses are smooth tubes.
 - **Church and houses:** rebuilt in `buildings.js`. Standing-house interiors are empty (a door ajar shows black),
   wrecks are all of the stone-ground-storey kind, house colliders still let you walk through a closed door, and
   barns have not been seen in-game.
 - **Cutscenes:** Space (a press) skips any of them; a guest's press asks the host (`k:skipreq`). Shots only one
   player sees are played with `{ local: true }`.
-- **Bosses:** difficulty is tuned only against a test bot. The Serpent's open lower jaw reads as a flat pink slab.
-  The back of the Devil's robe hem lifts on deep bows.
+- **Bosses:** all four rebuilt (`devil.js` Hound/Serpent/Cryptid/Dragon classes, `hound_model.js`,
+  `serpent_model.js`, `dragon_model.js`): situational movesets, target scoring, poise, phases. Tuned only against
+  a headless test bot. Companions take reduced boss damage (Hound 0.55x, Serpent 0.45x, Devil/Dragon 0.3x) because
+  `ai.js` does not read `boss.tele` or know the new attack names; teach it and those reductions can go. Never tried
+  in a real two-browser fight; Serpent and Dragon not seen in their real chapter light.
+- **Wagon:** parks facing back down the road and leaves that way (`roadRoute(..., home = true)`); its barrels and
+  chest are a separate group (`shop.camp`) left on the ground.
 - **Cave:** never visually checked in-game (renders ran out of memory). Companion herding through the bends is
   untested.
 - **Holy Lance:** the knight's grip on it in the pike stance hasn't been checked.
-- **Frozen dead:** the curled-on-side pose's ribcage sits about 8 cm up (snow is packed under it). The crucifix
-  holder and the huddled pair haven't been seen up close.
+- **Dead bodies:** battlefield dead rebuilt in `battlefield.js`/`bones.js` (posed Landsknecht dead, ground-exact
+  shader, LOD cells). Frozen dead (`makeFrozen`) are baked to 2 draw calls a man after settling; seated men and
+  the cave dead are only level with the old look. The fallen household knights (`game.layOutFallen`) are untouched:
+  they lie in the downed-alive pose and are full Knight rigs (many draw calls).
 - **Saint Aldric's:** cobbles are on a straight world grid and look large and regular across the altar square. The
   village well's water isn't on the new ripple system.
 - **Blood:** armour doesn't get bloodied, because its materials are shared and would need per-knight copies.
