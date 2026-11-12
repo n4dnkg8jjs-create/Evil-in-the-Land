@@ -142,7 +142,7 @@ vec3 headPat(float a, float z, bool jaw) {
   // a dark stripe from the eye back to the angle of the jaw, edged pale above
   vec2 e0 = vec2(uEye.x, uEye.y), e1 = vec2(0.1, -0.42), d = vec2(a, z) - e0, ab = e1 - e0;
   float t = clamp(dot(d, ab) / dot(ab, ab), 0.0, 1.0), dl = length(d - ab * t), side = d.x * ab.y - d.y * ab.x;
-  c = mix(c, vec3(0.3, 0.28, 0.235), sm(0.2, 0.15, dl) * sm(0.09, 0.13, dl) * step(side, 0.0));
+  c = mix(c, vec3(0.16, 0.15, 0.125), sm(0.2, 0.15, dl) * sm(0.09, 0.13, dl) * step(side, 0.0) * sm(0.0, 0.25, t));
   c = mix(c, vec3(0.015, 0.013, 0.011), sm(0.12, 0.08, dl));
   // the crown: a dark arrowhead pointing forward between the eyes
   float cr = sm(0.62, 0.9, a), ar = abs(z - 0.55 - (a - 1.25) * 1.3);
@@ -177,7 +177,7 @@ float scar = 0.0, amp = 0.15;
 vec2 grad = clamp(vec2(hx - h0, hy - h0) / ee, -7.0, 7.0);
 float flt = scar * 0.85 + lod;
 vec3 sN = normalize(vec3(-grad * amp * (1.0 - clamp(flt, 0.0, 1.0)) + vec2(sn2(sp * 3.1) - 0.5, sn2(sp * 3.1 + 7.0) - 0.5) * 0.12 * scar, 1.0));
-vec3 scol = mix(pc, pf, 0.45 + 0.55 * lod);
+vec3 scol = mix(pc, pf, 0.6 + 0.4 * lod);
 float rimC = kind == 1.0 ? 0.7 + 0.3 * rim : rim;
 scol *= mix((0.45 + 0.55 * rimC) * (0.93 + 0.14 * sh1(cid * 1.37)) * (0.82 + 0.26 * h0), 1.0, lod);
 scol = mix(scol, vec3(0.2, 0.19, 0.175) * (0.7 + 0.5 * sn2(sp * 1.9)), scar);
@@ -268,13 +268,13 @@ function floorPt(Lj, f) {
   const e = jEnd(Lj), w = jw(Lj), top = jlip(Lj), c = Math.cos(f * Math.PI), ac = Math.abs(c);
   const inn = smooth(clamp((0.97 - ac) / 0.22, 0, 1));
   let y = top - 0.03 * smooth(clamp((1 - ac) / 0.03, 0, 1)) - 0.6 * DEP(Lj) * e * inn;   // (never through the hull beneath it)
-  y += 0.075 * e * gauss(c, 0, 0.13) * smooth(clamp((Lj - 0.35) / 0.15, 0, 1)) * (1 - smooth(clamp((Lj - 0.88) / 0.05, 0, 1)));   // the sheath
+  y += 0.05 * e * gauss(c, 0, 0.17) * smooth(clamp((Lj - 0.35) / 0.15, 0, 1)) * (1 - smooth(clamp((Lj - 0.88) / 0.05, 0, 1)));   // the sheath
   y += 0.014 * inn * Math.sin(c * 26) * (1 - gauss(c, 0, 0.2));   // folds running back along it
   return [w * c * (1 - 0.06 * inn), y, jzOf(Lj)];
 }
 export const floorY = (Lj) => floorPt(Lj, 0.5)[1];
 // the flesh of the mouth: pale and greyish at the lips, bruised violet inward, black down the throat
-const flesh = (k, deep = 0) => { k = clamp(k, 0, 1); const d = 1 - 0.55 * deep; return [(0.012 + 0.27 * k) * d, (0.008 + 0.2 * k) * d, (0.01 + 0.205 * k) * d]; };
+const flesh = (k, deep = 0) => { k = clamp(k, 0, 1); const d = 1 - 0.55 * deep; return [(0.012 + 0.24 * k) * d, (0.008 + 0.185 * k) * d, (0.01 + 0.19 * k) * d]; };
 
 // a grid surface: fn(i, j) -> [x, y, z, r, g, b]
 function grid(NI, NJ, fn, flip = false) {
@@ -320,8 +320,9 @@ function eyeTex() {
     if (r > 1.45) c = [0.03, 0.028, 0.024];
     else {
       const k = r / 1.45, fib = 0.75 + 0.25 * Math.sin(an * 61 + Math.sin(an * 7) * 3) * Math.sin(an * 23 + r * 9), spot = h(Math.round(an * 40), Math.round(r * 12)) > 0.86 ? 0.45 : 1;
-      c = [lerp(0.6, 0.22, k ** 1.3), lerp(0.52, 0.19, k ** 1.3), lerp(0.3, 0.1, k ** 1.1)].map((v) => v * fib * spot);
-      const rimD = smooth(clamp((k - 0.82) / 0.18, 0, 1)); c = c.map((v) => v * (1 - 0.75 * rimD));
+      const mot = 0.7 + 0.6 * h(Math.round(an * 18 + r * 3), Math.round(r * 7));
+      c = [lerp(0.4, 0.16, k ** 1.2), lerp(0.33, 0.13, k ** 1.2), lerp(0.16, 0.06, k)].map((v) => v * fib * spot * mot);
+      const rimD = smooth(clamp((k - 0.72) / 0.28, 0, 1)); c = c.map((v) => v * (1 - 0.85 * rimD));
       const pw = 0.11 * Math.sqrt(Math.max(0, 1 - (ay / 1.1) ** 2)), pd = Math.abs(ax) - pw;   // the slit
       if (pd < 0.035) { const t = smooth(clamp(pd / 0.035, 0, 1)); c = c.map((v) => v * t * (pd > 0 ? 1 : 0) + 0.004); }
       else if (pd < 0.08) c = c.map((v) => v * (0.7 + 0.3 * (pd - 0.035) / 0.045));   // a dark ring round it
@@ -344,7 +345,7 @@ export function buildSerpentHead() {
   const skin = serpentSkin(true, [eyeA, zOf(LE), browA, zOf(LE) - 0.03]);
   // (a little light of its own, in proportion to its colour: the light that gets into a mouth, which leaves the throat black)
   // its surface: blotched and veined, wet in places (a noise in the shader, over the head's own frame)
-  const mouth = new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0, clearcoat: 0.25, clearcoatRoughness: 0.18, emissive: 0x444444, side: THREE.DoubleSide });
+  const mouth = new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.58, metalness: 0, clearcoat: 0.22, clearcoatRoughness: 0.2, emissive: 0x444444, side: THREE.DoubleSide });
   mouth.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vLp;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLp = position;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
@@ -357,7 +358,8 @@ float mb = mn(vLp * 7.0), mv = abs(mn(vLp * vec3(9.0, 9.0, 2.5) + 3.0) - 0.5);
 diffuseColor.rgb *= (0.72 + 0.5 * mb) * mix(0.82, 1.0, smoothstep(0.0, 0.02, mv + 0.03 * mn(vLp * 23.0)));
 diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= 0.7 + 0.6 * mn(vLp * 4.0 + 9.0);')
-      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance *= vColor.rgb;');
+      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance *= vColor.rgb;')
+      .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n{ float lum = dot(vColor.rgb, vec3(0.33)); material.clearcoat *= smoothstep(0.02, 0.12, lum); material.roughness = mix(0.85, material.roughness, smoothstep(0.02, 0.1, lum)); }');
   };
   mouth.customProgramCacheKey = () => 'serpent-mouth';
   const bone = new THREE.MeshPhysicalMaterial({ color: 0xd9d0b4, roughness: 0.3, metalness: 0, clearcoat: 0.5, clearcoatRoughness: 0.2 });
@@ -384,8 +386,8 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   jaw.add(new THREE.Mesh(H(floor), mouth));
   // the glottis: a short tube standing on the sheath, open at its front in a dark slit
   {
-    const L0 = 0.62, L1 = 0.84, y0 = floorY(L0), y1 = floorY(L1);
-    const g = new THREE.LatheGeometry(Array.from({ length: 9 }, (_, i) => { const t = i / 8; return new THREE.Vector2(0.001 + 0.065 * Math.sin(Math.PI * Math.min(1, t * 1.15)) ** 0.6, t); }), 12);
+    const L0 = 0.56, L1 = 0.8, y0 = floorY(L0), y1 = floorY(L1);
+    const g = new THREE.LatheGeometry(Array.from({ length: 9 }, (_, i) => { const t = i / 8; return new THREE.Vector2(0.001 + 0.095 * Math.sin(Math.PI * Math.min(1, t * 1.15)) ** 0.6, t); }), 12);
     g.rotateX(Math.PI / 2); g.scale(1, 0.7, jzOf(L1) - jzOf(L0)); g.translate(0, 0, jzOf(L0));
     const P = g.attributes.position; for (let i = 0; i < P.count; i++) { const z = P.getZ(i), Lj = (z - JZ0) / (JZ1 - JZ0); P.setY(i, P.getY(i) * (P.getY(i) > 0 ? 1 : 0.2) + lerp(y0, y1, clamp((Lj - L0) / (L1 - L0), 0, 1)) + 0.012); }
     g.computeVertexNormals(); paint(g, (x, y, z) => { const slit = Math.abs(x) < 0.02 && z > jzOf(L1) - 0.2 && y > lerp(y0, y1, 1) + 0.03; return slit ? [0.01, 0.005, 0.006] : flesh(0.8); });
@@ -403,7 +405,7 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   const lt = [];
   for (const sx of [-1, 1]) for (let i = 0; i < 10; i++) {
     const Lj = 0.3 + i * 0.058, p = floorPt(Lj, sx > 0 ? 0.11 : 0.89);
-    lt.push(place(tooth(0.1 + 0.02 * Math.cos(i * 1.7), 0.02), [p[0], p[1] - 0.012, p[2]], [Math.PI - 0.2, 0, sx * 0.1]));
+    lt.push(place(tooth(0.075 + 0.015 * Math.cos(i * 1.7), 0.018), [p[0], p[1] - 0.03, p[2]], [Math.PI - 0.25, 0, sx * 0.15]));
   }
   jaw.add(new THREE.Mesh(H(mergeGeometries(lt)), bone));
   // the fangs: long, curved and hollow, folded back along the palate in their sheaths until the mouth gapes
@@ -429,7 +431,7 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
     const fr = surfFrame((L, th) => skullPt(L, th), LE, sx > 0 ? 0.48 : Math.PI - 0.48, -1);
     const n = fr.n.clone(); n.x = Math.abs(n.x) * sx;
     const m = new THREE.Mesh(new THREE.SphereGeometry(ER, 28, 18), em);
-    m.position.set(fr.p.x - n.x * ER * 0.45 - HINGE[0], fr.p.y - n.y * ER * 0.45 - HINGE[1], fr.p.z - n.z * ER * 0.45 - HINGE[2]);
+    m.position.set(fr.p.x - n.x * ER * 0.62 - HINGE[0], fr.p.y - n.y * ER * 0.62 - HINGE[1], fr.p.z - n.z * ER * 0.62 - HINGE[2]);
     const X = n.clone(), Y = new THREE.Vector3(0, 1, 0).addScaledVector(X, -X.y).normalize(), Z = new THREE.Vector3().crossVectors(X, Y);
     m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
     upper.add(m); parts.eyes.push(m);
@@ -465,7 +467,7 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   for (let sd = 0; sd < 2; sd++) for (let c = 0; c < CN; c++) for (let j = 0; j < CM; j++) { const a = sd * (CN + 1) * (CM + 1) + c * (CM + 1) + j, b = a + 1, cc = a + CM + 1, d = cc + 1; lidx.push(a, b, cc, b, d, cc); }
   const T0 = nCheek;
   for (let k = 0; k <= NK; k++) for (let i = 0; i < RING; i++) {
-    const o = (T0 + k * RING + i) * 3, f = flesh((k === 0 ? 0.26 : k === 1 ? 0.06 : 0) * (0.8 + 0.2 * Math.cos(i * 1.7)), 0.4);
+    const o = (T0 + k * RING + i) * 3, f = flesh((k === 0 ? 0.24 : k === 1 ? 0.035 : 0) * (0.8 + 0.2 * Math.cos(i * 1.7)), 0.4);
     lcol[o] = f[0]; lcol[o + 1] = f[1]; lcol[o + 2] = f[2];
   }
   for (let k = 0; k < NK; k++) for (let i = 0; i < RING; i++) { const a = T0 + k * RING + i, b = T0 + k * RING + (i + 1) % RING, c = a + RING, d = b + RING; lidx.push(a, b, c, b, d, c); }
@@ -483,7 +485,7 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   const TL = 2.7, TF = 0.85, TN = 22, TFN = 9, TR = 6, TFR = 5;   // length, the fork, segments, radial
   const tpath = (() => {
     const pts = [];
-    for (let Lj = 0.08; Lj < 0.86; Lj += 0.04) pts.push(new THREE.Vector3(0, floorY(Lj) - (Lj < 0.84 ? 0.06 : 0), jzOf(Lj)));   // under the floor, in the sheath
+    for (let Lj = 0.16; Lj < 0.86; Lj += 0.04) pts.push(new THREE.Vector3(0, floorY(Lj) - (Lj < 0.84 ? 0.06 : 0), jzOf(Lj)));   // under the floor, in the sheath
     const open = pts.length; pts.push(new THREE.Vector3(0, floorY(0.9) + 0.01, jzOf(0.9)));
     const zl = jzOf(0.995), yl = (jlip(0.995) + serpentLip(LuOf(zl))) / 2 + 0.01;
     pts.push(new THREE.Vector3(0, yl - 0.01, zl - 0.12), new THREE.Vector3(0, yl, zl + 0.1));
@@ -502,12 +504,12 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _t = new THREE.Vector3(), _s = new THREE.Vector3(), _n = new THREE.Vector3(), X = new THREE.Vector3(1, 0, 0);
   // ext 0 (lying in its sheath, the tips just out of it) .. 1 (all the way out); flick: how hard the tips whip up and down
   parts.setTongue = (ext, flick, time) => {
-    const tip = lerp(tpath.sOpen + 0.14, tpath.sLip + 1.55, ext), base = tip - TL, out = tpath.sLip;
+    const tip = lerp(tpath.sOpen + 0.32, tpath.sLip + 1.55, ext), base = tip - TL, out = tpath.sLip;
     const at = (s, o) => {   // the point at arc length s, and the whip of the free part
       const len = tpath.len, u = clamp(s / len, 0, 1); tpath.cv.getPointAt(u, o);
       if (s > len) o.z += s - len;
       const free = Math.max(0, s - out); o.y += flick * Math.min(1, free * 0.6) * Math.sin(time * 44 - free * 2.6) * 0.16 * Math.min(1, free) * (0.4 + 0.6 * clamp((s - (tip - TF)) / TF + 0.6, 0, 1));
-      o.y += -0.05 * free * free * (1 - flick * 0.6); return o;
+      o.y += -0.03 * free * free * (1 - flick * 0.6); return o;
     };
     const ring = (o, c, r, R, sideOff, sx) => { // a ring of R+1 at c, round the path's direction
       _n.set(0, 1, 0); _s.crossVectors(_t, _n).normalize(); _n.crossVectors(_s, _t).normalize();
@@ -564,14 +566,17 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
     for (let j = CM - 1; j >= 1; j--) { const q = j * 3; put(_a.set(lpos[q], lpos[q + 1], lpos[q + 2])); }                       // the +x cheek, bottom to top
     let cx = 0, cy = 0, cz = 0; for (let i = 0; i < RING; i++) { cx += ringPts[i * 3]; cy += ringPts[i * 3 + 1]; cz += ringPts[i * 3 + 2]; } cx /= RING; cy /= RING; cz /= RING;
     // the pharynx: a funnel from the back of the mouth into the neck, inside it; then the gullet, narrowing into the dark
-    let rmax = 0.01; for (let i = 0; i < RING; i++) rmax = Math.max(rmax, Math.hypot(ringPts[i * 3] - cx, ringPts[i * 3 + 1] - cy));
-    const s1 = Math.min(1, 0.4 / rmax), k1x = 0, k1y = NECK.y, k1z = NECK.z + 0.07;
+    // (a round mouth to the gullet, below the back edge of the palate so that it never folds up into the skull)
+    let top0 = -9; for (let j = 0; j <= NP; j++) top0 = Math.max(top0, ringPts[j * 3 + 1]);
+    const GR = 0.36, k1y = Math.min(NECK.y, top0 - GR - 0.05), k1z = NECK.z + 0.07;
     for (let k = 0; k <= NK; k++) {
-      const t = k ? (k - 1) / (NK - 1) : 0, sc = k ? s1 * lerp(1, 0.12, Math.pow(t, 0.8)) : 1;
-      const ccx = k ? lerp(k1x, THROAT_END.x, t) : cx, ccy = k ? lerp(k1y, THROAT_END.y, t) : cy, ccz = k ? lerp(k1z, THROAT_END.z, t) : cz;
+      const t = k ? (k - 1) / (NK - 1) : 0, rr = GR * lerp(1, 0.12, Math.pow(t, 0.8));
+      const ccy = k ? lerp(k1y, THROAT_END.y, t) : cy, ccz = k ? lerp(k1z, THROAT_END.z, t) : cz;
       for (let i = 0; i < RING; i++) {
-        const fold = 1 + (k > 1 ? 0.09 * Math.sin(i / RING * TAU * 9) * Math.sin(Math.PI * t) : 0), q = (T0 + k * RING + i) * 3;
-        lpos[q] = ccx + (ringPts[i * 3] - cx) * sc * fold; lpos[q + 1] = ccy + (ringPts[i * 3 + 1] - cy) * sc * fold; lpos[q + 2] = ccz + (ringPts[i * 3 + 2] - cz) * (k ? 0.25 * sc : 1);
+        const q = (T0 + k * RING + i) * 3;
+        if (!k) { lpos[q] = ringPts[i * 3]; lpos[q + 1] = ringPts[i * 3 + 1]; lpos[q + 2] = ringPts[i * 3 + 2]; continue; }
+        const dx = ringPts[i * 3] - cx, dy = ringPts[i * 3 + 1] - cy, dl = Math.hypot(dx, dy) || 1, fold = 1 + (k > 1 ? 0.1 * Math.sin(i / RING * TAU * 9) * Math.sin(Math.PI * t) : 0);
+        lpos[q] = dx / dl * rr * fold; lpos[q + 1] = ccy + dy / dl * rr * 0.85 * fold; lpos[q + 2] = ccz;
       }
     }
     lpos[TE * 3] = THROAT_END.x; lpos[TE * 3 + 1] = THROAT_END.y; lpos[TE * 3 + 2] = THROAT_END.z - 0.05;

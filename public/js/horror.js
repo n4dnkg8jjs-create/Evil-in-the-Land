@@ -471,12 +471,16 @@ function mergeByMaterial(group) {
   return group;
 }
 const ROBE_U = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0, 0) } };
-function robeMat(sway, top, DU) {
+// axis: the garment's own middle (x, z in its geometry), for the wind: the cloth is blown out and round from it but
+// never in toward it (blown in, it went through the body inside and showed the grey flesh through the wool); hem: the
+// height of the hem, which the wind drags about but does not lift (the robe rests on the ground, and the feet stay hid)
+function robeMat(sway, top, DU, axis = [0, 0], hem = -1e3) {
   const ct = clothTextures([26, 22, 24], false, 256, 'devilwool');
   const m = new THREE.MeshPhysicalMaterial({ color: 0x0d0b0c, map: ct.map, normalMap: ct.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.92, sheen: 0.5, sheenRoughness: 0.75, sheenColor: new THREE.Color(0x2a2630), side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = ROBE_U.uTime; sh.uniforms.uWind = ROBE_U.uWind; sh.uniforms.uSway = { value: sway }; sh.uniforms.uTop = { value: top };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop;\nuniform vec2 uWind;')
+    sh.uniforms.uAxis = { value: new THREE.Vector2(axis[0], axis[1]) }; sh.uniforms.uHem = { value: hem };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop, uHem;\nuniform vec2 uWind, uAxis;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         float hang = max(0.0, uTop - position.y); float w = hang * hang * uSway;
         float ang = atan(position.x, position.z);
@@ -487,8 +491,10 @@ function robeMat(sway, top, DU) {
         float flap = sin(uTime * 7.0 - hang * 9.0 + ang * 2.0) * 0.18 + sin(uTime * 11.0 - hang * 14.0) * 0.08;
         float lee = 0.6 + 0.4 * dot(normalize(vec2(position.x, position.z) + 1e-4), normalize(uWind + 1e-4));
         vec2 wd = uWind * hang * (0.6 + hang * 0.5) * gust * lee;
-        transformed.x += wd.x + flap * uWind.y * hang; transformed.z += wd.y + flap * uWind.x * hang;
-        transformed.y += length(wd) * 0.35 * hang;`);
+        vec2 dw = vec2(wd.x + flap * uWind.y * hang, wd.y + flap * uWind.x * hang), rd = normalize(position.xz - uAxis + 1e-4);
+        dw -= rd * min(0.0, dot(dw, rd));
+        transformed.x += dw.x; transformed.z += dw.y;
+        transformed.y += length(wd) * 0.35 * hang * smoothstep(uHem, uHem + 0.35, position.y);`);
   };
   m.customProgramCacheKey = () => 'devilRobe';   // sway and top are uniforms: one shader for every garment
   return dissolvable(m, DU);
@@ -563,7 +569,7 @@ function dressDevil(B, K, def, DU) {
     v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.82 + 0.07;
     if (t > 0.96) v.y -= Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.08 * (t - 0.96) / 0.04;   // the hem, uneven, dragging (never lifted off the ground)
   });
-  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
+  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU, [0, 0.07], -L)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
   robe.userData.base = robe.scale.clone(); robe.userData.pos0 = robe.position.clone(); robe.userData.top = neckTop + 0.03; robe.userData.L = L;
   robe.userData.prof = pts; robe.userData.sway = 0.03; robe.userData.uTop = neckTop;   // (its shape, for keeping the hands out of it: guardArms)
   // sleeves: wide and long, falling in folds, the hands hang out of them. Each is one tube from the shoulder to the
@@ -590,7 +596,7 @@ function dressDevil(B, K, def, DU) {
     }
     g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
     // (it stirs below the elbow only, as the old cuff did)
-    const m = new THREE.SkinnedMesh(g, robeMat(0.06, sh.y - ul, DU)); m.castShadow = true; m.frustumCulled = false; m.userData.side = k;
+    const m = new THREE.SkinnedMesh(g, robeMat(0.06, sh.y - ul, DU, [sh.x, sh.z])); m.castShadow = true; m.frustumCulled = false; m.userData.side = k;
     ua.add(m); m.position.copy(ua.worldToLocal(new THREE.Vector3(0, 0, 0)));   // (at rest: the mesh's frame is the model's)
     top.updateMatrixWorld(true);
     m.bind(new THREE.Skeleton([ua, fa], [ua.matrixWorld.clone().invert(), fa.matrixWorld.clone().invert()]), m.matrixWorld.clone());
@@ -647,14 +653,14 @@ function dressDevil(B, K, def, DU) {
     SI.push(0, 1, 2, 0); SW.push(wH, wL, wC, 0);
   }
   hood.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); hood.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
-  const hm = new THREE.SkinnedMesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; hm.frustumCulled = false; hg.add(hm);
+  const hm = new THREE.SkinnedMesh(hood, robeMat(0.02, 0.0, DU, [C[0], C[2]])); hm.castShadow = true; hm.frustumCulled = false; hg.add(hm);
   { let top = hg; while (top.parent) top = top.parent; top.updateMatrixWorld(true); lag.updateMatrixWorld(true);
     const bones = [B.head, lag, B.chest];
     const sk = new THREE.Skeleton(bones, bones.map((b) => b.matrixWorld.clone().invert()));
     hm.bind(sk, hm.matrixWorld.clone()); }
   HOODS.add({ head: B.head, lag, y: 0, x: 0, z: 0, vy: 0, vx: 0, vz: 0, t: -1, init: false });
-  { // the hood as two ellipsoids for guardArms: the crown (with the head, in the hood's own space) and the cowl on the
-    // shoulders (with the chest, in the chest's space), each the box of the cloth that rides that bone
+  { // the hood as two ellipsoids for guardArms: the crown (with the head, in the hood's own space: its own shell) and
+    // the cowl on the shoulders (with the chest, in the chest's space: the box of the cloth that rides the chest)
     const bw = new THREE.Box3(), v = new THREE.Vector3(); hg.updateMatrixWorld(true); B.chest.updateMatrixWorld(true);
     for (let k = 0; k < NP; k++) { v.fromArray(pos, k * 3); if (SW[k * 4 + 2] > 0.5) bw.expandByPoint(B.chest.worldToLocal(hg.localToWorld(v))); }
     const ell = (b) => ({ c: b.getCenter(new THREE.Vector3()), r: b.getSize(new THREE.Vector3()).multiplyScalar(0.5) });
@@ -671,7 +677,7 @@ function dressDevil(B, K, def, DU) {
     const pts = DEVIL_HORN.map(([x, y, z]) => new THREE.Vector3(s * x, y, z));
     const h = new THREE.Mesh(devilHornGeo(pts, HORN_R[0], HORN_R[1]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true; h.userData.horn = true;
     hg.add(h);
-    // the centre line, for keeping his hands off them (guardArms): every other point, with the radius there
+    // the centre line, for keeping his hands off them (guardArms): nine points along it, with the radius at each
     const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), line = [];
     for (let i = 0; i <= 8; i++) { const t = i / 8; line.push({ p: curve.getPointAt(t), r: lerp(HORN_R[0], HORN_R[1], Math.pow(t, 0.8)) }); }
     hg.userData.horns.push(line);
@@ -687,7 +693,7 @@ function armSamples(B, mesh) {
   for (const k of ['R', 'L']) {
     const fa = B['fArm' + k], hd = B['hand' + k], fi = bones.indexOf(fa), hi = bones.indexOf(hd); if (fi < 0 || hi < 0) return null;
     const el = fa.getWorldPosition(new THREE.Vector3()), wr = hd.getWorldPosition(new THREE.Vector3()), fl = el.distanceTo(wr);
-    const fore = [0.2, 0.45, 0.7, 0.92].map((f) => ({ f, n: 0, c: new THREE.Vector3(), r: 0, pts: [] })), hand = [0, 1, 2, 3].map(() => ({ n: 0, p: new THREE.Vector3(), r: 0, pts: [] }));
+    const fore = [0.2, 0.45, 0.7, 0.92].map((f) => ({ f, r: 0, pts: [] })), hand = [0, 1, 2, 3].map(() => ({ p: null, r: 0, pts: [] }));
     const hpts = [];
     for (let i = 0; i < P.count; i++) {
       let bw = -1, bj = -1; for (let q = 0; q < 4; q++) { const w = SW.getComponent(i, q); if (w > bw) { bw = w; bj = SI.getComponent(i, q); } }
@@ -727,6 +733,7 @@ function intoRobe(robe, p, r, out) {
     const gust = 0.75 + 0.25 * Math.sin(T * 1.7) + 0.15 * Math.sin(T * 4.3 + 1), ang = Math.atan2(g.x, g.z), flap = Math.sin(T * 7 - hang * 9 + ang * 2) * 0.18 + Math.sin(T * 11 - hang * 14) * 0.08;
     const gl = Math.hypot(g.x, g.z) || 1, wl = Math.hypot(wx, wz) || 1, lee = 0.6 + 0.4 * (g.x * wx + g.z * wz) / (gl * wl), k = hang * (0.6 + hang * 0.5) * gust * lee;
     dx = wx * k + flap * wz * hang; dz = wz * k + flap * wx * hang;
+    const rl = Math.hypot(g.x, g.z - 0.07) || 1, rx = g.x / rl, rz = (g.z - 0.07) / rl, inw = Math.min(0, dx * rx + dz * rz); dx -= rx * inw; dz -= rz * inw;   // (as the shader: never blown inward)
   }
   const nx = g.x - dx, nz = (g.z - dz - 0.07) / 0.82, rho = Math.hypot(nx, nz) || 1e-4;
   const rmax = rad + 0.027 + 0.095 * t + u.sway * hang * hang * 0.85;   // the deepest pleat and wrinkle there, and its sway
@@ -756,7 +763,7 @@ function intoEll(M, Mi, s, c, e, p, r, out) {
 // hand is inside the robe, the hood or the horns: so whatever a pose asks, His hands never pass through His clothes.
 // It works from the bones and a few spheres: no geometry is read and nothing is allocated. Call after plantRobe.
 export function guardArms(B) {
-  const G = B.guard; if (!G) return;
+  const G = B.guard; if (!G) return 0;
   const robe = B.robe && B.robe.visible ? B.robe : null, hg = B.hoodGroup, ud = hg?.userData;
   if (robe) { robe.updateMatrixWorld(); _gm.copy(robe.matrixWorld).invert(); _gS.setFromMatrixScale(robe.matrixWorld); }
   let hs = 1, cs = 1, nh = 0;
