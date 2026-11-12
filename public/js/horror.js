@@ -572,7 +572,10 @@ function dressDevil(B, K, def, DU) {
   // Below the hands it widens in a long A-line, and the hem pools on the ground in a ring of cloth that lies flat on
   // it (the last pass had made the skirt a straight column down to a small flare, which read as a cylinder; the pool
   // runs only outward along the ground, never back up, so nothing folds back under the earth)
-  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.4, -0.2], [0.39, -0.5], [0.45, -0.56 * L], [0.56, -0.72 * L], [0.68, -0.85 * L], [0.8, -0.94 * L], [0.94, -0.985 * L], [1.08, -L], [1.24, -L]];
+  // Over the top it is a garment, not a drum: closed close round the neck (no high collar heaped round the chin) and
+  // falling with his shoulders in a rounded slope to just past them (it used to run out flat to well beyond them
+  // and drop straight down at the edge, like the lid of a cylinder)
+  const prof = [[0.107, neckTop - 0.005], [0.18, neckTop - 0.02], [0.27, neckTop - 0.035], [0.36, neckTop - 0.06], [0.42, neckTop - 0.085], [0.465, neckTop - 0.12], [0.485, neckTop - 0.17], [0.48, neckTop - 0.23], [0.455, neckTop - 0.31], [0.4, -0.2], [0.39, -0.5], [0.45, -0.56 * L], [0.56, -0.72 * L], [0.68, -0.85 * L], [0.8, -0.94 * L], [0.94, -0.985 * L], [1.08, -L], [1.24, -L]];
   const pts = []; for (let i = 0; i < prof.length - 1; i++) for (let k = 0; k < 4; k++) { const t = k / 4; pts.push([lerp(prof[i][0], prof[i + 1][0], t), lerp(prof[i][1], prof[i + 1][1], t)]); } pts.push(prof[prof.length - 1]);
   const robeGeo = lathe(pts, 96, (v, a) => {
     const t = clamp(-v.y / L, 0, 1);
@@ -597,7 +600,9 @@ function dressDevil(B, K, def, DU) {
     const ua = B['uArm' + k], fa = B['fArm' + k], ul = Math.abs(fa.position.y), fl = Math.abs(B['hand' + k].position.y), L2 = ul + fl * 0.92;
     let top = ua; while (top.parent) top = top.parent; top.updateMatrixWorld(true);
     const sh = ua.getWorldPosition(new THREE.Vector3());   // at rest every bone frame is the model frame: the sleeve hangs straight down from here
-    const sp = [[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul], [0.17, -ul - fl * 0.35], [0.22, -ul - fl * 0.6], [0.27, -ul - fl * 0.75], [0.31, -ul - fl * 0.88], [0.3, -L2]];
+    // its top is a closed, rounded cap tucked in under the shoulder of the robe (it was an open tube end standing up
+    // above the shoulder, which showed as a flat-topped box at each corner once the robe followed the shoulders)
+    const sp = [[0.03, 0.035], [0.09, 0.03], [0.13, 0.01], [0.15, -0.02], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul], [0.17, -ul - fl * 0.35], [0.22, -ul - fl * 0.6], [0.27, -ul - fl * 0.75], [0.31, -ul - fl * 0.88], [0.3, -L2]];
     const spts = []; for (let i = 0; i < sp.length - 1; i++) for (let j = 0; j < 3; j++) { const t = j / 3; spts.push([lerp(sp[i][0], sp[i + 1][0], t), lerp(sp[i][1], sp[i + 1][1], t)]); } spts.push(sp[sp.length - 1]);
     const g = lathe(spts, 28, (v, a) => {
       const t = clamp((-v.y - ul) / fl, 0, 1);   // 0 down to the elbow, then out along the forearm
