@@ -863,7 +863,7 @@ export class World {
     const H = this.H;
     for (const L of this.lots) {
       if (L.kind === 'field' || L.kind === 'paddock') continue;
-      let sum = 0, n = 0; if (L.padH === undefined) for (const [cx, cz] of lotCorners(L, 0, 4)) { sum += this.rawHeight(cx, cz); n++; }
+      let sum = 0, n = 0; if (L.padH === undefined) { this._legacy = true; for (const [cx, cz] of lotCorners(L, 0, 4)) { sum += this.rawHeight(cx, cz); n++; } this._legacy = false; }   // (at the height it always stood: see planSettlement)
       const ph = L.padH ?? (L.padH = sum / n); const B = L.kind === 'camp' ? 4 : 7;
       const C = Math.cos(L.yaw), S = Math.sin(L.yaw), R = L.rad + B;
       const i0 = Math.max(0, Math.floor((L.x - R + HALF) / CELL)), i1 = Math.min(N - 1, Math.ceil((L.x + R + HALF) / CELL));

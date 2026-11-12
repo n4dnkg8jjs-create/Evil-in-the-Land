@@ -429,7 +429,7 @@ export function buildHumanDevil(def) {
   const fit = { ...def, headFit: { s: sc, off: new THREE.Vector3(hc.x, hc.y - 0.065 * sc + 0.01, hc.z - 0.11 * sc) }, robeW: 0.56, sleeveW: 0.62 };
   dressDevil.horn = null; dressDevil(B, null, fit, DU);
   for (const b of Object.values(rig.j)) b.userData.rest = b.position.clone();
-  B.guard = armSamples(B, mesh);
+  B.guard = armSamples(B, mesh, fit.sleeveW);
   root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
   return { mesh: root, B, mat, wings: null, height: 2.0 };
 }
@@ -519,6 +519,7 @@ export function tickRobes(time) {
 // root: the model's own group, whose y = 0 is the ground under him.
 const _rbM = new THREE.Matrix4(), _rbQ = new THREE.Quaternion(), _rbP = new THREE.Vector3(), _rbS = new THREE.Vector3(), _rbC = new THREE.Vector3();
 const _rbQ2 = new THREE.Quaternion(), _rbI = new THREE.Quaternion(), _rbU = new THREE.Vector3(), _rbO = new THREE.Vector3();
+const _rbM2 = new THREE.Matrix4(), _rbH = new THREE.Vector3(), _rbD = new THREE.Vector3(), _rbQ3 = new THREE.Quaternion();
 export function plantRobe(B, root, sink = 0.04) {
   const robe = B.robe; if (!robe || !robe.visible || robe.userData.L === undefined) return;
   const u = robe.userData;
@@ -531,9 +532,20 @@ export function plantRobe(B, root, sink = 0.04) {
   const bow = Math.acos(clamp(_rbU.set(0, 1, 0).applyQuaternion(_rbQ).y, -1, 1));
   const k = clamp((bow - 0.26) / 1.05, 0, 0.55);
   _rbQ2.copy(_rbI).slerp(_rbQ, k);                                   // the robe's own turn, in the model's frame
+  // and leaned (a little, from the collar) toward being over his hips: stooping, or turned at the waist, the collar comes
+  // away from over them, and a robe hanging straight down from it let his hips and thighs out through the cloth
+  _rbH.setFromMatrixPosition(B.hips.matrixWorld).applyMatrix4(_rbM2.copy(root.matrixWorld).invert());
+  _rbD.set(0, -1, 0).applyQuaternion(_rbQ2); const hh = _rbC.y - _rbH.y;
+  if (hh > 0.05 && _rbD.y < -0.5) {
+    const f = hh / -_rbD.y, ox = _rbH.x - (_rbC.x + _rbD.x * f), oz = _rbH.z - (_rbC.z + _rbD.z * f), ol = Math.hypot(ox, oz);
+    // (six tenths of the way: all of it swung the hem back off his toes)
+    if (ol > 1e-3) { _rbU.set(ox / ol, 0, oz / ol).cross(_rbD).negate().normalize(); _rbQ3.setFromAxisAngle(_rbU, Math.min(0.12, Math.atan2(ol, hh) * 0.6)); _rbQ2.premultiply(_rbQ3); }
+  }
   const tilt = Math.acos(clamp(_rbU.set(0, 1, 0).applyQuaternion(_rbQ2).y, -1, 1));
   // the length that takes it from the collar to the ground (along its slant)
-  const sy = clamp((_rbC.y + sink) / ((u.top + u.L) * Math.max(0.5, Math.cos(tilt))), 0.5, 1.25);
+  // (and as much again as a lean lifts the near side of the hem, so all of it stays down on the ground)
+  const hemR = u.prof ? u.prof[u.prof.length - 1][0] * Math.max(u.base.x, u.base.z * 0.82) : 0;
+  const sy = clamp((_rbC.y + sink + hemR * Math.sin(tilt)) / ((u.top + u.L) * Math.max(0.5, Math.cos(tilt))), 0.5, 1.25);
   robe.scale.set(u.base.x, sy, u.base.z);
   // origin = collar - (turned) collar-in-robe; then into the chest's frame
   _rbO.set(0, sy * u.top, 0).applyQuaternion(_rbQ2); _rbO.subVectors(_rbC, _rbO).sub(_rbP);
@@ -687,7 +699,7 @@ function dressDevil(B, K, def, DU) {
 // ---------------------------------------------------------------- keeping His hands out of His clothes
 // The forearms and hands as a few spheres each, measured from the skin at rest: along the forearm by its share of the
 // way from elbow to wrist (so it holds when the forearm is drawn out later), the hand in the hand's own frame.
-function armSamples(B, mesh) {
+function armSamples(B, mesh, sw = 1) {
   const out = {}, g = mesh.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, bones = mesh.skeleton.bones, v = new THREE.Vector3();
   mesh.updateMatrixWorld(true); mesh.skeleton.update();
   for (const k of ['R', 'L']) {
@@ -713,7 +725,8 @@ function armSamples(B, mesh) {
       s.r *= 0.92; delete s.pts;   // (the slice's corners: a sphere round the whole slice is a little fat)
     }
     const F = fore.filter((s) => s.r > 0), Hd = hand.filter((s) => s.r > 0);
-    out[k] = { ua: B['uArm' + k], fa, hd, fore: F, hand: Hd, rf: Math.max(...F.map((s) => s.r + s.off.length())), rh: Math.max(...Hd.map((s) => s.r)) };
+    out[k] = { ua: B['uArm' + k], fa, hd, fore: F, hand: Hd, rf: Math.max(...F.map((s) => s.r + s.off.length())), rh: Math.max(...Hd.map((s) => s.r)),
+      sleeve: [0.175 * sw, 0.21 * sw, 0.31 * sw], cuff: Math.abs(hd.position.y) * 0.92 };   // (the sleeve's girth along it, and where its cuff is down the forearm: see dressDevil)
   }
   return out;
 }
@@ -789,12 +802,16 @@ export function guardArms(B) {
         if (ud && (d = intoEll(hg.matrixWorld, _gm2, hs, ud.crown.c, ud.crown.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
         if (ud?.cowl && (d = intoEll(B.chest.matrixWorld, _gm3, cs, ud.cowl.c, ud.cowl.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
       }
-      // the horns (thin toward the points, so they could slip between those spheres): the forearm and the hand as two
-      // capsules, against each stretch of each horn (its ridges and its flattening make it up to a quarter thicker)
+      // the horns (thin toward the points, so they could slip between those spheres): the arm as capsules, the sleeve
+      // round it (upper arm, forearm, the wide cuff) and then the bare wrist and the hand, against each stretch of each
+      // horn (its ridges and its flattening make it up to a quarter thicker)
       if (nh) {
-        const tip = _gv[10].copy(A.hand[A.hand.length - 1].p).applyMatrix4(A.hd.matrixWorld);
-        for (let sg = 0; sg < 2; sg++) {
-          const p0 = sg ? wr : el, p1 = sg ? tip : wr, ra = (sg ? A.rh : A.rf) * ws;
+        const tip = _gv[10].copy(A.hand[A.hand.length - 1].p).applyMatrix4(A.hd.matrixWorld), shp = _gv[13].setFromMatrixPosition(A.ua.matrixWorld);
+        const fdir = tmp.subVectors(wr, el), flen = fdir.length(), cl = Math.min(flen, A.cuff * ws); fdir.divideScalar(flen || 1);
+        const c1 = _gv[14].copy(el).addScaledVector(fdir, cl * 0.5), cf = _gv[15].copy(el).addScaledVector(fdir, cl);
+        for (let sg = 0; sg < 5; sg++) {
+          const p0 = sg === 0 ? shp : sg === 1 ? el : sg === 2 ? c1 : sg === 3 ? cf : wr, p1 = sg === 0 ? el : sg === 1 ? c1 : sg === 2 ? cf : sg === 3 ? wr : tip;
+          const ra = (sg === 4 ? A.rh : sg === 3 ? A.rf : A.sleeve[sg]) * ws;
           for (let h = 0; h + 1 < nh; h++) {
             const a = _gHorn[h], b = _gHorn[h + 1]; if (a.end) continue;
             const t = segSeg(p0, p1, a.p, b.p, _gv[11], _gv[12]), rr = lerp(a.r, b.r, t) * 1.25 + ra + 0.01 * ws, dd = _gv[11].distanceTo(_gv[12]);

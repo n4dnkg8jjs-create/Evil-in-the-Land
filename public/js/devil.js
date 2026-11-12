@@ -1847,7 +1847,10 @@ export class Cryptid extends Boss {
     if (B.hips.userData.rest) B.hips.position.copy(B.hips.userData.rest);
     this.mesh.updateMatrixWorld(true);
     plantRobe(B, this.mesh, 0.07);
-    if (sink > 0 && B.robe) B.robe.scale.y *= 1 - sink * 0.9;   // (the robe going down empty)
+    if (sink > 0 && B.robe) {   // (the robe going down empty: it crumples onto the ground, the hem where it was, rather than drawing up into the air)
+      const r = B.robe, sy0 = r.scale.y; r.scale.y *= 1 - sink * 0.9;
+      r.position.add(this._v.set(0, -(sy0 - r.scale.y) * r.userData.L, 0).applyQuaternion(r.quaternion));
+    }
     guardArms(B);   // whatever the pose, the forearms and hands never pass into the robe, the hood or the horns
     // what a blade can find (reeling, the head is thrown aside and lower)
     this.headSphere.r = (st === 'stagger' ? 0.3 : 0.17) * DS; this.headSphere.mul = st === 'stagger' ? 2.0 : 1.7;

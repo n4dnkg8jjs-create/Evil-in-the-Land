@@ -119,9 +119,8 @@ float headH(vec2 p, out vec2 cid, out float rim, out float kind) {
   if (!jaw) {
     vec2 so = vec2((a - uEye.z) / 0.19, (z - uEye.w) / 0.34);
     float sd = dot(so, so);
-    if (sd < 1.0) {   // the supraocular: one great plate over each eye, its edge ragged
-      kind = 2.0; cid = vec2(0.0, 80.0); rim = sm(0.0, 0.25, 1.0 - sd);
-      return (0.75 + 0.25 * (1.0 - sd) + 0.05 * sn2(vec2(a, z) * 30.0)) * (0.35 + 0.65 * rim);
+    if (sd < 1.0) {   // over each eye the supraoculars: a few great plates, rough-edged
+      kind = 2.0; return scl(vec2(a / 0.17, -z / 0.2), 0.08, cid, rim) * (0.9 + 0.1 * sn2(vec2(a, z) * 30.0));
     }
     if (z > 2.12) {   // the snout: larger plates, the internasals and the rostral
       kind = 3.0; return scl(vec2(a / 0.15, -z / 0.15), 0.0, cid, rim);
@@ -179,31 +178,24 @@ float flt = scar * 0.85 + lod;
 vec3 sN = normalize(vec3(-grad * amp * (1.0 - clamp(flt, 0.0, 1.0)) + vec2(sn2(sp * 3.1) - 0.5, sn2(sp * 3.1 + 7.0) - 0.5) * 0.12 * scar, 1.0));
 vec3 scol = mix(pc, pf, 0.6 + 0.4 * lod);
 float rimC = kind == 1.0 ? 0.7 + 0.3 * rim : rim;
-scol *= mix((0.45 + 0.55 * rimC) * (0.93 + 0.14 * sh1(cid * 1.37)) * (0.82 + 0.26 * h0), 1.0, lod);
+vec2 cidw = cid;
+#ifndef SERP_HEAD
+cidw.x = mod(cid.x, COLS);   // (the same scale either side of the seam)
+#endif
+scol *= mix((0.45 + 0.55 * rimC) * (0.93 + 0.14 * sh1(cidw * 1.37)) * (0.82 + 0.26 * h0), 1.0, lod);
 scol = mix(scol, vec3(0.2, 0.19, 0.175) * (0.7 + 0.5 * sn2(sp * 1.9)), scar);
 diffuseColor.rgb *= scol;
 float sRough = mix(mix(0.82, 0.36, rim), 0.55, lod);
 sRough = mix(sRough, 0.42, kind > 0.5 ? 0.5 : 0.0);
 sRough = mix(sRough, 0.8, scar);
 float sGlow = mix(pow(1.0 - rim, 2.0), 0.12, lod) * (1.0 - scar);
-#ifdef DBG
-#if DBG == 1
-diffuseColor.rgb = pc * 3.0;
-#elif DBG == 2
-diffuseColor.rgb = vec3(scar);
-#elif DBG == 4
-diffuseColor.rgb = vec3(rim);
-#elif DBG == 5
-diffuseColor.rgb = vec3(fract(sp * 0.1), 0.0);
-#endif
-#endif
 `;
 
 const _dummyN = (() => { const t = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1); t.needsUpdate = true; return t; })();
 // head: the head's own variant (its UVs are a chart of the head, not of the body). eye: [a, z, a, z] of the eye and of its brow plate
 export function serpentSkin(head = false, eye = [0.4, 1.4, 0.7, 1.4], side = head ? THREE.DoubleSide : THREE.FrontSide, shareEye = null) {
   const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 0, normalMap: _dummyN, normalScale: new THREE.Vector2(1, 1), clearcoat: 0.22, clearcoatRoughness: 0.38, emissive: 0xff3a10, emissiveIntensity: 0, side });
-  m.defines = head ? { SERP_HEAD: '' } : {}; if (globalThis.__serpDbg) m.defines.DBG = globalThis.__serpDbg;
+  m.defines = head ? { SERP_HEAD: '' } : {};
   const uEye = shareEye || { value: new THREE.Vector4(...eye) };
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uEye = uEye;
@@ -384,21 +376,21 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
     return [...p, ...flesh(k, 0.42 * smooth(clamp((0.9 - ac) / 0.3, 0, 1)) * (1 - 0.6 * gauss(c, 0, 0.12)))];
   }, true);
   jaw.add(new THREE.Mesh(H(floor), mouth));
-  // the glottis: a short tube standing on the sheath, open at its front in a dark slit
+  // the glottis: the windpipe's mouth, a short tube rising out of the floor over the tongue's sheath, open at its end
   {
-    const L0 = 0.56, L1 = 0.8, y0 = floorY(L0), y1 = floorY(L1);
-    const g = new THREE.LatheGeometry(Array.from({ length: 9 }, (_, i) => { const t = i / 8; return new THREE.Vector2(0.001 + 0.095 * Math.sin(Math.PI * Math.min(1, t * 1.15)) ** 0.6, t); }), 12);
-    g.rotateX(Math.PI / 2); g.scale(1, 0.7, jzOf(L1) - jzOf(L0)); g.translate(0, 0, jzOf(L0));
-    const P = g.attributes.position; for (let i = 0; i < P.count; i++) { const z = P.getZ(i), Lj = (z - JZ0) / (JZ1 - JZ0); P.setY(i, P.getY(i) * (P.getY(i) > 0 ? 1 : 0.2) + lerp(y0, y1, clamp((Lj - L0) / (L1 - L0), 0, 1)) + 0.012); }
-    g.computeVertexNormals(); paint(g, (x, y, z) => { const slit = Math.abs(x) < 0.02 && z > jzOf(L1) - 0.2 && y > lerp(y0, y1, 1) + 0.03; return slit ? [0.01, 0.005, 0.006] : flesh(0.8); });
-    jaw.add(new THREE.Mesh(H(strip(g)), mouth));
+    const g0 = [0, floorY(0.56) - 0.03, jzOf(0.56)], g1 = [0, floorY(0.67) + 0.045, jzOf(0.67)], g2 = [0, floorY(0.78) + 0.085, jzOf(0.78)];
+    const gt = taper([g0, g1, g2], 0.085, 0.06, 12, 1, 1); paint(gt, (x, y, z) => flesh(0.78 + 0.12 * Math.sin(z * 40)));
+    const dir = new THREE.Vector3(0, g2[1] - g1[1], g2[2] - g1[2]).normalize(), cap = new THREE.CircleGeometry(0.056, 14);
+    cap.scale(1, 0.4, 1); cap.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)); cap.translate(g2[0], g2[1] - 0.004, g2[2] - 0.004); paint(cap, () => [0.004, 0.002, 0.003]);
+    const ring = new THREE.TorusGeometry(0.056, 0.012, 6, 14); ring.scale(1, 0.62, 1); ring.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)); ring.translate(g2[0], g2[1], g2[2]); paint(ring, () => flesh(0.7));
+    jaw.add(new THREE.Mesh(H(mergeGeometries([strip(gt), strip(cap), strip(ring)])), mouth));
   }
   // ---- teeth. A viper's maxilla carries only the fang; the small hooked teeth are on the palatine and pterygoid bones
   // (two rows along the palate) and on the lower jaw
   const tooth = (len, r) => taper([[0, 0, 0], [0, -len * 0.55, 0.02 * len], [0, -len * 0.9, -0.22 * len], [0, -len, -0.38 * len]], r, r * 0.06, 6, 1.1);
   const tg = [];
   for (const sx of [-1, 1]) for (let i = 0; i < 9; i++) {
-    const L = 0.3 + i * 0.05, f = sx > 0 ? 0.5 - 0.5 * Math.acos(0.45) / Math.PI * 0 - 0.36 : 0.86, p = palatePt(L, sx > 0 ? 0.35 : 0.65);
+    const L = 0.3 + i * 0.05, p = palatePt(L, sx > 0 ? 0.35 : 0.65);
     tg.push(place(tooth(0.1 + 0.03 * Math.sin(i), 0.022), [p[0], p[1] + 0.012, p[2]], [0.15, 0, 0]));
   }
   upper.add(new THREE.Mesh(H(mergeGeometries(tg)), bone));
@@ -422,6 +414,7 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
     // the sheath: a fold of the flesh of the palate over the fang's root
     const sg = new THREE.SphereGeometry(1, 14, 10); paint(sg, (x, y, z) => flesh(0.55 + 0.3 * y, 0.3));
     const sh = new THREE.Mesh(strip(sg), mouth); sh.position.set(p[0] - HINGE[0], p[1] - 0.03 - HINGE[1], p[2] - 0.2 - HINGE[2]); sh.scale.set(0.1, 0.08, 0.34); upper.add(sh); parts[sx > 0 ? 'sheathL' : 'sheathR'] = sh;
+    sh.userData.z = sh.position.z; (parts.sheaths || (parts.sheaths = [])).push(sh);
   }
   // ---- eyes, deep under the brow
   const et = eyeTex(), em = new THREE.MeshPhysicalMaterial({ map: et, roughness: 0.12, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.03, emissiveMap: et, emissive: 0xffffff, emissiveIntensity: 0.05 });
@@ -486,14 +479,13 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   const tpath = (() => {
     const pts = [];
     for (let Lj = 0.16; Lj < 0.86; Lj += 0.04) pts.push(new THREE.Vector3(0, floorY(Lj) - (Lj < 0.84 ? 0.06 : 0), jzOf(Lj)));   // under the floor, in the sheath
-    const open = pts.length; pts.push(new THREE.Vector3(0, floorY(0.9) + 0.01, jzOf(0.9)));
-    const zl = jzOf(0.995), yl = (jlip(0.995) + serpentLip(LuOf(zl))) / 2 + 0.01;
-    pts.push(new THREE.Vector3(0, yl - 0.01, zl - 0.12), new THREE.Vector3(0, yl, zl + 0.1));
+    const zl = jzOf(0.995), yl = (jlip(0.995) + serpentLip(LuOf(zl))) / 2 + 0.01, open = pts.length;
+    pts.push(new THREE.Vector3(0, floorY(0.88) + 0.01, jzOf(0.88)), new THREE.Vector3(0, lerp(floorY(0.93), yl, 0.55), jzOf(0.935)), new THREE.Vector3(0, yl, zl + 0.1));
     for (let k = 1; k <= 6; k++) pts.push(new THREE.Vector3(0, yl - 0.035 * k * k * 0.3, zl + 0.1 + k * 0.45));
     const cv = new THREE.CatmullRomCurve3(pts), len = cv.getLength(), sOpen = cv.getLengths(200)[0];
     // the arc length at the sheath's mouth and at the lips
     const ls = cv.getLengths(pts.length * 8), u = (i) => i / (pts.length - 1), at = (i) => ls[Math.round(u(i) * pts.length * 8)];
-    return { cv, len, sOpen: at(open), sLip: at(open + 2) };
+    return { cv, len, sOpen: at(open), sLip: at(open + 2) };   // (the sheath's mouth; the lips)
   })();
   const tCount = (TN + 1) * (TR + 1) + 2 * (TFN + 1) * (TFR + 1), tpos = new Float32Array(tCount * 3), tidx = [];
   const tube = (base, N, R) => { for (let i = 0; i < N; i++) for (let j = 0; j < R; j++) { const a = base + i * (R + 1) + j, b = a + 1, c = a + R + 1, d = c + 1; tidx.push(a, c, b, b, c, d); } };
@@ -547,7 +539,8 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
     // the skull lifts, the jaw swings down, and its hinge with it (the quadrate swings out), so the throat opens too
     const au = -0.4 * g, aj = 0.92 * g, jy = -0.34 * g, jz = -0.06 * g; upper.rotation.x = au; jaw.rotation.x = aj; jaw.position.set(HINGE[0], HINGE[1] + jy, HINGE[2] + jz); parts.au = au; parts.aj = aj;
     const rj = (v) => rot(v, aj, jy, jz);
-    const fang = lerp(1.38, -0.1, smooth(clamp(g * 1.6, 0, 1))); for (const f of parts.fangs) f.rotation.x = fang;
+    const eg = smooth(clamp(g * 1.6, 0, 1)), fang = lerp(1.38, -0.1, eg); for (const f of parts.fangs) f.rotation.x = fang;
+    for (const sh of parts.sheaths) { sh.scale.set(0.1 + 0.03 * eg, 0.08 + 0.03 * eg, lerp(0.34, 0.15, eg)); sh.position.z = sh.userData.z + 0.17 * eg; }   // drawn back, bunched round the root of the raised fang
     // the cheeks
     let o = 0;
     const pU = (L, sx, v) => { const p = skullPt(L, sx > 0 ? 0 : Math.PI); return rot(v.set(p[0], p[1], p[2]), au); };
