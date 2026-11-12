@@ -26,16 +26,19 @@ const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t 
 const NZ = makeNoise(4242);
 const WHITE = [1, 1, 1], EARTH = lin(0x2b241c), ID = new THREE.Matrix4();
 const _v = V(), _n = V(), _nm = new THREE.Matrix3();
+const TEAR_EAT = 0.012;    // how much further a tear has eaten in than the line the model draws for it (metres)
+const TEAR_REACH = 0.05;   // how far past its torn edge (in metres) cloth can still show: the edge's wander and the longest loose thread
 
 // ---------------------------------------------------------------- one mesh in the making
-// Positions, normals, colours, how much of it is bare metal, and (for cloth) a lining colour and the co-ordinates of
-// its panes and slashes; indexed.
+// Positions, normals, colours, how much of it is bare metal, and (for cloth) a lining colour, the co-ordinates of
+// its panes and slashes, and its tears (T: how far inside the cloth the point is, in metres, less two, negated; where it lies
+// across and along the cloth, in metres; which way the torn edge runs; 0 for anything that is not torn cloth); indexed.
 class Soup {
-  constructor(cap = 2048) { this.n = 0; this.ni = 0; this.cap = cap; this.icap = cap * 4; for (const k of 'PNCLQ') this[k] = new Float32Array(cap * 3); this.A = new Float32Array(cap); this.I = new Uint32Array(this.icap); this.low = []; }
+  constructor(cap = 2048) { this.n = 0; this.ni = 0; this.cap = cap; this.icap = cap * 4; for (const k of 'PNCLQ') this[k] = new Float32Array(cap * 3); this.A = new Float32Array(cap); this.T = new Float32Array(cap * 4); this.I = new Uint32Array(this.icap); this.low = []; }
   get nv() { return this.n; }
   get tris() { return this.ni / 3; }
   need(v, i) {
-    if (this.n + v > this.cap) { let c = this.cap; while (c < this.n + v) c *= 2; for (const k of 'PNCLQ') { const a = new Float32Array(c * 3); a.set(this[k].subarray(0, this.n * 3)); this[k] = a; } const a = new Float32Array(c); a.set(this.A.subarray(0, this.n)); this.A = a; this.cap = c; }
+    if (this.n + v > this.cap) { let c = this.cap; while (c < this.n + v) c *= 2; for (const k of 'PNCLQ') { const a = new Float32Array(c * 3); a.set(this[k].subarray(0, this.n * 3)); this[k] = a; } const a = new Float32Array(c); a.set(this.A.subarray(0, this.n)); this.A = a; const t = new Float32Array(c * 4); t.set(this.T.subarray(0, this.n * 4)); this.T = t; this.cap = c; }
     if (this.ni + i > this.icap) { let c = this.icap; while (c < this.ni + i) c *= 2; const a = new Uint32Array(c); a.set(this.I.subarray(0, this.ni)); this.I = a; this.icap = c; }
   }
   // a ready geometry, placed by m. tint: a colour to multiply its own by (or to give it), or fn(x, y, z, o) setting o.r/g/b/m
@@ -70,7 +73,7 @@ class Soup {
       const ax = ne[0] * nx + ne[3] * ny + ne[6] * nz, ay = ne[1] * nx + ne[4] * ny + ne[7] * nz, az = ne[2] * nx + ne[5] * ny + ne[8] * nz, l = 1 / (Math.hypot(ax, ay, az) || 1);
       N[q] = ax * l; N[q + 1] = ay * l; N[q + 2] = az * l;
     }
-    this.C.set(S.C.subarray(0, cnt * 3), base * 3); this.L.set(S.L.subarray(0, cnt * 3), base * 3); this.Q.set(S.Q.subarray(0, cnt * 3), base * 3); this.A.set(S.A.subarray(0, cnt), base);
+    this.C.set(S.C.subarray(0, cnt * 3), base * 3); this.L.set(S.L.subarray(0, cnt * 3), base * 3); this.Q.set(S.Q.subarray(0, cnt * 3), base * 3); this.A.set(S.A.subarray(0, cnt), base); this.T.set(S.T.subarray(0, cnt * 4), base * 4);
     const I = this.I; let k = this.ni;
     for (let j = 0; j < S.ni; j += 3) { I[k++] = base + S.I[j]; I[k++] = base + S.I[flip ? j + 2 : j + 1]; I[k++] = base + S.I[flip ? j + 1 : j + 2]; }
     this.n += cnt; this.ni = k;
@@ -85,23 +88,27 @@ class Soup {
   lowOf(name, i0) { let ly = 1e9, k = -1; for (let i = i0; i < this.n; i++) if (this.P[i * 3 + 1] < ly) { ly = this.P[i * 3 + 1]; k = i; } if (k >= 0) this.low.push({ name, x: this.P[k * 3], y: ly, z: this.P[k * 3 + 2] }); }
   // A sheet of nu x nv points. fn(u, v, o, i, j) sets o.x/y/z, o.r/g/b, and may set o.m (metal), o.skip (a hole: no
   // face touches it), o.down (lying on the ground: a face wholly on the ground is not made), o.lr/lg/lb + o.px/py
-  // (lining and pane co-ordinates). wrap joins the last column to the first. Normals are made to face out of a
-  // tube ('out') or upward ('up').
-  sheet(nu, nv, fn, { wrap = false, face = 'out', M = null, name = null, seam = false } = {}) {
+  // (lining and pane co-ordinates), o.tear (torn cloth: how far inside the cloth, in any units, < 0 in a hole; the
+  // tear itself is cut by the shader, finely, so the holes and the ragged edges are not the squares of this grid).
+  // wrap joins the last column to the first. Normals are made to face out of a tube ('out') or upward ('up').
+  sheet(nu, nv, fn, { wrap = false, face = 'out', M = null, name = null, seam = false, earth = false } = {}) {
     const o = {}, base = this.n, cnt = nu * nv, st = new Uint8Array(cnt); this.need(cnt, cnt * 6);
-    const P = this.P, N = this.N, C = this.C, L = this.L, Q = this.Q; let ly = 1e9, lx = 0, lz = 0;
+    const P = this.P, N = this.N, C = this.C, L = this.L, Q = this.Q; let ly = 1e9, lx = 0, lz = 0, raw = null;
     for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
-      o.skip = false; o.down = false; o.m = 0; o.lr = o.lg = o.lb = 0; o.px = o.py = 0; o.pane = 0;
+      o.skip = false; o.down = false; o.m = 0; o.lr = o.lg = o.lb = 0; o.px = o.py = 0; o.pane = 0; o.tear = undefined;
       fn(wrap ? i / nu : i / (nu - 1), nv > 1 ? j / (nv - 1) : 0, o, i, j);
       if (M) { _v.set(o.x, o.y, o.z).applyMatrix4(M); o.x = _v.x; o.y = _v.y; o.z = _v.z; }
       const k = j * nu + i, q = (base + k) * 3; st[k] = (o.skip ? 1 : 0) | (o.down ? 2 : 0);
+      if (o.tear !== undefined) { if (!raw) raw = new Float32Array(cnt).fill(1); raw[k] = o.tear; }
       if (!o.skip && o.y < ly) { ly = o.y; lx = o.x; lz = o.z; }
       P[q] = o.x; P[q + 1] = o.y; P[q + 2] = o.z; N[q] = N[q + 1] = N[q + 2] = 0; C[q] = o.r; C[q + 1] = o.g; C[q + 2] = o.b; this.A[base + k] = o.m; L[q] = o.lr; L[q + 1] = o.lg; L[q + 2] = o.lb; Q[q] = o.px; Q[q + 1] = o.py; Q[q + 2] = o.pane;
     }
+    const dt = raw ? this.tearField(base, nu, nv, raw, wrap, earth) : null;
     const I = this.I, I0 = this.ni, ni = wrap ? nu : nu - 1; let k = I0;
     for (let j = 0; j < nv - 1; j++) for (let i = 0; i < ni; i++) {
       const a = j * nu + i, b = j * nu + (i + 1) % nu, c = a + nu, d = b + nu;
       if ((st[a] | st[b] | st[c] | st[d]) & 1) continue; if (st[a] & st[b] & st[c] & st[d] & 2) continue;
+      if (dt && Math.max(dt[a], dt[b], dt[c], dt[d]) < -TEAR_REACH) continue;   // wholly inside a hole, past where any thread of it could reach
       I[k++] = base + a; I[k++] = base + c; I[k++] = base + b; I[k++] = base + b; I[k++] = base + c; I[k++] = base + d;
     }
     this.n += cnt; this.ni = k;
@@ -123,6 +130,23 @@ class Soup {
     if (name && ly < 1e8) this.low.push({ name, x: lx, y: ly, z: lz });
     return this;
   }
+  // A sheet's tear as a distance in metres (its value over how steeply it changes across the grid, so the shader's
+  // fraying is the same width on a narrow sleeve as on a broad flag), the sheet's own co-ordinates in metres (its
+  // threads), and which way the edge runs across them; into T. Not for a wrapped sheet (its co-ordinates would jump).
+  // earth: not cloth but the edge of a patch of earth (no threads, no rot: marked by a 2 for the edge's run).
+  tearField(base, nu, nv, raw, wrap, earth = false) {
+    const P = this.P, T = this.T, cnt = nu * nv, um = new Float32Array(cnt), vm = new Float32Array(cnt), d = new Float32Array(cnt);
+    const dist = (a, b) => { const p = (base + a) * 3, q = (base + b) * 3; return Math.hypot(P[p] - P[q], P[p + 1] - P[q + 1], P[p + 2] - P[q + 2]); };
+    for (let j = 0; j < nv; j++) for (let i = 1; i < nu; i++) { const k = j * nu + i; um[k] = um[k - 1] + dist(k, k - 1); }
+    for (let j = 1; j < nv; j++) for (let i = 0; i < nu; i++) { const k = j * nu + i; vm[k] = vm[k - nu] + dist(k, k - nu); }
+    for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+      const k = j * nu + i, il = i > 0 ? k - 1 : wrap ? k + nu - 1 : k, ir = i < nu - 1 ? k + 1 : wrap ? k - nu + 1 : k, jd = j > 0 ? k - nu : k, ju = j < nv - 1 ? k + nu : k;
+      const du = dist(il, ir), dv = dist(jd, ju), gu = du > 1e-5 ? (raw[ir] - raw[il]) / du : 0, gv = dv > 1e-5 ? (raw[ju] - raw[jd]) / dv : 0;
+      const dd = clamp(raw[k] / Math.max(Math.hypot(gu, gv), 2) - (earth ? 0 : TEAR_EAT), -0.2, 0.2), q = (base + k) * 4; d[k] = dd;
+      T[q] = -2 - dd; T[q + 1] = earth ? 0 : um[k]; T[q + 2] = earth ? 0 : vm[k]; T[q + 3] = earth ? 2 : Math.abs(gu) / (Math.abs(gu) + Math.abs(gv) + 1e-6);
+    }
+    return d;
+  }
   // the earth takes whatever lies on it: everything near the ground goes the colour of the ground
   stain(top = 0.07, k = 0.8) {
     const C = this.C, L = this.L, P = this.P;
@@ -142,7 +166,7 @@ class Soup {
   geometry(panes = true) {
     const g = new THREE.BufferGeometry(), n = this.n, att = (a, k) => new THREE.BufferAttribute(a.slice(0, n * k), k);
     g.setAttribute('position', att(this.P, 3)); g.setAttribute('normal', att(this.N, 3)); g.setAttribute('color', att(this.C, 3)); g.setAttribute('aMetal', att(this.A, 1));
-    if (panes) { g.setAttribute('aLin', att(this.L, 3)); g.setAttribute('aPane', att(this.Q, 3)); }
+    if (panes) { g.setAttribute('aLin', att(this.L, 3)); g.setAttribute('aPane', att(this.Q, 3)); g.setAttribute('aTear', att(this.T, 4)); }
     g.setIndex(new THREE.BufferAttribute(n > 65535 ? this.I.slice(0, this.ni) : Uint16Array.from(this.I.subarray(0, this.ni)), 1)); g.computeBoundingSphere(); g.computeBoundingBox(); return g;
   }
 }
@@ -170,39 +194,83 @@ ${normals ? 'vNormal = normalize(vNormal + mat3(viewMatrix) * vec3(-gsl.x, 0.0, 
 vec4 mvPosition = viewMatrix * gwp; gl_Position = projectionMatrix * mvPosition;`)
     .replace('#include <worldpos_vertex>', 'vec4 worldPosition = gwp;');
 }
+// Torn cloth, cut in the shader. The model gives each point of a garment how far inside the cloth it lies (a distance
+// in metres, negative in a hole) and where it lies on the weave; here the edge of every tear wanders in bays and
+// tongues and is bitten small, at a finer grain than any mesh, and past it the threads of the weave that run across
+// the edge hang on, each its own length (a fuzz of the same reach where they are too fine to draw). Inside the cloth
+// the last few centimetres before a tear are rotted thin and dark. (The tear is stored negated, as -2 - d, so that a
+// vertex with no tear data at all, read as 0 or 1, is never taken for cloth.)
+const RAG_GLSL = `varying vec4 vTear;
+float fh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }
+float fvn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(fh(i), fh(i + vec3(1,0,0)), f.x), mix(fh(i + vec3(0,1,0)), fh(i + vec3(1,1,0)), f.x), f.y), mix(mix(fh(i + vec3(0,0,1)), fh(i + vec3(1,0,1)), f.x), mix(fh(i + vec3(0,1,1)), fh(i + vec3(1,1,1)), f.x), f.y), f.z); }
+float rh1(float n){ return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
+float ragIn(vec4 tr, vec3 op){ return -2.0 - tr.x + (fvn(op * 34.0) - 0.5) * 0.04 + (fvn(op * 97.0 + 5.3) - 0.5) * 0.018 + (fvn(op * 290.0 + 1.7) - 0.5) * 0.007; }
+float ragThreads(vec4 tr, float f, float px){
+  const float pitch = 0.0034; vec2 c = tr.yz / pitch;
+  float wa = c.x + 0.3 * sin(c.y * 0.37 + rh1(floor(c.x)) * 6.0), ia = floor(wa);
+  float la = 0.002 + 0.014 * pow(rh1(ia + floor(c.y / 29.0) * 57.0), 2.2);
+  float wb = c.y + 0.3 * sin(c.x * 0.37 + rh1(floor(c.y) + 9.0) * 6.0), ib = floor(wb);
+  float lb = 0.002 + 0.014 * pow(rh1(ib * 1.37 + floor(c.x / 29.0) * 57.0 + 3.0), 2.2);
+  float t = mix(step(abs(fract(wa) - 0.5), 0.17) * step(-la, f), step(abs(fract(wb) - 0.5), 0.17) * step(-lb, f), clamp(tr.w, 0.0, 1.0));
+  float fuzz = step(fh(vec3(floor(gl_FragCoord.xy), 3.0)), 0.42 * (1.0 + f / 0.007));
+  return mix(fuzz, t, clamp(pitch / px - 1.6, 0.0, 1.0));
+}`;
 // One material for all of it: the colour is in the vertices; iron is marked as metal; slashed cloth shows its
-// lining between the panes; a fine grain all over; the inside of a sleeve or a helmet is dark.
+// lining between the panes; torn cloth is torn (above); a fine grain all over; the inside of a sleeve or a helmet is dark.
 let MAT = null, DEPTH = null;
 export function fallenMaterial() {
   if (MAT) return MAT;
   const m = MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
     conform(sh, true);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aMetal; attribute vec3 aLin; attribute vec3 aPane; varying float vMetal; varying vec3 vLin; varying vec3 vPane; varying vec3 vOP;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMetal = aMetal; vLin = aLin; vPane = aPane; vOP = position;');
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aMetal; attribute vec3 aLin; attribute vec3 aPane; attribute vec4 aTear; varying float vMetal; varying vec3 vLin; varying vec3 vPane; varying vec3 vOP; varying vec4 vTear;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMetal = aMetal; vLin = aLin; vPane = aPane; vOP = position; vTear = aTear;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
 varying float vMetal; varying vec3 vLin; varying vec3 vPane; varying vec3 vOP;
-float fh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }
-float fvn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(mix(fh(i), fh(i + vec3(1,0,0)), f.x), mix(fh(i + vec3(0,1,0)), fh(i + vec3(1,1,0)), f.x), f.y), mix(mix(fh(i + vec3(0,0,1)), fh(i + vec3(1,0,1)), f.x), mix(fh(i + vec3(0,1,1)), fh(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+${RAG_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-float fg1 = fvn(vOP * 70.0), fg2 = fvn(vOP * 330.0);
-if (vPane.z > 0.5) {   // slashed cloth: panes with the lining pulled through the cuts between them, tied at intervals
-  float pf = fract(vPane.x), py = fract(vPane.y), open = smoothstep(0.0, 0.14, py) * (1.0 - smoothstep(0.66, 0.8, py));
-  float slit = smoothstep(0.64, 0.7, pf) * (1.0 - smoothstep(0.9, 0.96, pf)) * open;
-  float edge = (smoothstep(0.54, 0.66, pf) * (1.0 - smoothstep(0.66, 0.74, pf)) + smoothstep(0.86, 0.96, pf)) * open;
-  diffuseColor.rgb = mix(diffuseColor.rgb * (1.0 - 0.45 * edge), vLin * (0.75 + 0.25 * sin(pf * 9.0)), slit);
+float fg1 = fvn(vOP * 70.0), fg2 = fvn(vOP * 330.0), ragPx = max(fwidth(vTear.y) + fwidth(vTear.z), 1e-5) * 0.7, rot = 0.0;
+if (vTear.x < -1.0) {
+  float f = ragIn(vTear, vOP);
+  if (vTear.w > 1.5) { if (f < 0.0) discard; }   // the edge of the earth risen round him
+  else {
+    if (f < 0.0 && ragThreads(vTear, f, ragPx) < 0.5) discard;
+    rot = 1.0 - smoothstep(0.0, 0.022, f);
+  }
+  if (vMetal > 0.3) {   // mail: rows of rings, each row set half a ring over; a dull grey where they are too small to see
+    vec2 mc = vTear.yz / 0.0075; mc.x += 0.5 * floor(mc.y); float rr = length(fract(mc) - 0.5);
+    float ring = smoothstep(0.2, 0.27, rr) * (1.0 - smoothstep(0.4, 0.5, rr)), see = clamp(0.0075 / ragPx - 2.0, 0.0, 1.0);
+    diffuseColor.rgb *= mix(0.75, 0.35 + 0.9 * ring, see);
+  }
+}
+if (vPane.z > 0.5) {   // slashed cloth: panes with the lining puffed through the cuts between them, tied at intervals
+  float wob = (fvn(vOP * 60.0) - 0.5) * 0.1 + (fvn(vOP * 210.0) - 0.5) * 0.04;
+  float pf = fract(vPane.x + wob), py = fract(vPane.y + wob * 0.5), open = sin(clamp((py - 0.06) / 0.68, 0.0, 1.0) * 3.14159);
+  float hw = 0.13 * pow(open, 0.6), dc = abs(pf - 0.78);
+  float slit = 1.0 - smoothstep(hw - 0.03, hw + 0.01, dc), edge = (1.0 - smoothstep(0.0, 0.07, abs(dc - hw))) * step(0.01, open);
+  float puff = sqrt(max(0.0, 1.0 - dc * dc / max(hw * hw, 1e-4)));
+  diffuseColor.rgb = mix(diffuseColor.rgb * (1.0 - 0.5 * edge), vLin * (0.45 + 0.55 * puff), slit);
 }
 diffuseColor.rgb *= (0.8 + 0.3 * fg1 + 0.16 * (fg2 - 0.5)) * (0.78 + 0.4 * fvn(vOP * 11.0));
+diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.56, 0.5, 0.44), rot * 0.7);   // rotted thin and dirty toward a tear
 if (!gl_FrontFacing) diffuseColor.rgb *= 0.3;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.5 + 0.35 * fg1, smoothstep(0.02, 0.4, vMetal));')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vMetal * (0.75 + 0.25 * fg1);');
   };
-  m.customProgramCacheKey = () => 'fallen4';
+  m.customProgramCacheKey = () => 'fallen5';
   DEPTH = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
-  DEPTH.onBeforeCompile = (sh) => conform(sh, false); DEPTH.customProgramCacheKey = () => 'fallenDepth1';
+  DEPTH.onBeforeCompile = (sh) => {   // its shadow torn as it is
+    conform(sh, false);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aTear; varying vec4 vTear; varying vec3 vOP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvTear = aTear; vOP = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vOP;
+${RAG_GLSL}`).replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (vTear.x < -1.0 && ragIn(vTear, vOP) < -0.004) discard;');
+  };
+  DEPTH.customProgramCacheKey = () => 'fallenDepth2';
   return m;
 }
+export function fallenDepthMaterial() { fallenMaterial(); return DEPTH; }
 // The height field for the shader, and the same reading of it here (for the checks). The world's own grid is used
 // when it is the grid expected (257 samples a side over 300 m); it is read back against World.heightAt either way.
 function groundFor(world) {
@@ -237,7 +305,9 @@ const LINEN = fade(0xaaa08a, 0.1);
 // A garment lying over a limb or the trunk: rings round a path, each an ellipse (rw across; rf toward 'up', rb
 // away from it), wrinkled, and pressed flat where it meets the ground. o.axes(t) gives the trunk's own left and
 // front for a body that lies turned; otherwise 'up' is up. o.color(t, a, c) fills c with the cloth's colour and may
-// set c.lin (a lining colour) and c.panes (how many slashed panes go round).
+// set c.lin (a lining colour) and c.panes (how many slashed panes go round). o.hole(t, a, n1, n2): how far inside the
+// cloth (< 0 in a hole); with o.px the shader cuts the tears (close by), else whole faces are left out (far off).
+// Toward a tear the cloth has lost what held it out, and sinks in on the bones and down toward the ground (o.sag).
 function drape(S, pts, o) {
   const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), ns = o.ns, ring = o.ring + 1, seed = o.seed || 0, wr = o.wr ?? 0.006, floor = o.floor ?? 0;
   const C = [], T = []; for (let j = 0; j < ns; j++) { const t = j / (ns - 1); C.push(curve.getPointAt(t)); T.push(curve.getTangentAt(t)); }
@@ -249,18 +319,21 @@ function drape(S, pts, o) {
     let w = n1 * 0.7 + (1 - 2.2 * Math.abs(n2)) * 0.75;   // soft swells, and sharp creases between them
     if (o.rings) w += 0.9 * Math.sin(t * o.rings * PI + n1 * 2.5);
     if (o.folds) w += 0.8 * Math.sin(a * o.folds + n1 * 3 + t * 3);
-    const rw = o.rw(t, a), rv = sa > 0 ? o.rf(t, a) : (o.rb ? o.rb(t, a) : o.rf(t, a)), k = 1 + (w * wr) / Math.max(0.025, Math.min(rw, rv));
-    q.x = c.x + (lat.x * ca * rw + up.x * sa * rv) * k; q.y = c.y + (lat.y * ca * rw + up.y * sa * rv) * k; q.z = c.z + (lat.z * ca * rw + up.z * sa * rv) * k;
-    if (q.y < floor + 0.004) { q.y = floor - 0.008; q.down = true; }
-    q.skip = o.hole ? o.hole(t, a, n1, n2) : false;
+    const hv = o.hole ? o.hole(t, a, n1, n2) : 1, sag = (o.sag || 0) * (1 - sstep(0, 0.32, hv));
+    const rw = o.rw(t, a), rv = sa > 0 ? o.rf(t, a) : (o.rb ? o.rb(t, a) : o.rf(t, a)), k = (1 + (w * wr) / Math.max(0.025, Math.hypot(ca * rw, sa * rv))) * (1 - 0.3 * sag);   // (a wrinkle stands as far out from a flat side as from a round one)
+    q.x = c.x + (lat.x * ca * rw + up.x * sa * rv) * k; q.y = c.y + (lat.y * ca * rw + up.y * sa * rv) * k - 0.014 * sag; q.z = c.z + (lat.z * ca * rw + up.z * sa * rv) * k;
+    const above = q.y - floor; if (q.y < floor + 0.004) { q.y = floor - 0.008; q.down = true; }
+    if (o.px) q.tear = Math.min(hv, (above - 0.005) * 22); else q.skip = hv < 0;   // (close by, what lay on the wet earth has rotted off it: the edge there is a torn one, not where the cloth meets the ground)
     col.lin = null; col.panes = 0; o.color(t, a, col, n1, n2);
     const big = NZ.n2(seed * 0.3 + q.x * 2.2, q.z * 2.2), d = (0.74 + 0.2 * n2 + 0.16 * big) * (1 + clamp(w * 0.55, -1, 1) * 0.3);
     q.r = col[0] * d; q.g = col[1] * d; q.b = col[2] * d; q.m = col.m || 0; col.m = 0;
     if (col.lin && col.panes) { q.lr = col.lin[0] * d * 0.8; q.lg = col.lin[1] * d * 0.8; q.lb = col.lin[2] * d * 0.8; q.px = u * col.panes; q.py = t * (col.ties || 3); q.pane = 1; }
   }, { wrap: false, seam: true, face: 'out', name: o.name });
 }
-// the earth risen round what lies on it, and dark under it. segs: [a, b, radius] of whatever lies there
-function mound(S, segs, cell, grow = 1) {
+// the earth risen round what lies on it, and dark under it. segs: [a, b, radius] of whatever lies there. Close by
+// (px) it is a low dark rise lying just on the ground, its edge cut finely by the shader, ragged like trodden earth;
+// far off a coarser one going down under the ground at its edge.
+function mound(S, segs, cell, grow = 1, px = false) {
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (const [a, b, r] of segs) for (const p of [a, b]) { x0 = Math.min(x0, p.x - r - 0.3); x1 = Math.max(x1, p.x + r + 0.3); z0 = Math.min(z0, p.z - r - 0.3); z1 = Math.max(z1, p.z + r + 0.3); }
   const nu = Math.max(3, Math.ceil((x1 - x0) / cell) + 1), nv = Math.max(3, Math.ceil((z1 - z0) / cell) + 1);
@@ -268,10 +341,12 @@ function mound(S, segs, cell, grow = 1) {
   S.sheet(nu, nv, (u, v, q) => {
     const x = lerp(x0, x1, u), z = lerp(z0, z1, v), n = NZ.n2(x * 3.1 + 7, z * 3.1), n2 = NZ.n2(x * 11, z * 11 + 3), d = dist(x, z) + n * 0.05;
     const k = 1 - sstep(-0.02, 0.2 * grow, d);
-    q.x = x; q.z = z; q.y = -0.04 + (0.048 + 0.014 * n2) * k; q.skip = k < 0.2;   // it goes under the ground at its edge, and no further
+    q.x = x; q.z = z;
+    if (px) { q.y = 0.004 + (0.011 + 0.006 * n2) * sstep(0.05, -0.06, d); q.tear = 0.035 - d; }
+    else { q.y = -0.04 + (0.048 + 0.014 * n2) * k; q.skip = k < 0.2; }   // it goes under the ground at its edge, and no further
     const g = (0.78 + 0.3 * n2) * (1 - 0.3 * sstep(0.12, -0.05, d));   // darker close under him, where it stays damp
     q.r = EARTH[0] * g; q.g = EARTH[1] * g; q.b = EARTH[2] * g;
-  }, { face: 'up' });
+  }, { face: 'up', earth: px });
 }
 // drop a thing placed by m until its lowest point is `sink` into the ground
 function rest(thing, m, sink = 0.006) {
@@ -405,7 +480,10 @@ function flag(S, M, lo) {
     o.y = 0.001 + 0.085 * Math.max(0, cr + 0.25) * sstep(0, 0.2, u) + 0.024 * Math.abs(n2);
     const d1 = Math.abs(u - v), d2 = Math.abs(u + v - 1), knot = Math.max(0, Math.sin((u + v) * 26)) * 0.03 + Math.max(0, Math.sin((u - v) * 26)) * 0.03;
     const c = Math.min(d1, d2) < 0.07 + knot ? red : yel, g = (0.6 + 0.3 * n2) * (0.85 + 0.3 * cr);
-    o.r = c[0] * g; o.g = c[1] * g; o.b = c[2] * g; o.skip = n + n2 * 0.5 > 0.95 || (u > 0.84 && n2 > 0.15 - (u - 0.84) * 2);
+    o.r = c[0] * g; o.g = c[1] * g; o.b = c[2] * g;
+    // rotted through in places, the fly end torn to tatters, every edge but the one on the staff frayed
+    const s = Math.min(0.95 - n - n2 * 0.5, Math.max(0.84 - u, 0.15 - (u - 0.84) * 2 - n2) * 0.6, (Math.min(1 - u, v, 1 - v) - 0.025 + 0.02 * n2) * 3);
+    if (lo) o.skip = s < 0; else o.tear = s;
   }, { face: 'up', M, name: 'flag' });
 }
 
@@ -505,13 +583,13 @@ function buildMan(spec, lod) {
     S.add(hgeo, hm, mummy ? [0.45, 0.36, 0.28] : bt);
     if (sl !== 'none') {
       const full = sl === 'full', c = O.body[i], pts = full ? [sh.clone().lerp(cc, 0.25), sh, E, W.clone().lerp(E, 0.08)] : [sh.clone().lerp(cc, 0.25), sh, E.clone().lerp(sh, 0.1)], tE = full ? 0.6 : 2;
-      drape(S, pts, { ns: N(full ? 17 : 10, 5), ring: N(12, 6), seed: sd + i * 9, wr: 0.011, rings: full ? 7 : 4,
+      drape(S, pts, { ns: N(full ? 17 : 10, 5), ring: N(12, 6), seed: sd + i * 9, wr: 0.011, rings: full ? 7 : 4, px: !lo, sag: 1,
         rw: (t) => (t < tE ? 0.07 - 0.012 * t : 0.048 - 0.012 * (t - tE)) * (1 + 0.14 * Math.sin(t * 9 + sd)), rf: (t) => (t < tE ? 0.036 : 0.027) * (1 + 0.2 * Math.sin(t * 11 + sd)),
-        hole: (t, a, n1, n2) => t > 0.93 + n2 * 0.1 || n1 + n2 * 0.25 > 1.1 - O.rot * 0.6,
+        hole: (t, a, n1, n2) => Math.min((0.92 + n2 * 0.06 - t) * 5, 1.1 - O.rot * 0.6 - n1 - n2 * 0.25),
         color: (t, a, col) => { col[0] = c[0]; col[1] = c[1]; col[2] = c[2]; if (O.kind === 'doublet' && t > 0.22 && t < tE) { col.lin = O.lining; col.panes = 9; col.ties = full ? 5 : 2.5; } } });
       segs.push([sh, E, 0.06]); if (full) segs.push([E, W, 0.04]);
     } else if (mummy) {
-      drape(S, [sh, E, W], { ns: N(9, 4), ring: N(8, 5), seed: sd + i, wr: 0.003, rw: () => 0.026, rf: () => 0.024, hole: (t, a, n1, n2) => n1 + n2 > 0.9, color: (t, a, col) => { col[0] = dry[0]; col[1] = dry[1]; col[2] = dry[2]; } });
+      drape(S, [sh, E, W], { ns: N(9, 4), ring: N(8, 5), seed: sd + i, wr: 0.003, rw: () => 0.026, rf: () => 0.024, px: !lo, hole: (t, a, n1, n2) => 0.9 - n1 - n2, color: (t, a, col) => { col[0] = dry[0]; col[1] = dry[1]; col[2] = dry[2]; } });
       segs.push([sh, E, 0.03], [E, W, 0.03]);
     } else segs.push([sh, E, 0.03], [E, W, 0.03]);
     S.settle(iArm); S.lowOf(k > 0 ? 'left arm' : 'right arm', iArm); const iLeg = S.n;
@@ -521,9 +599,9 @@ function buildMan(spec, lod) {
     if (bareS) S.add(BL.shin, boneM(A, K, 0, 0.352, Y, mir), bt);
     if (lg !== 'none') {
       const full = lg === 'full', h = O.hose[i], pts = full ? [hip.clone().lerp(pc, 0.3), hip, K, A.clone().lerp(K, 0.06)] : [hip.clone().lerp(pc, 0.3), hip, K.clone().lerp(hip, 0.04)], tK = full ? 0.58 : 2;
-      drape(S, pts, { ns: N(full ? 18 : 10, 5), ring: N(12, 6), seed: sd + 40 + i * 9, wr: 0.01, folds: 5,
+      drape(S, pts, { ns: N(full ? 18 : 10, 5), ring: N(12, 6), seed: sd + 40 + i * 9, wr: 0.01, folds: 5, px: !lo, sag: 1,
         rw: (t) => (t < tK ? 0.098 - 0.03 * t / Math.min(tK, 1) : 0.056 - 0.03 * (t - tK)) * (1 + 0.1 * Math.sin(t * 8 + sd)), rf: (t) => (t < tK ? 0.05 - 0.016 * t : 0.034),
-        hole: (t, a, n1, n2) => t > 0.94 + n2 * 0.08 || n1 + n2 * 0.25 > 1.12 - O.rot * 0.55,
+        hole: (t, a, n1, n2) => Math.min((0.93 + n2 * 0.05 - t) * 5, 1.12 - O.rot * 0.55 - n1 - n2 * 0.25),
         color: (t, a, col) => { col[0] = h.c[0]; col[1] = h.c[1]; col[2] = h.c[2]; if (h.panes && t > 0.2 && t < Math.min(tK, 0.9)) { col.lin = h.lin; col.panes = h.panes; col.ties = full ? 4 : 2; } } });
       segs.push([hip, K, 0.085]); if (full) segs.push([K, A, 0.05]);
     } else segs.push([hip, K, 0.035], [K, A, 0.03]);
@@ -549,19 +627,22 @@ function buildMan(spec, lod) {
     const prof = [[0, shirt ? 0.17 : 0.1, 0.04, 0.06], [0.16, 0.165, 0.076, 0.085], [0.36, 0.13, 0.012, 0.07], [0.52, 0.155, 0.08, 0.078], [0.7, 0.16, 0.1, 0.085], [0.88, 0.185, 0.06, 0.075], [1, 0.07, 0.045, 0.05]];
     const tab = (t, q) => { for (let i = 1; i < prof.length; i++) if (t <= prof[i][0]) { const a = prof[i - 1], b = prof[i], u = sstep(a[0], b[0], t); return lerp(a[q], b[q], u); } return prof[prof.length - 1][q]; };
     const shrink = mummy ? 0.86 : 1, tW = 0.34;
-    drape(S, pts, { ns: N(24, 8), ring: N(22, 8), seed: sd + 77, wr: mummy ? 0.003 : 0.012, fT: 5, folds: mummy ? 0 : 3, name: 'trunk', axes: (t) => blend(sstep(0.2, 0.62, t)),
+    drape(S, pts, { ns: lod ? N(24, 8) : 32, ring: lod ? N(22, 8) : 28, seed: sd + 77, wr: mummy ? 0.003 : 0.012, fT: 5, folds: mummy ? 0 : 3, name: 'trunk', axes: (t) => blend(sstep(0.2, 0.62, t)), px: !lo, sag: mummy ? 0.4 : 1,
       rw: (t) => tab(t, 1) * shrink, rf: (t, a) => tab(t, 2) * shrink * (mummy ? 1 + 0.05 * Math.sin(t * 62) * sstep(0.45, 0.55, t) * (1 - sstep(0.85, 0.9, t)) : 1) + (t > 0.08 && t < 0.26 ? 0.022 * Math.exp(-(((Math.abs(Math.cos(a)) - 0.72) / 0.16) ** 2)) : 0), rb: (t) => tab(t, 3) * shrink,
-      hole: (t, a, n1, n2) => {
-        if (t > 0.985 || (shirt ? false : t < 0.02)) return false;
-        if (mummy) return n1 * 0.8 + n2 * 0.6 > 0.62 || (t > 0.3 && t < 0.46 && Math.sin(a) > 0.2 && n1 > -0.3);
-        if (O.plate && t > 0.4) return n1 + n2 * 0.6 > 1.3;
-        const front = Math.sin(a) > 0.25 ? 1 : 0;
-        if (O.open && front && t > 0.3 && t < 0.86 && Math.abs(Math.cos(a)) < 0.62 + n1 * 0.25) return true;   // rotted open down the front
-        return n1 + n2 * 0.25 > 1.1 - O.rot * 0.6;
+      hole: (t, a, n1, n2) => {   // (smooth throughout: a step in it would be a straight edge across the cloth)
+        const sa = Math.sin(a), ca = Math.cos(a), hem = Math.max((t - 0.965) * 10, shirt ? -1 : (0.03 - t) * 10);   // the collar holds, and the waistband
+        let s;
+        if (mummy) s = Math.min(0.62 - n1 * 0.8 - n2 * 0.6, (((t - 0.38 - 0.03 * n2) / 0.1) ** 2 + (ca / (0.75 + 0.2 * n1)) ** 2 - 1 + 1.5 * Math.max(0, 0.2 - sa)) * 0.3);   // the belly fallen in
+        else {
+          s = 1.1 - O.rot * 0.6 - n1 - n2 * 0.25;
+          if (O.open) s = Math.min(s, ((((t - 0.58 - 0.02 * n2) / (0.29 + 0.03 * n1)) ** 4 + (ca / (0.62 + n1 * 0.25)) ** 2) - 1 + 2 * Math.max(0, 0.3 - sa)) * 0.35);   // rotted open down the front
+          if (O.plate) s = lerp(s, 1.3 - n1 - n2 * 0.6, sstep(0.36, 0.44, t));
+        }
+        return Math.max(s, hem);
       },
       color: (t, a, col, n1) => {
         if (mummy) { col[0] = dry[0] * (0.8 + 0.3 * n1); col[1] = dry[1] * (0.8 + 0.25 * n1); col[2] = dry[2] * (0.8 + 0.2 * n1); return; }
-        if (O.mail && t > 0.72) { const g = 0.75 + 0.5 * (((Math.floor(t * 90) + Math.floor(a * 14)) % 2)); col[0] = 0.075 * g; col[1] = 0.062 * g; col[2] = 0.05 * g; col.m = 0.55; return; }   // the bishop's mantle
+        if (O.mail && t > 0.72 + 0.025 * Math.sin(a * 3 + sd) + 0.02 * n1) { col[0] = 0.085; col[1] = 0.07; col[2] = 0.056; col.m = 0.55; return; }   // the bishop's mantle (its rings are the shader's)
         if (!shirt && Math.abs(t - tW) < 0.016) { col[0] = leatherC[0] * 0.8; col[1] = leatherC[1] * 0.8; col[2] = leatherC[2] * 0.8; return; }   // his belt
         if (!shirt && t < tW) { const h = O.hose[Math.cos(a) > 0 ? 0 : 1]; col[0] = h.c[0]; col[1] = h.c[1]; col[2] = h.c[2]; return; }
         const c = O.body[Math.cos(a) > 0 ? 0 : 1]; col[0] = c[0]; col[1] = c[1]; col[2] = c[2];
@@ -574,7 +655,7 @@ function buildMan(spec, lod) {
   // ---- what killed him, and what he held
   if (O.bolt && !lo) { const p = cc.clone().addScaledVector(FC.l, (r() - 0.5) * 0.14).addScaledVector(FC.s, (r() - 0.5) * 0.16), d = V((r() - 0.5) * 0.8, 1, (r() - 0.5) * 0.8).normalize(); rod(S, p.clone().addScaledVector(d, -0.03), p.clone().addScaledVector(d, 0.3), 0.006, 0.0055, ID, wood, 4); }
   if (O.sword) { const L = limbs[1], az = L.a2 + 0.5 + r() * 0.8, m = new THREE.Matrix4().makeRotationY(az).multiply(new THREE.Matrix4().makeRotationX(0.035)).setPosition(L.W.x + Math.sin(az) * 0.12, 0, L.W.z + Math.cos(az) * 0.12); const K = new Soup(); katzbalger(K, ID, lo); S.join(K, rest(K, m, 0.006), 'sword'); segs.push([L.W, L.W.clone().add(dirAz(az).multiplyScalar(0.7)), 0.03]); }
-  mound(S, segs, lo ? 0.2 : mid ? 0.13 : 0.075);
+  mound(S, segs, lo ? 0.2 : mid ? 0.13 : 0.075, 1, !lo);
   S.stain(0.075, 0.8);
   return S;
 }
