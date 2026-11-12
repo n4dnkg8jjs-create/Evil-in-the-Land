@@ -1088,29 +1088,42 @@ export class World {
       this.addCollider(a.x, a.z, 0.6);
       // the corruption: thorned black growths strangling the cross
       const corr = new THREE.Group();
-      const tubes = [];
+      const tubes = [], vines = [];
       for (let k = 0; k < 7; k++) {
         // they rise from the top of the plinth and wind round the shaft clear of its corners, and stop below the arms
         // of the cross (they used to start inside the plinth, scrape through the shaft's edges and pass through the arms)
         const pts = []; const a0 = r() * TAU, turns = r.range(0.8, 1.6), h = 1.35 + (r.range(2.2, 4.0) - 2.2) * 0.38;
         for (let s = 0; s <= 14; s++) { const t = s / 14; const ang = a0 + t * turns * TAU; const rr = 0.315 + (1 - t) * 0.05; pts.push(new THREE.Vector3(Math.cos(ang) * rr, 0.97 + t * h, Math.sin(ang) * rr)); }
-        const tr = 0.05 * r.range(0.7, 1.2); tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, tr, 5));
+        const tr = 0.05 * r.range(0.7, 1.2); vines.push({ a0, tr, p0: pts[0] }); tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, tr, 5));
         // thorns rooted in the vine, standing out from it
         for (let s = 0; s < 6; s++) { const p = pts[2 + s * 2]; const out = new THREE.Vector3(p.x, r.range(-0.3, 0.5), p.z).normalize(); const th = new THREE.ConeGeometry(0.025, 0.16, 4);
           th.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), out)); th.translate(p.x + out.x * (tr + 0.05), p.y + out.y * (tr + 0.05), p.z + out.z * (tr + 0.05)); tubes.push(th); }
       }
       for (let k = 0; k < 9; k++) { // roots crawling over the steps
-        // they lie on the steps and drape over each riser onto the next (they used to run straight down through them)
-        const ang = r() * TAU; const pts = [], RT = 0.07;
-        const stepTop = (x, z) => {   // the top of the octagonal steps at (x, z), or the ground beyond them
-          const d = Math.hypot(x, z), ph = Math.atan2(x, z), k = (((ph % (PI / 4)) + PI / 4) % (PI / 4)) - PI / 8, edge = Math.cos(PI / 8) / Math.cos(k);
+        // Each root is the foot of one of the vines on the cross: it leaves the vine where it meets the plinth, runs to
+        // the plinth's edge and down onto the steps, thickening as it goes, lies on each step and drapes over its edge
+        // onto the next, then onto the ground.
+        const V = vines[k % vines.length], ang = V.a0 + (r() - 0.5) * 0.9, pts = [], RT = 0.07;
+        const cy = Math.cos(yaw), sy = Math.sin(yaw);
+        const stepTop = (x, z) => {   // the top of the plinth, of the octagonal steps at (x, z), or the ground beyond them
+          const lx = x * cy - z * sy, lz = x * sy + z * cy; if (Math.abs(lx) < 0.3 && Math.abs(lz) < 0.3) return 0.95;
+          const d = Math.hypot(x, z), ph = Math.atan2(x, z), kk = (((ph % (PI / 4)) + PI / 4) % (PI / 4)) - PI / 8, edge = Math.cos(PI / 8) / Math.cos(kk);
           for (let s2 = 2; s2 >= 0; s2--) if (d < (3.2 - s2 * 0.6) * edge) return 0.26 + s2 * 0.26;
           return this.heightAt ? this.heightAt(a.x + x, a.z + z) - a.y : 0;
         };
-        const lie = (x, z) => { let m = stepTop(x, z); for (const rq of [RT, RT * 2.2]) for (let q = 0; q < 12; q++) { const qa = q * PI / 6; m = Math.max(m, stepTop(x + Math.cos(qa) * rq, z + Math.sin(qa) * rq)); } return m + RT * 0.9; };
-        for (let s = 0; s <= 160; s++) { const t = s / 160, rr = 0.42 + t * 4.4, x = Math.cos(ang + t * 0.6) * rr, z = Math.sin(ang + t * 0.6) * rr; pts.push(new THREE.Vector3(x, lie(x, z) + Math.max(0, Math.sin(t * 9)) * 0.03, z)); }
-        if (pts[0].y < 0.97) pts[0].y = 0.97;   // out from the foot of the cross, on the plinth
-        tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 110, RT, 5));
+        const lie = (x, z, rt) => { let m = stepTop(x, z); for (const rq of [rt, rt * 2.2]) for (let q = 0; q < 12; q++) { const qa = q * PI / 6; m = Math.max(m, stepTop(x + Math.cos(qa) * rq, z + Math.sin(qa) * rq)); } return m + rt * 0.9; };
+        const thick = (t) => V.tr + (RT - V.tr) * smooth(Math.min(1, t / 0.12));   // the vine's own thickness at its foot
+        const r0 = Math.hypot(V.p0.x, V.p0.z);
+        for (let s = 0; s <= 170; s++) {
+          const t = s / 170, rr = r0 + t * (4.85 - r0), aa = V.a0 + (ang - V.a0) * smooth(Math.min(1, t * 4)) + t * 0.6, x = Math.cos(aa) * rr, z = Math.sin(aa) * rr;
+          pts.push(new THREE.Vector3(x, lie(x, z, thick(t)) + Math.max(0, Math.sin(t * 9)) * 0.03 * Math.min(1, t * 5), z));
+        }
+        pts[0].set(V.p0.x, V.p0.y, V.p0.z);   // it is the vine's own foot
+        const curve = new THREE.CatmullRomCurve3(pts), SEG = 120, RS = 5, tg = new THREE.TubeGeometry(curve, SEG, RT, RS);
+        // taper the start down to the vine's thickness, so the two read as one growth
+        const P = tg.attributes.position, c = new THREE.Vector3(), v = new THREE.Vector3();
+        for (let i = 0; i <= SEG; i++) { const t = i / SEG, f = thick(t) / RT; curve.getPointAt(t, c); for (let j = 0; j <= RS; j++) { const q = i * (RS + 1) + j; v.fromBufferAttribute(P, q).sub(c).multiplyScalar(f).add(c); P.setXYZ(q, v.x, v.y, v.z); } }
+        tg.computeVertexNormals(); tubes.push(tg);
       }
       const cm = new THREE.Mesh(merge(tubes), blight); cm.castShadow = true; corr.add(cm);
       g.add(corr);
