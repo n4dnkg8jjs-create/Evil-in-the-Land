@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildTemplate, instantiate, limb, blob, cone, horn, place, lumpyG, demonMaterial } from './demons.js';
 import { scaleTextures, demonTextures } from './textures.js';
-import { buildHorror, buildHumanDevil, tickRobes, plantRobe, dissolvable } from './horror.js';
+import { buildHorror, buildHumanDevil, tickRobes, plantRobe, guardArms, dissolvable } from './horror.js';
 import { JI } from './rig.js';
 import { buildDragonModel, DragonFire, DRAGON_FINGERS } from './dragon_model.js';
 import { clamp, lerp, damp, dampAngle, angleDiff, smooth, TAU } from './util.js';
@@ -171,7 +171,7 @@ export class Watcher {
       const look = best ? angleDiff(this.yaw, Math.atan2(best.pos.x - this.pos.x, best.pos.z - this.pos.z)) : 0;
       this.headTarget = clamp(look, -1.8, 1.8);
       // now and then the head lolls over, far past where a neck should allow, and stays there
-      this.tilt = R() < 0.3 ? (R() < 0.5 ? -1 : 1) * (0.75 + R() * 0.35) : (R() - 0.5) * 0.35;
+      this.tilt = R() < 0.3 ? (R() < 0.5 ? -1 : 1) * (0.72 + R() * 0.22) : (R() - 0.5) * 0.35;   // (no further: past this a horn would come down into his shoulder)
       this.snap = R() < 0.5;   // half the moves a sudden snap; the rest a slow, deliberate creep
     }
     if (this.state === 'stare') { this.headTarget = 0; this.tilt = 0.12; this.snap = false; this.retarget = 1; }
@@ -209,6 +209,7 @@ export class Watcher {
     }
     // the robe hangs plumb from his shoulders, its hem down on the ground about his feet
     this.mesh.updateMatrixWorld(true); plantRobe(B, this.mesh, 0.04);
+    guardArms(B);   // and his hands kept out of his robe and hood
   }
   // Him on a ceiling, like a spider: his back to the rock and his face hanging down at you, his long arms and legs
   // bent back over him to grip the stone, elbows and knees jutting out. go: how fast he is moving (0 still, 1
@@ -241,10 +242,15 @@ export class Watcher {
       const st = Math.sin(ph + phase), lift = up(Math.cos(ph + phase)) * 0.22 * Math.min(1, go);
       const T = root.clone().addScaledVector(fwd, reachF + st * 0.32 * Math.min(1, go)).addScaledVector(side, sg * reachS); T.y = roofY - lift;
       const pole = side.clone().multiplyScalar(sg).addScaledVector(down, 0.9).addScaledVector(fwd, isArm ? -0.3 : 0.4);
-      ik2(u, l, end, T, pole);
+      ik2(u, l, end, T, pole); if (isArm) (this._cT ||= new Map()).set(u, T);
     };
     limb(B.uArmR, B.fArmR, B.handR, 0, 0, 0.45, 0.75, true); limb(B.uArmL, B.fArmL, B.handL, 0, Math.PI, 0.45, 0.75, true);
     limb(B.thighR, B.shinR, B.footR, 0, Math.PI, -0.3, 0.7, false); limb(B.thighL, B.shinL, B.footL, 0, 0, -0.3, 0.7, false);
+    // the arms go up past his head to the rock: where a forearm would pass through a horn or the hood, the elbow is
+    // swung clear (guardArms), and the hand put back on the rock with the elbow kept on that side
+    guardArms(B);
+    for (const [u, l, end] of [[B.uArmR, B.fArmR, B.handR], [B.uArmL, B.fArmL, B.handL]]) { const T = this._cT.get(u), a = u.getWorldPosition(new V3()); ik2(u, l, end, T, l.getWorldPosition(new V3()).sub(a)); }
+    guardArms(B);
     e(B.handR, 40, 0, 0); e(B.handL, 40, 0, 0); e(B.footR, -30, 0, 0); e(B.footL, -30, 0, 0);
     this.pos.copy(this.mesh.position);
   }
@@ -298,9 +304,14 @@ export class Crevices {
 // host adds them; they reach the other players in the boss's snapshot.
 const TELE_SHAPES = ['circle', 'line', 'cone', 'ring', 'pool'];
 const TELE_COLS = [[1.0, 0.2, 0.03], [0.32, 0.9, 0.1], [1.0, 0.5, 0.08]];
-const TELE_VS = 'attribute vec2 q; varying vec2 vQ; void main() { vQ = q; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
-const TELE_FS = `varying vec2 vQ; uniform vec3 uCol; uniform float uProg, uFade, uTime, uShape, uA, uB, uW;
+// (q: the point in the mark's own frame, in metres: along and across a lane; or from the centre, +y along the yaw. The
+// shape is cut out here, per pixel, because the mesh under it is a patch of the ground's own grid: see groundPatch.)
+const TELE_VS = 'attribute vec2 q; varying vec2 vL; void main() { vL = q; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+const TELE_FS = `varying vec2 vL; uniform vec3 uCol; uniform float uProg, uFade, uTime, uShape, uA, uB, uW;
 void main() {
+  vec2 vQ;
+  if (abs(uShape - 1.0) < 0.5) { vQ = vec2(vL.x / uA, vL.y / max(0.001, uB * 0.5)); if (vQ.x < 0.0 || vQ.x > 1.0 || abs(vQ.y) > 1.0) discard; }
+  else { float th = atan(vL.x, vL.y); vQ = vec2(length(vL) / uA, th / (abs(uShape - 2.0) < 0.5 ? max(0.001, uB) : 3.14159265)); if (vQ.x > 1.0 || abs(vQ.y) > 1.0) discard; }
   float a; float pulse = 0.72 + 0.28 * sin(uTime * 15.0); float done = step(0.985, uProg) * 0.55;
   if (uShape < 0.5 || abs(uShape - 2.0) < 0.5) {                 // a disc or a fan: it fills outward from the middle
     float r = vQ.x, edge = smoothstep(0.86, 1.0, r);
@@ -322,6 +333,20 @@ void main() {
   }
   gl_FragColor = vec4(uCol * a * uFade * 1.5, 1.0);
 }`;
+// A patch of the ground's own grid over a box: its corners are the very points the ground is drawn through, and each
+// square is cut along the same diagonal (world.js: 257 x 257 heights over 300 m, as heightAt reads them), so anything
+// drawn on it lies flat on the ground: on the rough summit a mark sampled on its own grid stood up to a metre off it.
+// attr(x, z) is called for each point, in order. Appends to pos and idx.
+const GROUND_HALF = 150;
+function groundPatch(world, x0, z0, x1, z1, lift, pos, idx, attr) {
+  const n = world?.H ? Math.round(Math.sqrt(world.H.length)) : 257, cell = GROUND_HALF * 2 / (n - 1), H = (x, z) => (world ? world.heightAt(x, z) : 0);
+  const i0 = clamp(Math.floor((x0 + GROUND_HALF) / cell), 0, n - 2), i1 = clamp(Math.ceil((x1 + GROUND_HALF) / cell), i0 + 1, n - 1);
+  const j0 = clamp(Math.floor((z0 + GROUND_HALF) / cell), 0, n - 2), j1 = clamp(Math.ceil((z1 + GROUND_HALF) / cell), j0 + 1, n - 1);
+  const base = pos.length / 3, ni = i1 - i0 + 1;
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const x = -GROUND_HALF + i * cell, z = -GROUND_HALF + j * cell; pos.push(x, H(x, z) + lift, z); attr(x, z); }
+  for (let j = 0; j < j1 - j0; j++) for (let i = 0; i < ni - 1; i++) { const a = base + j * ni + i, b = a + 1, c = a + ni, d = c + 1; idx.push(a, c, b, d, b, c); }
+  return (i1 - i0 + 1) * (j1 - j0 + 1);
+}
 class Telegraphs {
   constructor(scene, owner) { this.scene = scene; this.owner = owner; this.map = new Map(); this.gone = new Set(); this.seq = 1; this.time = 0; }
   // circle: a = radius · line: a = length, b = width, from (x, z) along yaw · cone: a = radius, b = half-angle ·
@@ -353,18 +378,18 @@ class Telegraphs {
       if (T.t > (pool ? T.dur : T.dur + 0.3)) this.kill(T);
     }
   }
-  // a mesh draped over the ground
+  // a mesh laid on the ground: a patch of the ground's own grid under the shape (so it lies exactly on what is drawn,
+  // never standing off it over a hollow nor sunk into a rise), the shape itself cut out of it in the shader
   build(T, world) {
-    const H = (x, z) => (world ? world.heightAt(x, z) : 0) + 0.1, pos = [], q = [], idx = [];
-    if (T.shape === 'line') {
-      const NL = Math.max(6, Math.ceil(T.a / 0.7)), NW = 4, fx = Math.sin(T.yaw), fz = Math.cos(T.yaw);
-      for (let i = 0; i <= NL; i++) for (let j = 0; j <= NW; j++) { const al = i / NL * T.a, ac = (j / NW * 2 - 1) * T.b / 2, x = T.x + fx * al + fz * ac, z = T.z + fz * al - fx * ac; pos.push(x, H(x, z), z); q.push(i / NL, j / NW * 2 - 1); }
-      for (let i = 0; i < NL; i++) for (let j = 0; j < NW; j++) { const a = i * (NW + 1) + j; idx.push(a, a + 1, a + NW + 1, a + 1, a + NW + 2, a + NW + 1); }
-    } else {
-      const fan = T.shape === 'cone', half = fan ? T.b : Math.PI, NR = Math.max(5, Math.ceil(T.a / 0.7)), NA = fan ? 26 : 44;
-      for (let i = 0; i <= NR; i++) for (let j = 0; j <= NA; j++) { const r = i / NR * T.a, th = (j / NA * 2 - 1) * half, ang = (fan ? T.yaw : 0) + th, x = T.x + Math.sin(ang) * r, z = T.z + Math.cos(ang) * r; pos.push(x, H(x, z), z); q.push(i / NR, th / half); }
-      for (let i = 0; i < NR; i++) for (let j = 0; j < NA; j++) { const a = i * (NA + 1) + j; idx.push(a, a + 1, a + NA + 1, a + 1, a + NA + 2, a + NA + 1); }
-    }
+    const pos = [], q = [], idx = [], fx = Math.sin(T.yaw), fz = Math.cos(T.yaw), line = T.shape === 'line', cone = T.shape === 'cone';
+    let x0 = T.x - T.a, x1 = T.x + T.a, z0 = T.z - T.a, z1 = T.z + T.a;
+    if (line) { const ex = [0, T.a].flatMap((al) => [-1, 1].map((sg) => [T.x + fx * al + fz * sg * T.b / 2, T.z + fz * al - fx * sg * T.b / 2])); x0 = Math.min(...ex.map((e) => e[0])); x1 = Math.max(...ex.map((e) => e[0])); z0 = Math.min(...ex.map((e) => e[1])); z1 = Math.max(...ex.map((e) => e[1])); }
+    groundPatch(world, x0, z0, x1, z1, 0.04, pos, idx, (x, z) => {
+      const dx = x - T.x, dz = z - T.z;
+      if (line) q.push(dx * fx + dz * fz, dx * fz - dz * fx);
+      else if (cone) q.push(dx * fz - dz * fx, dx * fx + dz * fz);
+      else q.push(dx, dz);
+    });
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('q', new THREE.Float32BufferAttribute(q, 2)); g.setIndex(idx);
     const m = new THREE.ShaderMaterial({
       uniforms: { uCol: { value: new THREE.Vector3(...TELE_COLS[T.col] || TELE_COLS[0]) }, uProg: { value: 0 }, uFade: { value: 0 }, uTime: { value: 0 }, uShape: { value: TELE_SHAPES.indexOf(T.shape) }, uA: { value: T.a }, uB: { value: T.b }, uW: { value: T.shape === 'ring' ? T.yaw : 0 } },
@@ -1813,7 +1838,7 @@ export class Cryptid extends Boss {
       const t2 = this.deathT, w = smooth(clamp(t2 / 0.6, 0, 1)), sh = Math.sin(time * 41) * 3 * (1 - clamp(t2 / 3, 0, 1));
       mix('spine', [-5, 0, 0], w); mix('chest', [-8 + sh, 0, 0], w); mix('neck', [-16, 0, 0], w); mix('head', [-34, sh * 3, 10], w);
       for (const [k, m] of both) { mix('uArm' + k, [-14, 0, -m * 46 + sh], w); mix('fArm' + k, [-22, 0, 0], w); mix('hand' + k, [36, 0, 0], w); }
-      sink = smooth(clamp((t2 - 1.6) / 2.6, 0, 1));
+      sink = smooth(clamp((t2 - 2.6) / 2.0, 0, 1));   // (once the fire is through him: the robe comes down when there is little left inside it to show)
     } else if (st === 'intro') {
       const r = smooth(clamp((T - 2.0) / 1.6, 0, 1));
       mix('neck', [lerp(26, 6, r), 0, 0], 1); mix('head', [lerp(26, -8, r), 0, lerp(22, 6, r)], 1); mix('spine', [lerp(10, 4, r), 0, 0], 1);
@@ -1822,7 +1847,11 @@ export class Cryptid extends Boss {
     if (B.hips.userData.rest) B.hips.position.copy(B.hips.userData.rest);
     this.mesh.updateMatrixWorld(true);
     plantRobe(B, this.mesh, 0.07);
-    if (sink > 0 && B.robe) B.robe.scale.y *= 1 - sink * 0.9;   // (the robe going down empty)
+    if (sink > 0 && B.robe) {   // (the robe going down empty: it crumples onto the ground, the hem where it was, rather than drawing up into the air)
+      const r = B.robe, sy0 = r.scale.y; r.scale.y *= 1 - sink * 0.9;
+      r.position.add(this._v.set(0, -(sy0 - r.scale.y) * r.userData.L, 0).applyQuaternion(r.quaternion));
+    }
+    guardArms(B);   // whatever the pose, the forearms and hands never pass into the robe, the hood or the horns
     // what a blade can find (reeling, the head is thrown aside and lower)
     this.headSphere.r = (st === 'stagger' ? 0.3 : 0.17) * DS; this.headSphere.mul = st === 'stagger' ? 2.0 : 1.7;
     this.updateSpheres();
@@ -1844,6 +1873,7 @@ const NECK_G = [-20, -15, -6, 8, 16, 12, 16], NECK_F = [17, 12, 6, -2, -8, -8, -
 const LIMBS = [['R', 1, -2.2, -1.4], ['L', 1, 2.2, -1.4], ['R', 0, -3.9, 3.9], ['L', 0, 3.9, 3.9]];   // side, hind?, where it stands (his own frame)
 const FOLD = { f1: [0.2, 0.45, -1], f2: [0.15, 0.3, -1], f3: [0.09, 0.15, -1], f4: [0.03, 0.03, -1] };   // where the fingers lie when the wing is shut
 const _d0 = new THREE.Vector3(), _d1 = new THREE.Vector3(), _d2 = new THREE.Vector3(), _d3 = new THREE.Vector3(), _d4 = new THREE.Vector3(), _dq = new THREE.Quaternion(), _dq2 = new THREE.Quaternion();
+const _dq3 = new THREE.Quaternion(), _dqI = new THREE.Quaternion(), _dn = new THREE.Vector3(), _dU = new THREE.Vector3();
 // one of the fx lights, held (no light is ever added for him: these four are in the scene from the start)
 function dragonLight(fx, slot, p, color, intensity, dist) {
   const l = fx && fx.lights && fx.lights[slot]; if (!l) return;
@@ -2520,7 +2550,12 @@ export class Dragon extends Boss {
       ik2(th, sh, mt, _d0, _d2.set(fwx, 0.25, fwz));
       if (w > 0.5) {
         mt.getWorldPosition(_d1); ft.getWorldPosition(_d3); aimBone(mt, _d3.sub(_d1), _d2.set(L.c.x, L.c.y + 0.25 * DK, L.c.z).sub(_d1));
-        mt.getWorldQuaternion(_dq); this.mesh.getWorldQuaternion(_dq2); ft.quaternion.copy(_dq.invert().multiply(_dq2)); ft.updateMatrixWorld(true);
+        // the foot laid along the ground under it (its long toes stood off a slope, or into it, held level with the body)
+        const e = 1.2 * DK, gx = L.c.x, gz = L.c.z;
+        _dn.set(H(gx - e, gz) - H(gx + e, gz), 2 * e, H(gx, gz - e) - H(gx, gz + e)).normalize();
+        this.mesh.getWorldQuaternion(_dq2); _dU.set(0, 1, 0).applyQuaternion(_dq2);
+        _dq3.setFromUnitVectors(_dU, _dn); const ta = _dU.angleTo(_dn); if (ta > 0.6) _dq3.slerpQuaternions(_dqI, _dq3, 0.6 / ta);   // (no steeper than that: off a ledge the toes stay as they were)
+        mt.getWorldQuaternion(_dq); ft.quaternion.copy(_dq.invert().multiply(_dq3).multiply(_dq2)); ft.updateMatrixWorld(true);
       }
     }
     for (let i = 2; i < 4; i++) {
@@ -2561,8 +2596,8 @@ export class Dragon extends Boss {
     if (this.breath) {
       const dir = this.mouthDir; jl = dir.y < -0.06 ? clamp((this.mouth.y - this.gY) / -dir.y, 5, 20) : 11;
       const hx = this.mouth.x + dir.x * jl, hz = this.mouth.z + dir.z * jl, hy = dir.y < -0.06 ? H(hx, hz) : this.mouth.y + dir.y * jl;
-      // where it strikes the ground it boils up and spreads
-      if (dir.y < -0.06) { for (let i = 0; i < 6; i++) { const a = i * 2.4 + Math.floor(time * 7) * 1.3, r = 0.4 + (i % 3) * 0.9; F.flame(hx + Math.sin(a) * r, hy, hz + Math.cos(a) * r, 2.6, 2.6 + (i % 2) * 1.3, i * 1.9, 1.2); } if (!this._scT || time - this._scT > 0.3) { this._scT = time; F.scorchAt(hx, hz, 3, W, time); } }
+      // where it strikes the ground it boils up and spreads (each tongue of flame on the ground where it stands)
+      if (dir.y < -0.06) { for (let i = 0; i < 6; i++) { const a = i * 2.4 + Math.floor(time * 7) * 1.3, r = 0.4 + (i % 3) * 0.9, fx2 = hx + Math.sin(a) * r, fz2 = hz + Math.cos(a) * r; F.flame(fx2, H(fx2, fz2) - 0.1, fz2, 2.6, 2.6 + (i % 2) * 1.3, i * 1.9, 1.2); } if (!this._scT || time - this._scT > 0.3) { this._scT = time; F.scorchAt(hx, hz, 3, W, time); } }
       if (fx) {
         if (R() < dt * 22) fx.fireStream(this.mouth, dir, jl * 0.85, 0.3, 0.3);
         dragonLight(fx, 3, _d0.set(hx, hy + 1.6, hz), 0xff6a20, 55 + 20 * Math.sin(time * 31), 30); dragonLight(fx, 2, _d1.copy(this.mouth).addScaledVector(dir, 2.5), 0xff7a30, 30, 18);
@@ -2572,9 +2607,11 @@ export class Dragon extends Boss {
     let lit = false;
     for (const P of this.tele.map.values()) {
       if (P.shape === 'pool') {
-        if (!P.seen) { P.seen = true; P.gy = H(P.x, P.z); F.scorchAt(P.x, P.z, P.a * 1.3, W, time); }
         const k = clamp(P.t / 0.35, 0, 1) * clamp((P.dur - P.t) / 1.2, 0, 1), n = Math.min(7, Math.round(P.a * 2.2));
-        for (let i = 0; i < n; i++) { const a = P.id * 2.4 + i * 2.399, r = P.a * 0.8 * Math.sqrt((i + 0.5) / n); F.flame(P.x + Math.sin(a) * r, P.gy - 0.1, P.z + Math.cos(a) * r, 1.6 + ((i * 7 + P.id) % 5) * 0.25, 2.0 + ((i * 3 + P.id) % 4) * 0.6, P.id + i * 1.7, k); }
+        // (each tongue of fire stands on the ground where it is: all at the height of the middle, they hung in the air
+        // over every hollow and off the edge of the rock, metres up)
+        if (!P.seen) { P.seen = true; P.gy = H(P.x, P.z); P.fy = []; for (let i = 0; i < n; i++) { const a = P.id * 2.4 + i * 2.399, r = P.a * 0.8 * Math.sqrt((i + 0.5) / n); P.fy.push(H(P.x + Math.sin(a) * r, P.z + Math.cos(a) * r)); } F.scorchAt(P.x, P.z, P.a * 1.3, W, time); }
+        for (let i = 0; i < n; i++) { const a = P.id * 2.4 + i * 2.399, r = P.a * 0.8 * Math.sqrt((i + 0.5) / n); F.flame(P.x + Math.sin(a) * r, P.fy[i] - 0.1, P.z + Math.cos(a) * r, 1.6 + ((i * 7 + P.id) % 5) * 0.25, 2.0 + ((i * 3 + P.id) % 4) * 0.6, P.id + i * 1.7, k); }
         if (fx && R() < dt * 3 * k) fx.hellfire(P.x, P.gy, P.z, P.a);
         if (fx && !lit && !this.breath && k > 0.5) { lit = true; dragonLight(fx, 3, _d0.set(P.x, P.gy + 1.5, P.z), 0xff6a20, 26 + 8 * Math.sin(time * 27 + P.id), 20); }
       } else if (P.fxk === 5 && !P.fired) {   // a gout of fire on its way down to its mark

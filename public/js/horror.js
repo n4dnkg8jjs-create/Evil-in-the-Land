@@ -274,6 +274,21 @@ function hornGeo(len, r, curl, seg = 12) {
   for (let i = 0; i < pos.count; i++) { const ring = Math.floor(i / 8); const t = ring / (seg * 2); const c = curve.getPoint(t); v.fromBufferAttribute(pos, i).sub(c).multiplyScalar(1 - t * 0.94).add(c); pos.setXYZ(i, v.x, v.y, v.z); }
   tg.computeVertexNormals(); return tg;
 }
+// His horns: a tapering tube along a curve, ringed with growth ridges, with a slow twist in the ridging
+// (hg units: the hood's own space, +x his left, +z forward). One horn; the other is its mirror.
+const DEVIL_HORN = [[0.122, 0.17, 0.06], [0.188, 0.324, 0.06], [0.313, 0.488, 0.03], [0.47, 0.593, -0.08], [0.627, 0.617, -0.24], [0.743, 0.561, -0.38], [0.82, 0.46, -0.4], [0.877, 0.38, -0.29], [0.923, 0.37, -0.14], [0.96, 0.41, -0.03]], HORN_R = [0.105, 0.008];
+function devilHornGeo(pts, r0, r1) {
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), TS = 64, RS = 10;
+  const g = new THREE.TubeGeometry(curve, TS, 1, RS, false), P = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < P.count; i++) {
+    const ring = Math.floor(i / (RS + 1)), k = i % (RS + 1), t = ring / TS, a = k / RS * TAU;
+    curve.getPointAt(t, c);
+    const ridge = 1 + 0.1 * Math.max(0, Math.sin(t * 62 + Math.sin(a + t * 6) * 0.9)) * (1 - t * 0.6);   // the rings of growth, skewed round the horn
+    const flat = 1 - 0.12 * Math.cos(2 * (a - t * 2.2));                                                       // a little flattened, the flat face twisting along it
+    v.fromBufferAttribute(P, i).sub(c).multiplyScalar(lerp(r0, r1, Math.pow(t, 0.8)) * ridge * flat).add(c); P.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals(); return g;
+}
 const HORN_MAT = new THREE.MeshStandardMaterial({ color: 0x2a221c, roughness: 0.55 });
 const CLOTH_MAT = new THREE.MeshStandardMaterial({ color: 0x0d0b0a, roughness: 0.95, side: THREE.DoubleSide });
 function robeGeo(top, bottom, len) {
@@ -414,6 +429,7 @@ export function buildHumanDevil(def) {
   const fit = { ...def, headFit: { s: sc, off: new THREE.Vector3(hc.x, hc.y - 0.065 * sc + 0.01, hc.z - 0.11 * sc) }, robeW: 0.56, sleeveW: 0.62 };
   dressDevil.horn = null; dressDevil(B, null, fit, DU);
   for (const b of Object.values(rig.j)) b.userData.rest = b.position.clone();
+  B.guard = armSamples(B, mesh, fit.sleeveW);
   root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
   return { mesh: root, B, mat, wings: null, height: 2.0 };
 }
@@ -455,12 +471,16 @@ function mergeByMaterial(group) {
   return group;
 }
 const ROBE_U = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0, 0) } };
-function robeMat(sway, top, DU) {
+// axis: the garment's own middle (x, z in its geometry), for the wind: the cloth is blown out and round from it but
+// never in toward it (blown in, it went through the body inside and showed the grey flesh through the wool); hem: the
+// height of the hem, which the wind drags about but does not lift (the robe rests on the ground, and the feet stay hid)
+function robeMat(sway, top, DU, axis = [0, 0], hem = -1e3) {
   const ct = clothTextures([26, 22, 24], false, 256, 'devilwool');
   const m = new THREE.MeshPhysicalMaterial({ color: 0x0d0b0c, map: ct.map, normalMap: ct.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.92, sheen: 0.5, sheenRoughness: 0.75, sheenColor: new THREE.Color(0x2a2630), side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = ROBE_U.uTime; sh.uniforms.uWind = ROBE_U.uWind; sh.uniforms.uSway = { value: sway }; sh.uniforms.uTop = { value: top };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop;\nuniform vec2 uWind;')
+    sh.uniforms.uAxis = { value: new THREE.Vector2(axis[0], axis[1]) }; sh.uniforms.uHem = { value: hem };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime, uSway, uTop, uHem;\nuniform vec2 uWind, uAxis;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         float hang = max(0.0, uTop - position.y); float w = hang * hang * uSway;
         float ang = atan(position.x, position.z);
@@ -471,8 +491,10 @@ function robeMat(sway, top, DU) {
         float flap = sin(uTime * 7.0 - hang * 9.0 + ang * 2.0) * 0.18 + sin(uTime * 11.0 - hang * 14.0) * 0.08;
         float lee = 0.6 + 0.4 * dot(normalize(vec2(position.x, position.z) + 1e-4), normalize(uWind + 1e-4));
         vec2 wd = uWind * hang * (0.6 + hang * 0.5) * gust * lee;
-        transformed.x += wd.x + flap * uWind.y * hang; transformed.z += wd.y + flap * uWind.x * hang;
-        transformed.y += length(wd) * 0.35 * hang;`);
+        vec2 dw = vec2(wd.x + flap * uWind.y * hang, wd.y + flap * uWind.x * hang), rd = normalize(position.xz - uAxis + 1e-4);
+        dw -= rd * min(0.0, dot(dw, rd));
+        transformed.x += dw.x; transformed.z += dw.y;
+        transformed.y += length(wd) * 0.35 * hang * smoothstep(uHem, uHem + 0.35, position.y);`);
   };
   m.customProgramCacheKey = () => 'devilRobe';   // sway and top are uniforms: one shader for every garment
   return dissolvable(m, DU);
@@ -497,6 +519,7 @@ export function tickRobes(time) {
 // root: the model's own group, whose y = 0 is the ground under him.
 const _rbM = new THREE.Matrix4(), _rbQ = new THREE.Quaternion(), _rbP = new THREE.Vector3(), _rbS = new THREE.Vector3(), _rbC = new THREE.Vector3();
 const _rbQ2 = new THREE.Quaternion(), _rbI = new THREE.Quaternion(), _rbU = new THREE.Vector3(), _rbO = new THREE.Vector3();
+const _rbM2 = new THREE.Matrix4(), _rbH = new THREE.Vector3(), _rbD = new THREE.Vector3(), _rbQ3 = new THREE.Quaternion();
 export function plantRobe(B, root, sink = 0.04) {
   const robe = B.robe; if (!robe || !robe.visible || robe.userData.L === undefined) return;
   const u = robe.userData;
@@ -509,9 +532,20 @@ export function plantRobe(B, root, sink = 0.04) {
   const bow = Math.acos(clamp(_rbU.set(0, 1, 0).applyQuaternion(_rbQ).y, -1, 1));
   const k = clamp((bow - 0.26) / 1.05, 0, 0.55);
   _rbQ2.copy(_rbI).slerp(_rbQ, k);                                   // the robe's own turn, in the model's frame
+  // and leaned (a little, from the collar) toward being over his hips: stooping, or turned at the waist, the collar comes
+  // away from over them, and a robe hanging straight down from it let his hips and thighs out through the cloth
+  _rbH.setFromMatrixPosition(B.hips.matrixWorld).applyMatrix4(_rbM2.copy(root.matrixWorld).invert());
+  _rbD.set(0, -1, 0).applyQuaternion(_rbQ2); const hh = _rbC.y - _rbH.y;
+  if (hh > 0.05 && _rbD.y < -0.5) {
+    const f = hh / -_rbD.y, ox = _rbH.x - (_rbC.x + _rbD.x * f), oz = _rbH.z - (_rbC.z + _rbD.z * f), ol = Math.hypot(ox, oz);
+    // (six tenths of the way: all of it swung the hem back off his toes)
+    if (ol > 1e-3) { _rbU.set(ox / ol, 0, oz / ol).cross(_rbD).negate().normalize(); _rbQ3.setFromAxisAngle(_rbU, Math.min(0.12, Math.atan2(ol, hh) * 0.6)); _rbQ2.premultiply(_rbQ3); }
+  }
   const tilt = Math.acos(clamp(_rbU.set(0, 1, 0).applyQuaternion(_rbQ2).y, -1, 1));
   // the length that takes it from the collar to the ground (along its slant)
-  const sy = clamp((_rbC.y + sink) / ((u.top + u.L) * Math.max(0.5, Math.cos(tilt))), 0.5, 1.25);
+  // (and as much again as a lean lifts the near side of the hem, so all of it stays down on the ground)
+  const hemR = u.prof ? u.prof[u.prof.length - 1][0] * Math.max(u.base.x, u.base.z * 0.82) : 0;
+  const sy = clamp((_rbC.y + sink + hemR * Math.sin(tilt)) / ((u.top + u.L) * Math.max(0.5, Math.cos(tilt))), 0.5, 1.25);
   robe.scale.set(u.base.x, sy, u.base.z);
   // origin = collar - (turned) collar-in-robe; then into the chest's frame
   _rbO.set(0, sy * u.top, 0).applyQuaternion(_rbQ2); _rbO.subVectors(_rbC, _rbO).sub(_rbP);
@@ -533,7 +567,9 @@ function dressDevil(B, K, def, DU) {
   const neckTop = B.neck.position.y;                                    // neck base, in the chest's frame
   const L = chestY - 0.02;                                              // to the ground
   // the robe: gathered at the throat, broad over the shoulders, then falling in deep pleats to a hem that pools and drags
-  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.42, -0.2], [0.41, -0.5], [0.45, -0.8], [0.54, -1.25], [0.7, -1.85], [0.9, -L + 0.06], [0.98, -L]];
+  // (heights below the waist go by L, so the skirt only ever runs down: an older profile folded back on itself under
+  // the ground, and the ragged edge of the fold stood up out of the earth round his feet like scraps of cloth)
+  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.4, -0.2], [0.39, -0.5], [0.43, -0.59 * L], [0.52, -0.8 * L], [0.64, -0.93 * L], [0.84, -0.985 * L], [0.96, -L]];
   const pts = []; for (let i = 0; i < prof.length - 1; i++) for (let k = 0; k < 4; k++) { const t = k / 4; pts.push([lerp(prof[i][0], prof[i + 1][0], t), lerp(prof[i][1], prof[i + 1][1], t)]); } pts.push(prof[prof.length - 1]);
   const robeGeo = lathe(pts, 96, (v, a) => {
     const t = clamp(-v.y / L, 0, 1);
@@ -543,21 +579,40 @@ function dressDevil(B, K, def, DU) {
     const wr = (wn(a * 6, v.y * 9) - 0.5) * 0.03 * (Math.exp(-(((v.y - 0.12) / 0.12) ** 2)) + Math.exp(-(((v.y + 0.45) / 0.15) ** 2)));
     const r = Math.hypot(v.x, v.z) + pleat + wr;
     v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.82 + 0.07;
-    if (t > 0.96) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.1 - 0.02;   // the hem, uneven, dragging
+    if (t > 0.96) v.y -= Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.08 * (t - 0.96) / 0.04;   // the hem, uneven, dragging (never lifted off the ground)
   });
-  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
+  const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU, [0, 0.07], -L)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
   robe.userData.base = robe.scale.clone(); robe.userData.pos0 = robe.position.clone(); robe.userData.top = neckTop + 0.03; robe.userData.L = L;
-  // sleeves: wide and long, falling in folds, the hands hang out of them
+  robe.userData.prof = pts; robe.userData.sway = 0.03; robe.userData.uTop = neckTop;   // (its shape, for keeping the hands out of it: guardArms)
+  // sleeves: wide and long, falling in folds, the hands hang out of them. Each is one tube from the shoulder to the
+  // cuff, skinned to the upper arm and the forearm and blended across the elbow, so the arm is always inside it however
+  // the elbow bends (two stiff halves used to part at a bent elbow and let the forearm out through the cloth).
+  const sw = def.sleeveW || 1;
   for (const k of ['R', 'L']) {
-    const ul = Math.abs(B['fArm' + k].position.y), fl = Math.abs(B['hand' + k].position.y);
-    const up = new THREE.Mesh(lathe([[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul - 0.02]], 24, (v, a) => { const r = Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * 0.012 + (wn(a * 4, v.y * 12) - 0.5) * 0.02; v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), robeMat(0.0, 0, DU)); B['uArm' + k].add(up);
-    const lo = new THREE.Mesh(lathe([[0.16, 0.02], [0.19, -fl * 0.4], [0.27, -fl * 0.75], [0.31, -fl * 0.88], [0.3, -fl * 0.92]], 28, (v, a) => {
-      const t = -v.y / fl; const r = Math.hypot(v.x, v.z) + Math.sin(a * 7 + v.y * 3) * 0.018 * t + (wn(a * 5, v.y * 10) - 0.5) * 0.02;
-      v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
-    }), robeMat(0.06, 0, DU));
-    B['fArm' + k].add(lo); up.castShadow = lo.castShadow = true;
-    (B.sleeves ||= []).push(up, lo);
-    if (def.sleeveW) { up.scale.set(def.sleeveW, 1, def.sleeveW); lo.scale.set(def.sleeveW, 1, def.sleeveW); }
+    const ua = B['uArm' + k], fa = B['fArm' + k], ul = Math.abs(fa.position.y), fl = Math.abs(B['hand' + k].position.y), L2 = ul + fl * 0.92;
+    let top = ua; while (top.parent) top = top.parent; top.updateMatrixWorld(true);
+    const sh = ua.getWorldPosition(new THREE.Vector3());   // at rest every bone frame is the model frame: the sleeve hangs straight down from here
+    const sp = [[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul], [0.17, -ul - fl * 0.35], [0.22, -ul - fl * 0.6], [0.27, -ul - fl * 0.75], [0.31, -ul - fl * 0.88], [0.3, -L2]];
+    const spts = []; for (let i = 0; i < sp.length - 1; i++) for (let j = 0; j < 3; j++) { const t = j / 3; spts.push([lerp(sp[i][0], sp[i + 1][0], t), lerp(sp[i][1], sp[i + 1][1], t)]); } spts.push(sp[sp.length - 1]);
+    const g = lathe(spts, 28, (v, a) => {
+      const t = clamp((-v.y - ul) / fl, 0, 1);   // 0 down to the elbow, then out along the forearm
+      const r = (Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * (0.012 + 0.006 * t) + (wn(a * 4.5, v.y * 11) - 0.5) * 0.02) * sw;
+      v.x = Math.sin(a) * r; v.z = Math.cos(a) * r;
+      if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
+    });
+    g.translate(sh.x, sh.y, sh.z);
+    const P = g.attributes.position, SI = [], SW = [];
+    for (let i = 0; i < P.count; i++) {   // the upper arm's down to just above the elbow, the forearm's from just below it
+      const d = sh.y - P.getY(i), f = clamp((d - ul + 0.09) / 0.18, 0, 1), w = f * f * (3 - 2 * f);
+      SI.push(0, 1, 0, 0); SW.push(1 - w, w, 0, 0);
+    }
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+    // (it stirs below the elbow only, as the old cuff did)
+    const m = new THREE.SkinnedMesh(g, robeMat(0.06, sh.y - ul, DU, [sh.x, sh.z])); m.castShadow = true; m.frustumCulled = false; m.userData.side = k;
+    ua.add(m); m.position.copy(ua.worldToLocal(new THREE.Vector3(0, 0, 0)));   // (at rest: the mesh's frame is the model's)
+    top.updateMatrixWorld(true);
+    m.bind(new THREE.Skeleton([ua, fa], [ua.matrixWorld.clone().invert(), fa.matrixWorld.clone().invert()]), m.matrixWorld.clone());
+    (B.sleeves ||= []).push(m);
   }
   // the hood. It rests on the skull and comes down over the brow, so the face is a pale shape in its shadow:
   // a little of the eyes beneath the edge, the cheekbones, the mouth. Below the jaw the cowl falls onto the shoulders.
@@ -594,7 +649,7 @@ function dressDevil(B, K, def, DU) {
   const hood = new THREE.BufferGeometry(); hood.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   const uv = []; for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) uv.push(i / NU * 3, j / NV * 2); hood.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   hood.setIndex(idx); hood.computeVertexNormals();
-  const hg = new THREE.Group(); B.head.add(hg);
+  const hg = new THREE.Group(); B.head.add(hg); B.hoodGroup = hg;
   if (def.headFit) { hg.scale.setScalar(def.headFit.s); hg.position.copy(def.headFit.off); }
   // One garment with the robe: the crown and the face opening go with the head, the cowl below the jaw belongs to
   // the shoulders (the robe's collar), and between them the cloth follows a slow, springy copy of the head, so when
@@ -610,21 +665,173 @@ function dressDevil(B, K, def, DU) {
     SI.push(0, 1, 2, 0); SW.push(wH, wL, wC, 0);
   }
   hood.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); hood.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
-  const hm = new THREE.SkinnedMesh(hood, robeMat(0.02, 0.0, DU)); hm.castShadow = true; hm.frustumCulled = false; hg.add(hm);
+  const hm = new THREE.SkinnedMesh(hood, robeMat(0.02, 0.0, DU, [C[0], C[2]])); hm.castShadow = true; hm.frustumCulled = false; hg.add(hm);
   { let top = hg; while (top.parent) top = top.parent; top.updateMatrixWorld(true); lag.updateMatrixWorld(true);
     const bones = [B.head, lag, B.chest];
     const sk = new THREE.Skeleton(bones, bones.map((b) => b.matrixWorld.clone().invert()));
     hm.bind(sk, hm.matrixWorld.clone()); }
   HOODS.add({ head: B.head, lag, y: 0, x: 0, z: 0, vy: 0, vx: 0, vz: 0, t: -1, init: false });
-  // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
+  { // the hood as two ellipsoids for guardArms: the crown (with the head, in the hood's own space: its own shell) and
+    // the cowl on the shoulders (with the chest, in the chest's space: the box of the cloth that rides the chest)
+    const bw = new THREE.Box3(), v = new THREE.Vector3(); hg.updateMatrixWorld(true); B.chest.updateMatrixWorld(true);
+    for (let k = 0; k < NP; k++) { v.fromArray(pos, k * 3); if (SW[k * 4 + 2] > 0.5) bw.expandByPoint(B.chest.worldToLocal(hg.localToWorld(v))); }
+    const ell = (b) => ({ c: b.getCenter(new THREE.Vector3()), r: b.getSize(new THREE.Vector3()).multiplyScalar(0.5) });
+    hg.userData.crown = { c: new THREE.Vector3(C[0], C[1], C[2]), r: new THREE.Vector3(RX + 0.01, RY + 0.03, RZ + 0.04) };   // (the skull's own shell, the peak and the brow on it)
+    hg.userData.cowl = bw.isEmpty() ? null : ell(bw);
+  }
+  // ram horns rooted inside the skull above the temples: they break out through the crown of the hood, sweep up, out
+  // and back, and curl round and forward again wide of the head, the points turned up and out above the brow. Each
+  // keeps to its own side and above the hood (the old curl was turned inward, and the two crossed over the crown); the
+  // curl stays high enough that with the head turned and lolled as far as he ever turns it, no horn comes down into
+  // the hood's cowl or the shoulders of the robe.
+  hg.userData.horns = [];
   if (def.horns) for (const s of [-1, 1]) {
-    const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true;
-    h.position.set(s * 0.11, 0.19, 0.05); h.rotation.set(-0.15, s * 0.75, -s * 1.15);   // out to the sides, then back and down round the hood, a ram's curl
-    if (def.headFit) h.scale.setScalar(1.45);
+    const pts = DEVIL_HORN.map(([x, y, z]) => new THREE.Vector3(s * x, y, z));
+    const h = new THREE.Mesh(devilHornGeo(pts, HORN_R[0], HORN_R[1]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true; h.userData.horn = true;
     hg.add(h);
+    // the centre line, for keeping his hands off them (guardArms): nine points along it, with the radius at each
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), line = [];
+    for (let i = 0; i <= 8; i++) { const t = i / 8; line.push({ p: curve.getPointAt(t), r: lerp(HORN_R[0], HORN_R[1], Math.pow(t, 0.8)) }); }
+    hg.userData.horns.push(line);
   }
 }
 
+// ---------------------------------------------------------------- keeping His hands out of His clothes
+// The forearms and hands as a few spheres each, measured from the skin at rest: along the forearm by its share of the
+// way from elbow to wrist (so it holds when the forearm is drawn out later), the hand in the hand's own frame.
+function armSamples(B, mesh, sw = 1) {
+  const out = {}, g = mesh.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, bones = mesh.skeleton.bones, v = new THREE.Vector3();
+  mesh.updateMatrixWorld(true); mesh.skeleton.update();
+  for (const k of ['R', 'L']) {
+    const fa = B['fArm' + k], hd = B['hand' + k], fi = bones.indexOf(fa), hi = bones.indexOf(hd); if (fi < 0 || hi < 0) return null;
+    const el = fa.getWorldPosition(new THREE.Vector3()), wr = hd.getWorldPosition(new THREE.Vector3()), fl = el.distanceTo(wr);
+    const fore = [0.2, 0.45, 0.7, 0.92].map((f) => ({ f, r: 0, pts: [] })), hand = [0, 1, 2, 3].map(() => ({ p: null, r: 0, pts: [] }));
+    const hpts = [];
+    for (let i = 0; i < P.count; i++) {
+      let bw = -1, bj = -1; for (let q = 0; q < 4; q++) { const w = SW.getComponent(i, q); if (w > bw) { bw = w; bj = SI.getComponent(i, q); } }
+      if (bj !== fi && bj !== hi) continue;
+      mesh.getVertexPosition(i, v); v.applyMatrix4(mesh.matrixWorld);
+      if (bj === fi) { const f = (el.y - v.y) / fl; let b = 0, bd = 9; fore.forEach((s, j) => { const d = Math.abs(s.f - f); if (d < bd) { bd = d; b = j; } }); if (bd < 0.14) fore[b].pts.push(v.clone()); }
+      else hpts.push(v.clone());
+    }
+    // the hand: four slices from the wrist to the fingertips
+    let y0 = 1e9, y1 = -1e9; for (const p of hpts) { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+    for (const p of hpts) hand[Math.min(3, Math.floor((y1 - p.y) / (y1 - y0 + 1e-6) * 4))].pts.push(p);
+    for (const s of [...fore, ...hand]) {
+      if (!s.pts.length) continue; const c = new THREE.Vector3(); for (const p of s.pts) c.add(p); c.divideScalar(s.pts.length);
+      for (const p of s.pts) s.r = Math.max(s.r, p.distanceTo(c));
+      if (s.f !== undefined) { const ax = el.clone().lerp(wr, s.f); s.off = c.clone().sub(ax); s.off.y = 0; }   // (off the bone's line, in the model's frame = the forearm's at rest)
+      else s.p = hd.worldToLocal(c.clone());
+      s.r *= 0.92; delete s.pts;   // (the slice's corners: a sphere round the whole slice is a little fat)
+    }
+    const F = fore.filter((s) => s.r > 0), Hd = hand.filter((s) => s.r > 0);
+    out[k] = { ua: B['uArm' + k], fa, hd, fore: F, hand: Hd, rf: Math.max(...F.map((s) => s.r + s.off.length())), rh: Math.max(...Hd.map((s) => s.r)),
+      sleeve: [0.175 * sw, 0.21 * sw, 0.31 * sw], cuff: Math.abs(hd.position.y) * 0.92 };   // (the sleeve's girth along it, and where its cuff is down the forearm: see dressDevil)
+  }
+  return out;
+}
+const _gv = Array.from({ length: 16 }, () => new THREE.Vector3()), _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gm = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
+const _gHorn = [], _gS = new THREE.Vector3();
+// how far a sphere (world centre p, world radius r) is into His robe; sets out to where it must go to clear it
+function intoRobe(robe, p, r, out) {
+  const u = robe.userData, pr = u.prof, g = _gv[6].copy(p).applyMatrix4(_gm), y = g.y;
+  if (y > pr[0][1] || y < pr[pr.length - 1][1]) return 0;
+  let i = 1; while (i < pr.length - 1 && pr[i][1] > y) i++;
+  const a = pr[i - 1], b = pr[i], rad = lerp(a[0], b[0], (a[1] - y) / (a[1] - b[1] || 1)), t = clamp(-y / u.L, 0, 1);
+  // the cloth's own stir in the wind (the robe shader's formula, at this height and side), so the hand is kept out of
+  // where the cloth is now, not where it hangs in still air
+  const hang = Math.max(0, u.uTop - y), wx = ROBE_U.uWind.value.x, wz = ROBE_U.uWind.value.y, T = ROBE_U.uTime.value;
+  let dx = 0, dz = 0;
+  if (wx || wz) {
+    const gust = 0.75 + 0.25 * Math.sin(T * 1.7) + 0.15 * Math.sin(T * 4.3 + 1), ang = Math.atan2(g.x, g.z), flap = Math.sin(T * 7 - hang * 9 + ang * 2) * 0.18 + Math.sin(T * 11 - hang * 14) * 0.08;
+    const gl = Math.hypot(g.x, g.z) || 1, wl = Math.hypot(wx, wz) || 1, lee = 0.6 + 0.4 * (g.x * wx + g.z * wz) / (gl * wl), k = hang * (0.6 + hang * 0.5) * gust * lee;
+    dx = wx * k + flap * wz * hang; dz = wz * k + flap * wx * hang;
+    const rl = Math.hypot(g.x, g.z - 0.07) || 1, rx = g.x / rl, rz = (g.z - 0.07) / rl, inw = Math.min(0, dx * rx + dz * rz); dx -= rx * inw; dz -= rz * inw;   // (as the shader: never blown inward)
+  }
+  const nx = g.x - dx, nz = (g.z - dz - 0.07) / 0.82, rho = Math.hypot(nx, nz) || 1e-4;
+  const rmax = rad + 0.027 + 0.095 * t + u.sway * hang * hang * 0.85;   // the deepest pleat and wrinkle there, and its sway
+  // the sphere's radius in the robe's units, in the direction it would go out
+  const sx = _gS.x, sz = _gS.z, m = r / Math.hypot(nx / rho * sx, nz / rho * 0.82 * sz);
+  const d = rmax + m - rho; if (d <= 0) return 0;
+  const k = (rmax + m) / rho; out.set(nx * k + dx, y, nz * k * 0.82 + 0.07 + dz).applyMatrix4(robe.matrixWorld).sub(p);
+  return d * Math.min(sx, sz);
+}
+// the closest points of segments p0-p1 and q0-q1 (into a and b); returns the parameter along q
+const _ss = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+function segSeg(p0, p1, q0, q1, a, b) {
+  const d1 = _ss[0].subVectors(p1, p0), d2 = _ss[1].subVectors(q1, q0), r = _ss[2].subVectors(p0, q0);
+  const A = d1.dot(d1), E = d2.dot(d2), F = d2.dot(r), C = d1.dot(r), Bd = d1.dot(d2), den = A * E - Bd * Bd;
+  let s = den > 1e-9 ? clamp((Bd * F - C * E) / den, 0, 1) : 0, t = E > 1e-9 ? (Bd * s + F) / E : 0;
+  if (t < 0) { t = 0; s = A > 1e-9 ? clamp(-C / A, 0, 1) : 0; } else if (t > 1) { t = 1; s = A > 1e-9 ? clamp((Bd - C) / A, 0, 1) : 0; }
+  a.copy(p0).addScaledVector(d1, s); b.copy(q0).addScaledVector(d2, t); return t;
+}
+// ... into an ellipsoid (centre c, radii e) in the frame of matrix M (inverse Mi); s: that frame's scale in the world
+function intoEll(M, Mi, s, c, e, p, r, out) {
+  const q = _gv[7].copy(p).applyMatrix4(Mi).sub(c), m = r / s, ex = e.x + m, ey = e.y + m, ez = e.z + m;
+  const k = Math.hypot(q.x / ex, q.y / ey, q.z / ez); if (k >= 1) return 0;
+  if (k < 1e-4) q.set(0, 0, ez); else q.divideScalar(k);   // (out along the line from the centre)
+  out.copy(q).add(c).applyMatrix4(M).sub(p); return (1 - k) * Math.min(ex, ey, ez) * s;
+}
+// After the pose is set, each arm is swung at the shoulder (as little as will do) until no part of the forearm or the
+// hand is inside the robe, the hood or the horns: so whatever a pose asks, His hands never pass through His clothes.
+// It works from the bones and a few spheres: no geometry is read and nothing is allocated. Call after plantRobe.
+export function guardArms(B) {
+  const G = B.guard; if (!G) return 0;
+  const robe = B.robe && B.robe.visible ? B.robe : null, hg = B.hoodGroup, ud = hg?.userData;
+  if (robe) { robe.updateMatrixWorld(); _gm.copy(robe.matrixWorld).invert(); _gS.setFromMatrixScale(robe.matrixWorld); }
+  let hs = 1, cs = 1, nh = 0;
+  if (hg) {
+    _gm2.copy(hg.matrixWorld).invert(); hs = Math.cbrt(Math.abs(hg.matrixWorld.determinant()));
+    _gm3.copy(B.chest.matrixWorld).invert(); cs = Math.cbrt(Math.abs(B.chest.matrixWorld.determinant()));
+    for (const line of ud.horns || []) for (const n of line) { const w = _gHorn[nh] || (_gHorn[nh] = { p: new THREE.Vector3(), r: 0, end: false }); w.p.copy(n.p).applyMatrix4(hg.matrixWorld); w.r = n.r * hs; w.end = n === line[line.length - 1]; nh++; }
+  }
+  const ws = Math.cbrt(Math.abs(B.chest.matrixWorld.determinant()));   // (the model's scale in the world: the samples were measured at 1)
+  const push = _gv[8], best = _gv[9], tmp = _gv[5]; let left = 0;
+  for (const k of ['R', 'L']) {
+    const A = G[k]; if (!A) continue;
+    for (let it = 0; it < 7; it++) {
+      let bd = 0;
+      const el = _gv[0].setFromMatrixPosition(A.fa.matrixWorld), wr = _gv[1].setFromMatrixPosition(A.hd.matrixWorld);
+      const ns = A.fore.length + A.hand.length;
+      for (let si = 0; si < ns; si++) {
+        const S = si < A.fore.length ? A.fore[si] : A.hand[si - A.fore.length], p = _gv[2], r = S.r * ws;
+        if (S.f !== undefined) p.copy(el).lerp(wr, S.f).add(tmp.copy(S.off).transformDirection(A.fa.matrixWorld).multiplyScalar(S.off.length() * ws));
+        else p.copy(S.p).applyMatrix4(A.hd.matrixWorld);
+        let d;
+        if (robe && (d = intoRobe(robe, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
+        if (ud && (d = intoEll(hg.matrixWorld, _gm2, hs, ud.crown.c, ud.crown.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
+        if (ud?.cowl && (d = intoEll(B.chest.matrixWorld, _gm3, cs, ud.cowl.c, ud.cowl.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
+      }
+      // the horns (thin toward the points, so they could slip between those spheres): the arm as capsules, the sleeve
+      // round it (upper arm, forearm, the wide cuff) and then the bare wrist and the hand, against each stretch of each
+      // horn (its ridges and its flattening make it up to a quarter thicker)
+      if (nh) {
+        const tip = _gv[10].copy(A.hand[A.hand.length - 1].p).applyMatrix4(A.hd.matrixWorld), shp = _gv[13].setFromMatrixPosition(A.ua.matrixWorld);
+        const fdir = tmp.subVectors(wr, el), flen = fdir.length(), cl = Math.min(flen, A.cuff * ws); fdir.divideScalar(flen || 1);
+        const c1 = _gv[14].copy(el).addScaledVector(fdir, cl * 0.5), cf = _gv[15].copy(el).addScaledVector(fdir, cl);
+        for (let sg = 0; sg < 5; sg++) {
+          const p0 = sg === 0 ? shp : sg === 1 ? el : sg === 2 ? c1 : sg === 3 ? cf : wr, p1 = sg === 0 ? el : sg === 1 ? c1 : sg === 2 ? cf : sg === 3 ? wr : tip;
+          const ra = (sg === 4 ? A.rh : sg === 3 ? A.rf : A.sleeve[sg]) * ws;
+          for (let h = 0; h + 1 < nh; h++) {
+            const a = _gHorn[h], b = _gHorn[h + 1]; if (a.end) continue;
+            const t = segSeg(p0, p1, a.p, b.p, _gv[11], _gv[12]), rr = lerp(a.r, b.r, t) * 1.25 + ra + 0.01 * ws, dd = _gv[11].distanceTo(_gv[12]);
+            if (dd < rr && rr - dd > bd) { bd = rr - dd; best.subVectors(_gv[11], _gv[12]).multiplyScalar(bd / (dd || 1e-4)); _gv[3].copy(_gv[11]); }
+          }
+        }
+      }
+      if (it === 6) { left = Math.max(left, bd); break; }   // (what is left after the last swing: for the tests)
+      if (bd < 0.002 * ws) break;
+      // swing the upper arm at the shoulder, about the axis that carries that point most directly out
+      const sh = _gv[0].setFromMatrixPosition(A.ua.matrixWorld), arm = _gv[1].subVectors(_gv[3], sh), L = arm.length(); if (L < 1e-3) break;
+      const ax = _gv[2].crossVectors(arm, best); const al = ax.length(); if (al < 1e-8) break;
+      const ang = Math.min(0.5, Math.atan2(best.length() * 1.1 + 0.004 * ws, L));
+      // into the frame of the shoulder's parent
+      A.ua.parent.getWorldQuaternion(_gq); ax.divideScalar(al).applyQuaternion(_gq.invert());
+      _gq2.setFromAxisAngle(ax, ang); A.ua.quaternion.premultiply(_gq2); A.ua.updateMatrixWorld(true);
+    }
+  }
+  return left;
+}
 // ---------------------------------------------------------------- motion
 const e = (b, x, y, z) => b.rotation.set(x * D2R, y * D2R, z * D2R);
 const add = (b, x, y, z) => { b.rotation.x += x * D2R; b.rotation.y += y * D2R; b.rotation.z += z * D2R; };
