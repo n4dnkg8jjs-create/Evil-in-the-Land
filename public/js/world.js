@@ -649,9 +649,7 @@ export class World {
   // how much of the shoulder stands here: by the distance to the stretch of track it lies over (not to whichever
   // bend is nearest, or it would end in a cliff where another bend becomes the nearer), giving way near other bends
   shoulderK(x, z, nr, half) {
-    const C = this.cave, ramp = (t) => smooth(clamp((t - C.t0 + C.e) / 0.024, 0, 1)) * smooth(clamp((C.t1 + C.e - t) / 0.024, 0, 1));
-    if (this._legacy) return ramp(nr.t) * (1 - smooth(clamp((nr.d - 18) / 30, 0, 1)));
-    let S = this._sh;
+    const C = this.cave; let S = this._sh;
     if (!S) {
       const P = this.path.poly, L = P.length - 1, i0 = Math.max(0, Math.floor((C.t0 - C.e - 0.03) * L)), i1 = Math.min(L, Math.ceil((C.t1 + C.e + 0.03) * L));
       let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (let i = i0; i <= i1; i++) { x0 = Math.min(x0, P[i].x); x1 = Math.max(x1, P[i].x); z0 = Math.min(z0, P[i].z); z1 = Math.max(z1, P[i].z); }
@@ -1408,14 +1406,21 @@ export class World {
     if (prev) { prev.x = ent._cx; prev.z = ent._cz; }
     else if (!knight && this.lots?.length) this.outOfBuildings(p, radius);   // a body put down, not walked here: never inside a building
     this.solids.resolve(p, radius, knight, prev, ent.vel && ent.vel.isVector3 ? ent.vel : null, !knight && ent.vel ? (ent._slide || (ent._slide = { sign: 1 })) : null);
+    // the edges of the world (the summit's rim, the ravine, the crevasse, the map's border); where they push a
+    // body back into something solid (a rock on the rim), the two are settled together once more
+    const bx = p.x, bz = p.z; if (this.keepIn(p, radius)) { ent._cx = p.x; ent._cz = p.z; return; }
+    if ((p.x - bx) ** 2 + (p.z - bz) ** 2 > 1e-8) { this.solids.resolve(p, radius, knight, null, null, null); this.keepIn(p, radius); }
     ent._cx = p.x; ent._cz = p.z;
+  }
+  // inside the world's edges; true when the cave has taken over (its own walls)
+  keepIn(p, radius) {
     const lim = HALF - 8;
     if (this.ch.terrain.kind === 'peak') { const r = Math.hypot(p.x, p.z); if (r > 33) { p.x *= 33 / r; p.z *= 33 / r; } }
     else if (this.ch.terrain.kind === 'mountain') {
       // stay in the ravine
       const nr = this.path.nearest(p.x, p.z);
       // along the ledge, the outer edge is the edge of the world
-      if (this.caveSys && this.caveSys.collide(p, radius, nr)) return;   // in and about the cave: its own walls
+      if (this.caveSys && this.caveSys.collide(p, radius, nr)) return true;   // in and about the cave: its own walls
       let lim = 13; const L = this.ledge;
       if (L && nr.t > L.t0 && nr.t < L.t1) { const a = this.path.at(nr.t), b = this.path.at(Math.min(1, nr.t + 0.004)); const side = Math.sign((p.x - a.x) * -(b.z - a.z) + (p.z - a.z) * (b.x - a.x)); if (side === L.side) lim = 3.0; }
       if (nr.d > lim) { const q = this.path.at(nr.t); const k = lim / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
@@ -1424,6 +1429,7 @@ export class World {
       if (C && B) { const d = (p.x - C.x) * C.nx + (p.z - C.z) * C.nz, along = (p.x - C.x) * C.nz - (p.z - C.z) * C.nx;
         if (Math.abs(d) < 3.6 && Math.abs(along) < 16 && Math.abs(along) > 0.95) { const push = (Math.sign(d) || 1) * 3.6 - d; p.x += C.nx * push; p.z += C.nz * push; } }
     } else { p.x = clamp(p.x, -lim, lim); p.z = clamp(p.z, -lim, lim); }
+    return false;
   }
   inBounds(x, z) { return Math.abs(x) < HALF - 10 && Math.abs(z) < HALF - 10; }
 
@@ -1440,15 +1446,24 @@ export class World {
   // under its rim falls away below the plane it rests on, so no edge stands clear of a slope or a crest. Draws
   // nothing from the generator.
   seat(it, follow = 0.8) {
-    const n = this.normalAt(it.x, it.z, _seatN), h = this.heightAt(it.x, it.z), R = (it.s || 1) * 0.75;
+    const n = this.normalAt(it.x, it.z, _seatN), h = this.heightAt(it.x, it.z), s = it.s || 1, sy = it.sy || s;
+    if (follow > 0) follow = Math.max(follow, smooth(clamp((0.8 - n.y) / 0.3, 0, 1)));   // (on a steep face it lies flat against it)
+    _seatU.set(0, 1, 0);
     if (follow > 0 && n.y < 0.9995) {
-      _seatU.set(0, 1, 0).lerp(n, follow).normalize(); _seatQ.setFromUnitVectors(_seatV.set(0, 1, 0), _seatU);
+      _seatU.lerp(n, follow).normalize(); _seatQ.setFromUnitVectors(_seatV.set(0, 1, 0), _seatU);
       _seatE.set(it.rx || 0, it.ry || 0, it.rz || 0); _seatQ.multiply(_seatQ2.setFromEuler(_seatE)); _seatE.setFromQuaternion(_seatQ, 'XYZ');
       it.rx = _seatE.x; it.ry = _seatE.y; it.rz = _seatE.z;
     }
-    let dip = 0; const gx = -n.x / n.y * follow, gz = -n.z / n.y * follow;
-    for (let k = 0; k < 8; k++) { const dx = Math.cos(k * PI / 4) * R, dz = Math.sin(k * PI / 4) * R; dip = Math.min(dip, this.heightAt(it.x + dx, it.z + dz) - (h + gx * dx + gz * dz)); }
-    it.y += dip; return it;
+    // as deep in the slope (measured square to it) as it was meant to lie in level ground: its centre stands that far
+    // off the slope's plane, which on a slope is further down the vertical through it
+    const c = _seatU.dot(n), e = Math.sqrt(sy * sy * c * c + s * s * (1 - c * c)), y0 = it.y - h;
+    it.y = h + (y0 + e - sy) / Math.max(n.y, 0.35);
+    // and let down wherever the ground under its rim falls away below that plane
+    let dip = 0, lo = h; const R = s * 0.9, gx = -n.x / n.y, gz = -n.z / n.y;
+    for (let k = 0; k < 8; k++) { const dx = Math.cos(k * PI / 4) * R, dz = Math.sin(k * PI / 4) * R, gh = this.heightAt(it.x + dx, it.z + dz); lo = Math.min(lo, gh); dip = Math.min(dip, gh - (h + gx * dx + gz * dz)); }
+    it.y += Math.max(dip, -0.75 * sy);   // (never so far that it sinks out of sight)
+    // on a face too steep to rest on, it is a block standing out of the rock: set into the face as low as its foot
+    return (it.y = lerp(it.y, Math.min(it.y, lo + y0), smooth(clamp((0.55 - n.y) / 0.25, 0, 1)))), it;
   }
   scatter(n, test, cb, tries = 6) {
     const r = this.r; let placed = 0;

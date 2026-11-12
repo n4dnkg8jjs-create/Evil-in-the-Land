@@ -276,7 +276,7 @@ function hornGeo(len, r, curl, seg = 12) {
 }
 // His horns: a tapering tube along a curve, ringed with growth ridges, with a slow twist in the ridging
 // (hg units: the hood's own space, +x his left, +z forward). One horn; the other is its mirror.
-const DEVIL_HORN = [[0.1, 0.17, 0.06], [0.17, 0.31, 0.06], [0.29, 0.44, 0.0], [0.42, 0.5, -0.13], [0.53, 0.46, -0.28], [0.6, 0.33, -0.35], [0.65, 0.2, -0.3], [0.68, 0.12, -0.17], [0.7, 0.12, -0.04]], HORN_R = [0.1, 0.008];
+const DEVIL_HORN = [[0.122, 0.17, 0.06], [0.188, 0.324, 0.06], [0.313, 0.488, 0.03], [0.47, 0.593, -0.08], [0.627, 0.617, -0.24], [0.743, 0.561, -0.38], [0.82, 0.46, -0.4], [0.877, 0.38, -0.29], [0.923, 0.37, -0.14], [0.96, 0.41, -0.03]], HORN_R = [0.105, 0.008];
 function devilHornGeo(pts, r0, r1) {
   const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), TS = 64, RS = 10;
   const g = new THREE.TubeGeometry(curve, TS, 1, RS, false), P = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
@@ -662,9 +662,10 @@ function dressDevil(B, K, def, DU) {
     hg.userData.cowl = bw.isEmpty() ? null : ell(bw);
   }
   // ram horns rooted inside the skull above the temples: they break out through the crown of the hood, sweep up, out
-  // and back, and curl down behind and forward again beside the head, the points out past the cheeks. Each keeps to its
-  // own side, wide of the hood and above the jaw, so they never cross each other or pass back through the cloth (the
-  // old curl was turned inward, and the two crossed over the crown).
+  // and back, and curl round and forward again wide of the head, the points turned up and out above the brow. Each
+  // keeps to its own side and above the hood (the old curl was turned inward, and the two crossed over the crown); the
+  // curl stays high enough that with the head turned and lolled as far as he ever turns it, no horn comes down into
+  // the hood's cowl or the shoulders of the robe.
   hg.userData.horns = [];
   if (def.horns) for (const s of [-1, 1]) {
     const pts = DEVIL_HORN.map(([x, y, z]) => new THREE.Vector3(s * x, y, z));

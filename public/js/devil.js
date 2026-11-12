@@ -944,7 +944,7 @@ export class Hound extends Boss {
     // his breath smokes in the cold, every breath out of him; thicker when he has been running, and when he howls
     if (fx && st !== 'death') {
       A.steam = (A.steam || 0) - dt; const bs = Math.sin(A.breath);
-      if (A.steam <= 0 && bs > 0.5 && (A.lastB ?? 1) <= 0.5) { A.steam = 0.15; B.head.updateWorldMatrix(true, false); const big = clamp(A.ex, 0.3, 1) + (st === 'howl' ? 0.5 : 0); fx.wisp(_hv.set(0, -0.03, 0.66).applyMatrix4(B.head.matrixWorld), 0.13 + 0.14 * big, [0.24, 0.24, 0.25]); if (big > 0.6 || A.jaw > 0.3) fx.wisp(_hv.set(0, -0.15, 0.5).applyMatrix4(B.head.matrixWorld), 0.12 + 0.1 * big, [0.22, 0.22, 0.23]); }
+      if (A.steam <= 0 && bs > 0.5 && (A.lastB ?? 1) <= 0.5) { A.steam = A.ex > 0.5 || st === 'howl' ? 0.15 : 1.1; B.head.updateWorldMatrix(true, false); const big = clamp(A.ex, 0, 1) + (st === 'howl' ? 0.6 : 0); fx.wisp(_hv.set(0, -0.03, 0.66).applyMatrix4(B.head.matrixWorld), 0.07 + 0.09 * big, [0.12, 0.12, 0.13]); if (big > 0.6 && A.jaw > 0.3) fx.wisp(_hv.set(0, -0.15, 0.5).applyMatrix4(B.head.matrixWorld), 0.07 + 0.07 * big, [0.11, 0.11, 0.12]); }
       A.lastB = bs;
     }
     this.spheres[0].mul = st === 'reel' ? 2 : 1.4;
@@ -987,13 +987,13 @@ export class Serpent extends Boss {
     this.prof = Array.from({ length: R2 }, (_, k) => { const a = k / SRADIAL * TAU, p = pf(a), p0 = pf(a - 1e-3), p1 = pf(a + 1e-3), nx = p1[1] - p0[1], ny = -(p1[0] - p0[0]), l = Math.hypot(nx, ny); return [p[0], p[1], nx / l, ny / l]; });
     let v = 0;
     for (let j = 0; j < M; j++) {
-      const r = this.ringR[j] = serpentRad(j / SSUB) * lerp(NECK.r / (SRAD * 0.6), 1, smooth(clamp(j / 14, 0, 1)));   // the neck narrow behind the broad head
+      const r = this.ringR[j] = serpentRad(j / SSUB) * lerp(NECK.r / (SRAD * 0.6), 1, smooth(clamp(j / 7, 0, 1)));   // the neck narrow behind the broad head
       if (j > 0) v += (SSP / SSUB) * SCALE_ROWS_M / Math.max(0.3, r / SRAD);   // scales shrink with the body, so they stay scale-shaped
       for (let k = 0; k <= SRADIAL; k++) { uv[(j * R2 + k) * 2] = k / SRADIAL * SCALE_COLS; uv[(j * R2 + k) * 2 + 1] = v; }
     }
     for (let j = 0; j < M - 1; j++) for (let k = 0; k < SRADIAL; k++) { const a = j * R2 + k, b = a + 1, c = a + R2, d = c + 1; idx.push(a, c, b, b, c, d); }
     const HC = M * R2, TT = HC + 1;
-    for (let k = 0; k < SRADIAL; k++) { idx.push(HC, k, k + 1); const a = (M - 1) * R2 + k; idx.push(TT, a + 1, a); }
+    for (let k = 0; k < SRADIAL; k++) { const a = (M - 1) * R2 + k; idx.push(TT, a + 1, a); }   // (the neck is left open: its end is inside the head, where the throat goes into it)
     uv[HC * 2] = 0.25 * SCALE_COLS; uv[HC * 2 + 1] = 0; uv[TT * 2] = 0.25 * SCALE_COLS; uv[TT * 2 + 1] = v;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nV * 3), 3).setUsage(THREE.DynamicDrawUsage));
@@ -1344,9 +1344,10 @@ export class Serpent extends Boss {
     }
     C[M - 1].copy(P[SN - 1]);
     // the first rings run straight back out of the head along its own axis, and bend from there into the path
-    const JB = 7, hq = this.head.quaternion, hx = this._hx || (this._hx = new THREE.Vector3()), hv = this._hv || (this._hv = new THREE.Vector3());
+    // (a metre of it straight, clear of the jaw however wide it gapes; then over three metres it bends into the path)
+    const JB = 12, hq = this.head.quaternion, hx = this._hx || (this._hx = new THREE.Vector3()), hv = this._hv || (this._hv = new THREE.Vector3()), bw = (j) => smooth(clamp((j - 3) / (JB - 3), 0, 1));
     hx.set(1, 0, 0).applyQuaternion(hq);
-    for (let j = 0; j < JB; j++) { hv.set(0, NECK.y, NECK.z - j * SSP / SSUB).applyQuaternion(hq).add(this.head.position); C[j].lerpVectors(hv, C[j], smooth(j / JB)); }
+    for (let j = 0; j < JB; j++) { hv.set(0, NECK.y, NECK.z - j * SSP / SSUB).applyQuaternion(hq).add(this.head.position); C[j].lerpVectors(hv, C[j], bw(j)); }
     const t = this._vt || (this._vt = new THREE.Vector3()), s = this._vs || (this._vs = new THREE.Vector3()), n = this._vn || (this._vn = new THREE.Vector3()), ps = this._vps || (this._vps = new THREE.Vector3());
     const t0 = this._t0 || (this._t0 = new THREE.Vector3()), t1 = this._t1 || (this._t1 = new THREE.Vector3());
     // frames from the tail (always lying on the ground) up to the neck (which may stand straight up), so they never twist
@@ -1355,7 +1356,7 @@ export class Serpent extends Boss {
       s.set(-t.z, 0, t.x); const sl = s.length();
       if (j < M - 1) { ps.addScaledVector(t, -ps.dot(t)); if (ps.lengthSq() < 1e-8) ps.copy(s); ps.normalize(); if (sl > 0.3) s.divideScalar(sl).lerp(ps, 0.5).normalize(); else s.copy(ps); }
       else if (sl > 1e-4) s.divideScalar(sl); else s.set(1, 0, 0);
-      if (j < JB) { hv.copy(hx).addScaledVector(t, -hx.dot(t)); if (hv.lengthSq() > 1e-6) s.lerp(hv.normalize(), 1 - smooth(j / JB)).normalize(); }   // turned with the head
+      if (j < JB) { hv.copy(hx).addScaledVector(t, -hx.dot(t)); if (hv.lengthSq() > 1e-6) s.lerp(hv.normalize(), 1 - bw(j)).normalize(); }   // turned with the head
       ps.copy(s); n.crossVectors(s, t).normalize();
       if (j === 0) t0.copy(t); if (j === M - 1) t1.copy(t);
       const r = this.ringR[j] * (1 + 0.022 * Math.sin(time * 2.1 - j * 0.11)), c = C[j], base = j * R2, hd = j < 44 ? this.hood * Math.exp(-(((j - 15) / 9) ** 2)) : 0;   // the neck spread flat below the head when he threatens
@@ -1383,7 +1384,7 @@ export class Serpent extends Boss {
     }
     this.tele.update(dt, W, fx);
     this.hitFlash = Math.max(0, this.hitFlash - dt * 4);
-    this.mat.emissiveIntensity = this.hmat.emissiveIntensity = (this.phase >= 3 ? 0.45 + 0.3 * Math.sin(time * 2.6) : 0) + this.hitFlash * 2.4;
+    this.mat.emissiveIntensity = (this.phase >= 3 ? 0.45 + 0.3 * Math.sin(time * 2.6) : 0) + this.hitFlash * 2.4; this.hparts.setGlow(this.mat.emissiveIntensity);
     const st = this.state; this.hood = damp(this.hood, st === 'death' || this.burrowed ? 0 : st === 'strike' ? (this.rear > 4.5 ? 1 : 0) : st === 'loom' ? 0.5 : st === 'spit' || st === 'brood' || st === 'rain' || st === 'intro' ? 0.85 : st === 'thrash' ? 0.6 : 0, 5, dt);
     const P = this._P || (this._P = this.vis.map(() => new THREE.Vector3()));
     for (let i = 0; i < SN; i++) P[i].copy(this.vis[i]);

@@ -213,9 +213,9 @@ const HST = [
   [0.26, 0.103, 0.068, 0.094, 0.1, 0.032, 0.098, -0.058, 0.095, -0.115, 0.086, -0.104, -0.1, 2],
   [0.33, 0.083, 0.05, 0.07, 0.086, 0.02, 0.089, -0.06, 0.087, -0.112, 0.078, -0.101, -0.097, 3],
   [0.42, 0.07, 0.044, 0.06, 0.078, 0.01, 0.081, -0.06, 0.079, -0.108, 0.07, -0.097, -0.094, 3],
-  [0.5, 0.0563, 0.0369, 0.052, 0.07, 0, 0.073, -0.058, 0.071, -0.104, 0.062, -0.093, -0.09, 2],
-  [0.56, 0.0485, 0.0328, 0.045, 0.06, -0.005, 0.062, -0.055, 0.058, -0.095, 0.049, -0.084, -0.085, 2],
-  [0.6, 0.0427, 0.0287, 0.038, 0.048, -0.006, 0.046, -0.05, 0.036, -0.077, 0.02, -0.07, -0.07, 1],
+  [0.5, 0.0563, 0.0349, 0.052, 0.0662, 0, 0.0706, -0.058, 0.071, -0.104, 0.062, -0.093, -0.09, 2],
+  [0.56, 0.0485, 0.0289, 0.045, 0.0528, -0.005, 0.0575, -0.055, 0.058, -0.095, 0.049, -0.084, -0.085, 2],
+  [0.6, 0.0427, 0.0253, 0.038, 0.0422, -0.006, 0.0427, -0.05, 0.036, -0.077, 0.02, -0.07, -0.07, 1],
   [0.618, 0.02, 0.016, 0.017, 0.022, -0.01, 0.02, -0.03, 0.015, -0.05, 0.008, -0.05, -0.05, 1],
   [0.624, 0, 0.002, -0.004, 0.003, -0.012, 0.003, -0.02, 0.002, -0.03, 0.001, -0.03, -0.03, 1],
 ];
@@ -299,7 +299,7 @@ export function buildHoundModel() {
       if (top > 0.35 && z > -0.7 && z < 1.72) { p = 2.6 * top; len = 0.1 + 0.11 * gauss(z, 1.05, 0.5) + 0.05 * gauss(z, 0.45, 0.25); stand = 0.36; droop = 0.15; hack = top * ss(-0.7, -0.3, z); wd = 0.05; }
       else if (z > 0.72) { p = 2.4; len = 0.12 + 0.12 * under + 0.04 * side; stand = 0.3; droop = 0.3 + 0.5 * under; hack = 0.45 * (1 - under) * ss(0.85, 1.2, z); wd = 0.055; }
       else if (under > 0.3) { p = 0.6; len = 0.06 + 0.07 * under; droop = 0.9; stand = 0.2; wd = 0.045; }
-      else { p = 1.8 - 0.6 * ribZone(z) * side; len = 0.055 + 0.04 * gauss(z, -1.1, 0.3) + 0.03 * gauss(z, 0.55, 0.25); stand = 0.26; wd = 0.038; }
+      else { p = 1.75 - 0.6 * ribZone(z) * side; len = 0.07 + 0.04 * gauss(z, -1.1, 0.3) + 0.03 * gauss(z, 0.55, 0.25); stand = 0.34; droop = 0.35; wd = 0.04; }
       if (rnd() > p * ss(0.4, 0.8, pt.fur) - n) return null;
       const comb = [0, -q.t[1] - 0.55 * side * (1 - top), -q.t[2]];   // back along him, and down his sides
       return { len: len * (0.7 + 0.6 * rnd()), stand: stand * (0.7 + 0.6 * rnd()), droop, hack, wd: wd * (0.75 + 0.5 * rnd()), comb };
@@ -409,7 +409,7 @@ export function buildHoundModel() {
       const eD = Math.hypot(Math.abs(q.x) - EYE[0], q.y - EYE[1], z - EYE[2]); c = c.map((v) => v * (0.25 + 0.75 * ss(EYE_R * 0.9, EYE_R * 1.9, eD)));   // the black rims of the lids
       const scar = ss(0.006, 0, Math.abs((z - 0.3) * 0.45 + Math.abs(q.x) * 0.9 - 0.12)) * (z > 0.27 && z < 0.5 && t < 2.6 && q.side < 0 ? 1 : 0);   // an old pale cut across the muzzle
       c = mix3(c, [0.11, 0.105, 0.1], scar); fur *= 1 - scar;
-      const lip = ss(3.3, 4.0, t), gum = ss(4.0, 4.4, t), tr = torn(q) * ss(2.8, 3.8, t);
+      const lip = ss(3.55, 4.0, t), gum = ss(4.0, 4.4, t), tr = torn(q) * ss(2.8, 3.8, t);
       if (lip > 0) { c = mix3(c, [0.01, 0.009, 0.009], lip); wet = Math.max(wet, lip * 0.55); fur *= 1 - lip; }   // the black lips
       if (gum > 0 || tr > 0) {   // the gums: black, mottled slate where the pigment has gone
         const g = Math.max(gum, tr), mv = vn(z * 55, t * 7, q.side * 3 + 4), mot = mix3([0.02, 0.016, 0.018], [0.11, 0.07, 0.072], ss(0.42, 0.6, mv));
@@ -432,14 +432,14 @@ export function buildHoundModel() {
   const jBase = M.n;
   secLoft(M, JST, 7, {
     m: 3, F, cards,
-    weights: (q) => { const lw = ss(2.3, 3.0, q.t) * (1 - ss(3.2, 4.0, q.t)) * ss(0.3, 0.45, q.z); return [['jaw', Math.max(1e-3, 1 - lw)], ['lipLo', lw]]; },
+    weights: (q) => { const lw = ss(2.5, 3.0, q.t) * (1 - ss(3.2, 4.0, q.t)) * ss(0.42, 0.52, q.z); return [['jaw', Math.max(1e-3, 1 - lw)], ['lipLo', lw]]; },
     paint: (q) => {
       const z = q.z, t = q.t;
       if (t < 2.2) { const back = 1 - ss(0, 0.3, z), g = ss(0.9, 1.6, t); return { c: mix3([0.03 * (1 - 0.6 * back), 0.022 * (1 - 0.65 * back), 0.025 * (1 - 0.65 * back)], [0.016, 0.013, 0.015], g), wet: 0.95, heat: back * (1 - g), fur: 0 }; }
       const r = coat(q.P, { noWounds: true, fur: 0.9 }), lip = 1 - ss(3.0, 3.8, t);
       return { c: mix3(r.c, [0.01, 0.009, 0.009], lip), wet: Math.max(r.wet, lip * 0.6), fur: r.fur * (1 - lip) };
     },
-    card: (q, pt) => { if (q.t < 4.2 || pt.fur < 0.6 || q.z > 0.42 || rnd() > 0.4) return null; return { len: 0.04 + 0.06 * rnd() * (1 - q.z), stand: 0.25, droop: 0.7, hack: 0, wd: 0.04, comb: [0, -0.5, -1] }; },
+    card: (q, pt) => { if (q.t < 3.5 || pt.fur < 0.6 || q.z > 0.5 || rnd() > (q.t > 4.2 ? 0.55 : 0.4)) return null; const under = ss(4.0, 5.0, q.t); return { len: 0.025 + 0.05 * under * rnd() * (1 - q.z), stand: 0.22, droop: 0.3 + 0.4 * under, hack: 0, wd: 0.032, comb: [0, -0.35 * under, -1] }; },
   });
   // the tongue, lying in the trough of the jaw
   loft(M, [[0.06, 0.04, 0], [0.18, 0.05, 0.1], [0.36, 0.045, 0.7], [0.5, 0.034, 1], [0.56, 0.022, 1], [0.575, 0.004, 1]].map(([z, w, bi]) => ({ c: Hf(0, stAt(JST, z, 1) + 0.004 - 0.012 * gauss(z, 0.2, 0.15), z), w, f: 0.012, b: 0.012, n: 3, bi, e: 0.8 })), {
@@ -464,9 +464,9 @@ export function buildHoundModel() {
     part({ kind: 'tooth', root: root.slice(), up }, () => spike(M, root, d, (crown + sink) * HS, rx * HS, rz * HS, [0, 0, 1], [0, 0, -curve], TC, TT, [[up ? 'head' : 'jaw', 1]], 0.65, blade));
   };
   for (const s of [1, -1]) {
-    for (let i = 0; i < 3; i++) { const z = 0.596 - i * 0.011 - i * i * 0.002; tooth(true, s, z, 0.008 + i * 0.013, 0.017 + i * 0.003, 0.006, 0.0045, 0, 0, 0.12); tooth(false, s, z - 0.012, 0.007 + i * 0.011, 0.014 + i * 0.002, 0.0055, 0.004, 0, 0, 0.18); }
+    for (let i = 0; i < 3; i++) { const z = 0.596 - i * 0.011 - i * i * 0.002; tooth(true, s, z, 0.008 + i * 0.013, 0.017 + i * 0.003, 0.006, 0.0045, 0, 0, 0.12); tooth(false, s, z - 0.014, Math.min(0.006 + i * 0.01, loG(z - 0.014)[0] + 0.003), 0.014 + i * 0.002, 0.0055, 0.004, 0, 0, 0.18); }
     tooth(true, s, 0.52, null, 0.068, 0.015, 0.017, 0, 0.24, 0.05, 0.022);       // the fangs
-    tooth(false, s, 0.545, null, 0.052, 0.012, 0.014, 0, 0.08, 0.18, 0.018);
+    tooth(false, s, 0.545, loG(0.545)[0] + 0.005, 0.052, 0.012, 0.014, 0, 0.08, 0.18, 0.018);
     [[0.472, 0.01, 0.006], [0.43, 0.015, 0.009], [0.375, 0.019, 0.011], [0.29, 0.024, 0.018], [0.225, 0.01, 0.011]].forEach(([z, c, r]) => tooth(true, s, z, null, c, r * 0.42, r, 1, 0.06));   // premolars, the shearing tooth, molars
     [[0.49, 0.01, 0.006], [0.43, 0.014, 0.009], [0.37, 0.017, 0.011], [0.25, 0.022, 0.017]].forEach(([z, c, r]) => tooth(false, s, z, null, c, r * 0.42, r, 1, -0.04));
     // spittle: strings from the upper gums to the lower, which stretch as he opens his mouth; one hangs from the lip
@@ -507,7 +507,7 @@ export function buildHoundModel() {
   const geo = M.geometry();
   // ---- the coat: locks of matted hair grown from the hide, lying with the grain
   const cgeo = buildCards(geo, cards, rnd);
-  return (_tpl = { joints, idx, geo, cgeo, eyes, parts, ranges: { head: [hBase, hEnd], jaw: [jBase, M.n] }, M });
+  return (_tpl = { joints, idx, geo, cgeo, eyes, parts, ranges: { head: [hBase, hEnd], jaw: [jBase, M.n] } });   // (parts and ranges: for checking that nothing floats)
 }
 
 // each lock: a strip of three rows from a root a little under the hide, out along the grain, bowed by its weight;
@@ -516,7 +516,7 @@ function buildCards(geo, cards, rnd) {
   const P = geo.attributes.position, N = geo.attributes.normal, SI = geo.attributes.skinIndex, SW = geo.attributes.skinWeight, I = geo.index.array;
   const want = new Set(cards.map((C) => C.vi)), fan = new Map();   // the triangles round each vertex that grows a lock
   for (let t = 0; t < I.length; t += 3) for (let k = 0; k < 3; k++) if (want.has(I[t + k])) { const L = fan.get(I[t + k]) || fan.set(I[t + k], []).get(I[t + k]); L.push(t); }
-  const pa = new V3(), pb = new V3(), pc = new V3();
+  const pa = new V3(), pb = new V3(), pc = new V3(), SIa = SI.array, SWa = SW.array, bI = new Int32Array(16), bW = new Float32Array(16);
   const n = cards.length, NV = n * 6, pos = new Float32Array(NV * 3), nrm = new Float32Array(NV * 3), uv = new Float32Array(NV * 2), col = new Float32Array(NV * 3), root = new Float32Array(NV * 3), hk = new Float32Array(NV);
   const si = new Uint16Array(NV * 4), sw = new Float32Array(NV * 4), ind = new Uint32Array(n * 12);
   const nv = new V3(), cb = new V3(), sd = new V3(), d0 = new V3(), r0 = new V3(), c = new V3(), t1 = new V3(), bn = new V3(), down = new V3(0, -1, 0);
@@ -528,8 +528,9 @@ function buildCards(geo, cards, rnd) {
     const F = fan.get(C.vi);   // scattered over the hide round its vertex (a point of one of its triangles), rooted a little under it
     let wb = [[C.vi, 1]];   // and skinned as that point of the hide is: its corners' weights, blended
     if (F) { const t = F[(rnd() * F.length) | 0]; pa.fromBufferAttribute(P, I[t]); pb.fromBufferAttribute(P, I[t + 1]); pc.fromBufferAttribute(P, I[t + 2]); let u = rnd(), w = rnd(); if (u + w > 1) { u = 1 - u; w = 1 - w; } r0.copy(pa).multiplyScalar(1 - u - w).addScaledVector(pb, u).addScaledVector(pc, w).lerp(r0, 0.25); wb = [[I[t], 0.75 * (1 - u - w)], [I[t + 1], 0.75 * u], [I[t + 2], 0.75 * w], [C.vi, 0.25]]; }
-    const bw = new Map(); for (const [vi, f] of wb) for (let k = 0; k < 4; k++) { const x = SW.getComponent(vi, k) * f; if (x > 0) { const b = SI.getComponent(vi, k); bw.set(b, (bw.get(b) || 0) + x); } }
-    const top = [...bw].sort((p, q) => q[1] - p[1]).slice(0, 4), wsum = top.reduce((a, e) => a + e[1], 0);
+    let nb = 0; for (const [vi, f] of wb) for (let k = 0; k < 4; k++) { const x = SWa[vi * 4 + k] * f; if (!(x > 0)) continue; const b = SIa[vi * 4 + k]; let m = 0; while (m < nb && bI[m] !== b) m++; if (m === nb) { bI[nb] = b; bW[nb++] = x; } else bW[m] += x; }
+    for (let k = 0; k < 4; k++) { let m = k; for (let j = k + 1; j < nb; j++) if (bW[j] > bW[m]) m = j; if (m !== k && m < nb) { const tb = bI[k], tw0 = bW[k]; bI[k] = bI[m]; bW[k] = bW[m]; bI[m] = tb; bW[m] = tw0; } }
+    const kn = Math.min(4, nb); let wsum = 0; for (let k = 0; k < kn; k++) wsum += bW[k];
     r0.addScaledVector(nv, -0.007);
     const tw = (rnd() - 0.5) * 0.7; cb.applyAxisAngle(nv, tw); sd.crossVectors(nv, cb).normalize();
     d0.copy(cb).multiplyScalar(Math.cos(C.stand)).addScaledVector(nv, Math.sin(C.stand)).normalize();
@@ -540,9 +541,9 @@ function buildCards(geo, cards, rnd) {
       for (const e of [-1, 1]) {
         t1.copy(c).addScaledVector(sd, e * hw);
         bn.copy(nv).multiplyScalar(0.8).addScaledVector(d0, 0.5 * u + 0.15).normalize();   // lit as the hide, leaning with the hair toward the tip
-        pos.set([t1.x, t1.y, t1.z], v * 3); nrm.set([bn.x, bn.y, bn.z], v * 3); root.set([r0.x, r0.y, r0.z], v * 3); hk[v] = C.hack || 0;
-        uv.set([(col0 + (e > 0 ? 1 : 0)) / 4, u], v * 2); col.set([tint, tint, tint], v * 3);
-        for (let k = 0; k < 4; k++) { si[v * 4 + k] = top[k] ? top[k][0] : 0; sw[v * 4 + k] = top[k] ? top[k][1] / wsum : 0; }
+        const v3 = v * 3; pos[v3] = t1.x; pos[v3 + 1] = t1.y; pos[v3 + 2] = t1.z; nrm[v3] = bn.x; nrm[v3 + 1] = bn.y; nrm[v3 + 2] = bn.z; root[v3] = r0.x; root[v3 + 1] = r0.y; root[v3 + 2] = r0.z; col[v3] = col[v3 + 1] = col[v3 + 2] = tint;
+        hk[v] = C.hack || 0; uv[v * 2] = (col0 + (e > 0 ? 1 : 0)) / 4; uv[v * 2 + 1] = u;
+        for (let k = 0; k < 4; k++) { si[v * 4 + k] = k < kn ? bI[k] : 0; sw[v * 4 + k] = k < kn ? bW[k] / wsum : 0; }
         v++;
       }
     }
@@ -608,7 +609,7 @@ function cardTexture() {
         for (let dy = -1; dy <= 1; dy++) for (let dx = -rr; dx <= rr; dx++) {
           const px = cx + dx, py = cy + dy; if (px < 1 || px > 62 || py < 0 || py >= H) continue;
           const cov = clamp(r + 0.5 - Math.hypot(px - x, py - y), 0, 1) * (1 - 0.25 * t); if (cov <= 0) continue;
-          const i = py * W + x0 + px; if (cov > A[i]) { A[i] = cov; L[i] = shade * (0.3 + 0.75 * Math.min(1, t * 1.7)); }
+          const i = py * W + x0 + px; if (cov > A[i]) { A[i] = cov; L[i] = shade * (0.3 + 1.0 * Math.min(1, t * 1.6)); }
         }
       }
     }
@@ -631,7 +632,7 @@ const DISSOLVE = `
 export function houndMaterial() {
   const T = houndTextures();
   const u = { uDissolve: { value: 0 }, uHit: { value: 0 }, uHeat: { value: 0 }, uTime: { value: 0 }, uRim: { value: 0.22 }, uHackle: { value: 0 }, uSnarl: { value: 0 }, uShine: { value: 1 }, uSkin: { value: T.skin } };
-  const mat = new THREE.MeshPhysicalMaterial({ normalMap: T.fur, normalScale: new THREE.Vector2(0.6, 0.6), vertexColors: true, roughness: 0.8, metalness: 0, specularIntensity: 0.6, sheen: 1, sheenColor: new THREE.Color(0.2, 0.21, 0.23), sheenRoughness: 0.5, side: THREE.DoubleSide });
+  const mat = new THREE.MeshPhysicalMaterial({ normalMap: T.fur, normalScale: new THREE.Vector2(0.6, 0.6), vertexColors: true, roughness: 0.8, metalness: 0, specularIntensity: 0.6, sheen: 1, sheenColor: new THREE.Color(0.085, 0.09, 0.1), sheenRoughness: 0.55, side: THREE.DoubleSide });
   mat.userData.u = u;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
@@ -643,14 +644,14 @@ export function houndMaterial() {
       if (uDissolve > 0.0 && dnz < uDissolve) discard;
       float wrk = uSnarl * vSurf.z * (0.5 + 0.5 * cos(vDPos.z * 150.0 + sin(vDPos.x * 60.0) * 1.5));`)
       .replace('#include <map_fragment>', `#include <map_fragment>
-      diffuseColor.rgb *= mix(texture2D(uSkin, vNormalMapUv * 1.4).a, texture2D(normalMap, vNormalMapUv).a, vSurf.w) * 1.45 * (1.0 - 0.75 * wrk);`)
+      diffuseColor.rgb *= mix(texture2D(uSkin, vNormalMapUv * 1.4).a, texture2D(normalMap, vNormalMapUv).a, vSurf.w) * 1.45 * (1.0 - 0.75 * wrk) * (1.0 - 0.35 * vSurf.w);`)   // (the furred hide is the undercoat, in the shade of the locks)
       .replace('mapN.xy *= normalScale;', `{ vec3 sN = texture2D(uSkin, vNormalMapUv * 1.4).xyz * 2.0 - 1.0; mapN = mix(sN, mapN, vSurf.w); }
       mapN.xy *= normalScale; mapN.y += 2.6 * uSnarl * vSurf.z * sin(vDPos.z * 150.0 + sin(vDPos.x * 60.0) * 1.5);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.13, vSurf.x);')
       .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\nmaterial.sheenColor *= vSurf.w;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
       totalEmissiveRadiance += vec3(0.85, 0.2, 0.03) * vSurf.y * vSurf.y * uHeat * (0.7 + 0.3 * sin(uTime * 6.0 + vDPos.z * 11.0 + vDPos.y * 7.0));
-      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * (0.35 + 0.65 * vSurf.w) * pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.5);
+      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * (0.35 + 0.65 * vSurf.w) * pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 5.0) * smoothstep(-0.35, 0.5, normal.y);   // moonlight on his upper edges only
       totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit;
       if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);
   };
@@ -673,7 +674,7 @@ function coatMaterial(u) {
       if (uDissolve > 0.0 && dnz < uDissolve + 0.05) discard;`)
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize(vNormal); nonPerturbedNormal = normal;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * 0.18 * vTip * pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 4.0);
+      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * 0.25 * vTip * pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 4.0) * smoothstep(-0.2, 0.6, normal.y);
       totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit;`);
   };
   mat.customProgramCacheKey = () => 'hound-coat-v1';
