@@ -520,7 +520,7 @@ export class Hound extends Boss {
     this.legs = HOUND_LEGS.map(() => ({ p: new THREE.Vector3(), from: new THREE.Vector3(), sw: false, q: 0, qd: 0.13, lift: 0, init: false, fly: false }));
     this.A = { lx: 0, lz: 0, vx: 0, vz: 0, lyaw: 0, yr: 0, gph: 0, gmix: 0, settled: true, breath: 0, ex: 0, ly: 0, lp: 0, hip: 0, chest: 0, shift: 0, sway: 0, neckP: 0, headP: 0, jaw: 0.1, roll: 0, pitch: 0, tail: 0, ears: 0, low: 0, first: true };
     const B = this.B;
-    this.spheres = [{ name: 'head', bone: B.head, off: [0, 0, 0.42], r: 0.62, mul: 1.4 }, { name: 'neck', bone: B.neck2, off: [0, 0, 0.1], r: 0.52, mul: 1.15 }, { name: 'chest', bone: B.chest, off: [0, -0.35, 0.05], r: 0.78, mul: 0.95 },
+    this.spheres = [{ name: 'head', bone: B.head, off: [0, -0.03, 0.3], r: 0.5, mul: 1.4 }, { name: 'neck', bone: B.neck2, off: [0, 0, 0.1], r: 0.52, mul: 1.15 }, { name: 'chest', bone: B.chest, off: [0, -0.35, 0.05], r: 0.78, mul: 0.95 },
       { name: 'ribs', bone: B.ribs, off: [0, -0.3, 0.05], r: 0.72, mul: 0.95 }, { name: 'loin', bone: B.loin, off: [0, -0.15, 0.1], r: 0.58, mul: 0.95 }, { name: 'hips', bone: B.hips, off: [0, -0.15, -0.1], r: 0.64, mul: 0.95 }].map((s) => ({ ...s, c: new THREE.Vector3() }));
   }
   setState(s) { super.setState(s); this.f = {}; }
@@ -819,7 +819,7 @@ export class Hound extends Boss {
     const spd = Math.hypot(A.vx, A.vz), run = clamp((spd - 6) / 5, 0, 1), near = Math.hypot(this.look.x - pos.x, this.look.z - pos.z);
     // ---- the pose the moment asks for
     const lowK = (1 - run) * smooth(clamp((17 - near) / 6, 0, 1));
-    let hip = -0.1 * lowK - 0.06 * run, chest = -0.3 * lowK - 0.12 * run, shift = 0, sway = 0, neckP = 0.5 * lowK + 0.38 * run, headP = 0, jaw = 0.1 + 0.14 * run, roll = 0, pitch = 0, lookW = 1, tail = run, ears = lowK, shake = 0, air = 0, airU = 0, spin = 0, hop = 0, snapJ = false, attack = 0;
+    let hip = -0.1 * lowK - 0.06 * run, chest = -0.3 * lowK - 0.12 * run, shift = 0, sway = 0, neckP = 0.62 * lowK + 0.38 * run, headP = 0, jaw = 0.1 + 0.14 * run, roll = 0, pitch = 0, lookW = 1, tail = run, ears = lowK, shake = 0, air = 0, airU = 0, spin = 0, hop = 0, snapJ = false, attack = 0;
     switch (st) {
       case 'intro': if (T > 1.6) { const w = smooth(clamp((T - 1.6) / 0.3, 0, 1)); chest = -0.36 * w - 0.2; hip = -0.1; neckP = 0.5; jaw = 0.1 + 0.4 * w; ears = 1; tail = 0.6; } break;
       case 'strike': case 'maul': {
@@ -854,6 +854,14 @@ export class Hound extends Boss {
     const k16 = 1 - Math.exp(-16 * dt);
     for (const [n, v] of [['hip', hip], ['chest', chest], ['shift', shift], ['sway', sway], ['neckP', neckP], ['headP', headP], ['roll', roll], ['pitch', pitch], ['tail', tail], ['ears', ears]]) A[n] += (v - A[n]) * k16;
     A.jaw = snapJ ? jaw : damp(A.jaw, jaw, 18, dt);
+    // the lips drawn back off the fangs when he means it (quivering), the hackles up along his back; the eyes go dull as he dies
+    const SN = { intro: T > 1.4 ? 1 : 0.3, strike: 1, maul: 1, worry: 1, recover: 0.5, sidestep: 0.9, backoff: 0.75, pounce: 1, leap: 0.85, whirl: 1, charge: 1, howl: 0, reel: 0.2, death: 0, vanish: 0.35, prowl: 0.7 }[st];
+    const snarl = SN ?? (0.3 + 0.7 * smooth(clamp((12 - near) / 6, 0, 1))) * (1 - 0.5 * run), hk = st === 'death' ? 0 : st === 'howl' || attack > 0.5 ? 1 : 0.35 + 0.65 * smooth(clamp((15 - near) / 7, 0, 1));
+    A.snarl = damp(A.snarl || 0, snarl, snarl > (A.snarl || 0) ? 9 : 3, dt); A.hack = damp(A.hack || 0, hk, hk > (A.hack || 0) ? 3 : 0.8, dt);
+    U.uSnarl.value = A.snarl; U.uHackle.value = A.hack; U.uShine.value = st === 'death' ? Math.max(0, 1 - this.deathT * 1.5) : 1;
+    const lift = (0.045 + 0.004 * Math.sin(time * 33) + 0.003 * Math.sin(time * 51.7)) * A.snarl;
+    for (const [b, sd] of [[B.lipL, 1], [B.lipR, -1]]) { const r = b.userData.rest; b.position.set(r.x + sd * 0.01 * A.snarl, r.y + lift * (sd > 0 ? 1 : 0.9), r.z - 0.01 * A.snarl); }
+    B.lipLo.position.y = B.lipLo.userData.rest.y - 0.014 * A.snarl;
     A.ex = damp(A.ex, clamp(spd / 9 + attack * 0.7, 0, 1), attack || spd > 3 ? 3 : 0.35, dt); A.breath += dt * (1.3 + 3.6 * A.ex) * TAU;
     // ---- the trunk
     const yawV = this.yaw + spin, sy = Math.sin(yawV), cy = Math.cos(yawV), gph = A.gph * TAU;
@@ -870,12 +878,12 @@ export class Hound extends Boss {
     const shk = A.shake = damp(A.shake || 0, shake, 14, dt), sh = shk * Math.sin(time * (st === 'reel' ? 9 : 44));
     B.loin.rotation.set(flex * 0.2, bend, 0); B.ribs.rotation.set(-flex * 0.1, bend * 0.8, 0); B.chest.rotation.set(-flex * 0.08, bend * 0.5 + A.ly * 0.1, 0);
     B.neck1.rotation.set(A.neckP * 0.55 + A.lp * 0.3, A.ly * 0.3, 0); B.neck2.rotation.set(A.neckP * 0.32 + A.lp * 0.3, A.ly * 0.3 + sh * 0.35, -A.ly * 0.1);
-    B.head.rotation.set(A.headP - A.neckP * 0.5 + A.lp * 0.4, A.ly * 0.3 + sh * 0.55, sh * 0.45 - A.ly * 0.12);
+    B.head.rotation.set(A.headP - A.neckP * 0.5 + A.lp * 0.4, A.ly * 0.3 + sh * 0.55, sh * 0.45 - A.ly * 0.12 + 0.07 * lowK * Math.sin(time * 0.6));   // (stalking, the head cocked a little, now one way, now the other)
     const pant = Math.max(0, Math.sin(A.breath * 2)) * A.ex;
     B.jaw.rotation.x = A.jaw * 0.95 + pant * 0.07 * (A.jaw < 0.4 ? 1 : 0); B.tongue.rotation.x = 0.04 + pant * 0.12 + (st === 'death' ? 0.3 : 0);
     const br = 0.014 * (0.6 + A.ex) * Math.sin(A.breath); B.ribL.position.x = B.ribL.userData.rest.x + br; B.ribR.position.x = B.ribR.userData.rest.x - br;
     const fl = Math.max(0, Math.sin(time * 0.9 + 1.3) - 0.93) * 6;
-    B.earL.rotation.set(-0.75 * A.ears + fl, 0, 0.1 * A.ears); B.earR.rotation.set(-0.75 * A.ears - fl * 0.5, 0, -0.1 * A.ears);
+    B.earL.rotation.set(-0.9 * A.ears + fl, 0, -0.3 * A.ears); B.earR.rotation.set(-0.9 * A.ears - fl * 0.5, 0, 0.3 * A.ears);   // pinned flat back
     const wag = (1 - A.tail) * 0.14;
     B.tail1.rotation.set(0.1 + A.tail * 0.75, -bend * 1.2 + Math.sin(time * 1.7) * wag, 0); B.tail2.rotation.set(A.tail * 0.3, -bend * 1.5 + Math.sin(time * 1.7 - 0.7) * wag * 1.4, 0);
     B.tail3.rotation.set(A.tail * 0.25 + flex * 0.15, -bend * 1.5 + Math.sin(time * 1.7 - 1.4) * wag * 1.6, 0); B.tail4.rotation.set(A.tail * 0.2, Math.sin(time * 1.7 - 2.1) * wag * 1.8, 0);
@@ -933,8 +941,12 @@ export class Hound extends Boss {
       }
       U.uDissolve.value = clamp((this.deathT - 2.6) / 2.2, 0, 1);
     }
-    // his breath smokes when he has been running, and when he howls
-    if (fx && st !== 'death' && (A.ex > 0.5 || st === 'howl')) { A.steam = (A.steam || 0) - dt; if (A.steam <= 0 && Math.sin(A.breath) > 0.6) { A.steam = 0.22; B.head.updateWorldMatrix(true, false); fx.wisp(_hv.set(0, -0.12, 0.85).applyMatrix4(B.head.matrixWorld), 0.22, [0.2, 0.2, 0.21]); } }
+    // his breath smokes in the cold, every breath out of him; thicker when he has been running, and when he howls
+    if (fx && st !== 'death') {
+      A.steam = (A.steam || 0) - dt; const bs = Math.sin(A.breath);
+      if (A.steam <= 0 && bs > 0.5 && (A.lastB ?? 1) <= 0.5) { A.steam = 0.15; B.head.updateWorldMatrix(true, false); const big = clamp(A.ex, 0.3, 1) + (st === 'howl' ? 0.5 : 0); fx.wisp(_hv.set(0, -0.03, 0.66).applyMatrix4(B.head.matrixWorld), 0.13 + 0.14 * big, [0.24, 0.24, 0.25]); if (big > 0.6 || A.jaw > 0.3) fx.wisp(_hv.set(0, -0.15, 0.5).applyMatrix4(B.head.matrixWorld), 0.12 + 0.1 * big, [0.22, 0.22, 0.23]); }
+      A.lastB = bs;
+    }
     this.spheres[0].mul = st === 'reel' ? 2 : 1.4;
     this.updateSpheres();
   }
@@ -971,7 +983,7 @@ export class Serpent extends Boss {
     // Its cross-section is a snake's: round over the back, the belly flat (the profile and its normals, once)
     const M = this.M = (SN - 1) * SSUB + 1, R2 = SRADIAL + 1, nV = M * R2 + 2;
     const uv = new Float32Array(nV * 2), idx = []; this.ringR = new Float32Array(M);
-    const pf = (a) => { const ca = Math.cos(a), sa = Math.sin(a); return sa >= 0 ? [1.06 * ca, sa] : [1.06 * ca * (1 - 0.05 * -sa), -0.66 * Math.sqrt(-sa)]; };
+    const pf = (a) => { const ca = Math.cos(a), sa = Math.sin(a); return sa >= 0 ? [1.05 * ca, sa] : [1.05 * ca, -0.74 * Math.pow(-sa, 0.8)]; };
     this.prof = Array.from({ length: R2 }, (_, k) => { const a = k / SRADIAL * TAU, p = pf(a), p0 = pf(a - 1e-3), p1 = pf(a + 1e-3), nx = p1[1] - p0[1], ny = -(p1[0] - p0[0]), l = Math.hypot(nx, ny); return [p[0], p[1], nx / l, ny / l]; });
     let v = 0;
     for (let j = 0; j < M; j++) {
@@ -1850,6 +1862,7 @@ const NECK_G = [-20, -15, -6, 8, 16, 12, 16], NECK_F = [17, 12, 6, -2, -8, -8, -
 const LIMBS = [['R', 1, -2.2, -1.4], ['L', 1, 2.2, -1.4], ['R', 0, -3.9, 3.9], ['L', 0, 3.9, 3.9]];   // side, hind?, where it stands (his own frame)
 const FOLD = { f1: [0.2, 0.45, -1], f2: [0.15, 0.3, -1], f3: [0.09, 0.15, -1], f4: [0.03, 0.03, -1] };   // where the fingers lie when the wing is shut
 const _d0 = new THREE.Vector3(), _d1 = new THREE.Vector3(), _d2 = new THREE.Vector3(), _d3 = new THREE.Vector3(), _d4 = new THREE.Vector3(), _dq = new THREE.Quaternion(), _dq2 = new THREE.Quaternion();
+const _dq3 = new THREE.Quaternion(), _dqI = new THREE.Quaternion(), _dn = new THREE.Vector3(), _dU = new THREE.Vector3();
 // one of the fx lights, held (no light is ever added for him: these four are in the scene from the start)
 function dragonLight(fx, slot, p, color, intensity, dist) {
   const l = fx && fx.lights && fx.lights[slot]; if (!l) return;
@@ -2526,7 +2539,12 @@ export class Dragon extends Boss {
       ik2(th, sh, mt, _d0, _d2.set(fwx, 0.25, fwz));
       if (w > 0.5) {
         mt.getWorldPosition(_d1); ft.getWorldPosition(_d3); aimBone(mt, _d3.sub(_d1), _d2.set(L.c.x, L.c.y + 0.25 * DK, L.c.z).sub(_d1));
-        mt.getWorldQuaternion(_dq); this.mesh.getWorldQuaternion(_dq2); ft.quaternion.copy(_dq.invert().multiply(_dq2)); ft.updateMatrixWorld(true);
+        // the foot laid along the ground under it (its long toes stood off a slope, or into it, held level with the body)
+        const e = 1.2 * DK, gx = L.c.x, gz = L.c.z;
+        _dn.set(H(gx - e, gz) - H(gx + e, gz), 2 * e, H(gx, gz - e) - H(gx, gz + e)).normalize();
+        this.mesh.getWorldQuaternion(_dq2); _dU.set(0, 1, 0).applyQuaternion(_dq2);
+        _dq3.setFromUnitVectors(_dU, _dn); const ta = _dU.angleTo(_dn); if (ta > 0.6) _dq3.slerpQuaternions(_dqI, _dq3, 0.6 / ta);   // (no steeper than that: off a ledge the toes stay as they were)
+        mt.getWorldQuaternion(_dq); ft.quaternion.copy(_dq.invert().multiply(_dq3).multiply(_dq2)); ft.updateMatrixWorld(true);
       }
     }
     for (let i = 2; i < 4; i++) {
@@ -2567,8 +2585,8 @@ export class Dragon extends Boss {
     if (this.breath) {
       const dir = this.mouthDir; jl = dir.y < -0.06 ? clamp((this.mouth.y - this.gY) / -dir.y, 5, 20) : 11;
       const hx = this.mouth.x + dir.x * jl, hz = this.mouth.z + dir.z * jl, hy = dir.y < -0.06 ? H(hx, hz) : this.mouth.y + dir.y * jl;
-      // where it strikes the ground it boils up and spreads
-      if (dir.y < -0.06) { for (let i = 0; i < 6; i++) { const a = i * 2.4 + Math.floor(time * 7) * 1.3, r = 0.4 + (i % 3) * 0.9, fx2 = hx + Math.sin(a) * r, fz2 = hz + Math.cos(a) * r; F.flame(fx2, H(fx2, fz2) - 0.1, fz2, 2.6, 2.6 + (i % 2) * 1.3, i * 1.9, 1.2); }   // (each on the ground where it stands) if (!this._scT || time - this._scT > 0.3) { this._scT = time; F.scorchAt(hx, hz, 3, W, time); } }
+      // where it strikes the ground it boils up and spreads (each tongue of flame on the ground where it stands)
+      if (dir.y < -0.06) { for (let i = 0; i < 6; i++) { const a = i * 2.4 + Math.floor(time * 7) * 1.3, r = 0.4 + (i % 3) * 0.9, fx2 = hx + Math.sin(a) * r, fz2 = hz + Math.cos(a) * r; F.flame(fx2, H(fx2, fz2) - 0.1, fz2, 2.6, 2.6 + (i % 2) * 1.3, i * 1.9, 1.2); } if (!this._scT || time - this._scT > 0.3) { this._scT = time; F.scorchAt(hx, hz, 3, W, time); } }
       if (fx) {
         if (R() < dt * 22) fx.fireStream(this.mouth, dir, jl * 0.85, 0.3, 0.3);
         dragonLight(fx, 3, _d0.set(hx, hy + 1.6, hz), 0xff6a20, 55 + 20 * Math.sin(time * 31), 30); dragonLight(fx, 2, _d1.copy(this.mouth).addScaledVector(dir, 2.5), 0xff7a30, 30, 18);

@@ -21,7 +21,7 @@ const fbm = (x, y, z) => vn(x, y, z) * 0.55 + vn(x * 2.13 + 5, y * 2.13, z * 2.1
 const gauss = (x, m, s) => Math.exp(-(((x - m) / s) ** 2));
 const ss = (a, b, x) => smooth(clamp((x - a) / (b - a), 0, 1));
 const mix3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-const TILE = 0.3;   // metres of hide to one repeat of the fur and skin maps
+const TILE = 0.22;   // metres of hide to one repeat of the fur and skin maps
 
 // ---------------------------------------------------------------- the skeleton (rest pose, metres; +z forward, +x his left)
 const HEAD = [0, 1.96, 1.74], HS = 1.1;   // the joint at the back of the skull; the skull is drawn below a size too small and scaled up
@@ -94,12 +94,12 @@ function grid(M, nR, nC, fn, flip = false) {
 
 // ---------------------------------------------------------------- the hide
 // mange: where the coat has gone (side, y, z, radius, strength; side 0 both)
-const MANGE = [[1, 1.34, -0.02, 0.22, 0.34], [-1, 1.44, -0.98, 0.2, 0.32], [-1, 1.46, 0.5, 0.15, 0.26], [1, 1.78, 1.18, 0.12, 0.3], [0, 1.18, -1.92, 0.3, 0.45], [0, 1.0, 0.1, 0.38, 0.22], [1, 1.45, -0.62, 0.16, 0.22]];
+const MANGE = [[1, 1.3, 0.02, 0.15, 0.3], [-1, 1.44, -0.98, 0.2, 0.32], [-1, 1.46, 0.5, 0.15, 0.26], [1, 1.78, 1.18, 0.12, 0.3], [0, 1.18, -1.92, 0.3, 0.45], [0, 1.0, 0.1, 0.38, 0.22], [1, 1.45, -0.62, 0.16, 0.22]];
 // old cuts, opened again: they run black (side, y0, z0, y1, z1, r)
 const WOUNDS = [[1, 1.55, 0.06, 1.2, -0.12, 0.022], [1, 1.5, 0.22, 1.26, 0.05, 0.016], [-1, 1.52, -1.02, 1.24, -0.9, 0.024], [-1, 1.86, 1.28, 1.66, 1.18, 0.016], [1, 1.62, -0.66, 1.42, -0.58, 0.014]];
 function coat(p, o = {}) {
   const x = p[0], y = p[1], z = p[2], ax = Math.abs(x);
-  let bare = fbm(x * 2.3 + 3, y * 2.3, z * 2.0 + 11) - 0.63 + (o.bare || 0);
+  let bare = fbm(x * 2.6 + 3, y * 2.6, z * 2.2 + 11) - 0.68 + (o.bare || 0);
   for (const [s, cy, cz, r, k] of MANGE) { if (s && s * x < 0.02) continue; const d = Math.hypot(s ? ax - 0.28 : 0, y - cy, z - cz) / r; bare += k * Math.exp(-d * d); }
   bare += 0.08 * (vn(x * 11, y * 11, z * 11) - 0.5);
   const fur = o.fur ?? (1 - ss(-0.03, 0.06, bare));
@@ -221,16 +221,16 @@ const HST = [
 ];
 // the lower jaw: [z, floor of the mouth, gum inner x y, gum outer x y, lip edge x y, side x y, under x y, chin, n]
 const JST = [
-  [-0.06, -0.15, 0.01, -0.148, 0.02, -0.146, 0.03, -0.15, 0.03, -0.16, 0.02, -0.17, -0.17, 1],
-  [-0.03, -0.128, 0.035, -0.122, 0.062, -0.12, 0.08, -0.126, 0.086, -0.165, 0.055, -0.196, -0.192, 2],
-  [0.04, -0.13, 0.06, -0.12, 0.085, -0.115, 0.1, -0.122, 0.102, -0.165, 0.07, -0.2, -0.195, 3],
-  [0.12, -0.135, 0.068, -0.12, 0.09, -0.113, 0.1, -0.12, 0.095, -0.16, 0.065, -0.192, -0.19, 3],
-  [0.22, -0.135, 0.062, -0.118, 0.078, -0.112, 0.088, -0.12, 0.083, -0.155, 0.058, -0.18, -0.18, 3],
-  [0.34, -0.13, 0.05, -0.115, 0.064, -0.11, 0.07, -0.12, 0.066, -0.15, 0.047, -0.168, -0.17, 3],
-  [0.45, -0.125, 0.038, -0.112, 0.05, -0.108, 0.054, -0.118, 0.05, -0.145, 0.036, -0.16, -0.162, 2],
-  [0.53, -0.12, 0.028, -0.11, 0.04, -0.105, 0.045, -0.115, 0.043, -0.14, 0.03, -0.155, -0.156, 2],
-  [0.575, -0.116, 0.016, -0.11, 0.026, -0.104, 0.032, -0.11, 0.03, -0.13, 0.02, -0.142, -0.144, 1],
-  [0.592, -0.112, 0.005, -0.108, 0.01, -0.106, 0.013, -0.11, 0.012, -0.12, 0.008, -0.128, -0.13, 1],
+  [-0.06, -0.15, 0.01, -0.148, 0.02, -0.146, 0.03, -0.15, 0.032, -0.162, 0.02, -0.172, -0.175, 1],
+  [-0.03, -0.128, 0.035, -0.122, 0.062, -0.12, 0.08, -0.126, 0.09, -0.16, 0.055, -0.198, -0.202, 2],
+  [0.04, -0.13, 0.06, -0.12, 0.085, -0.115, 0.1, -0.122, 0.106, -0.158, 0.065, -0.203, -0.208, 3],
+  [0.12, -0.135, 0.068, -0.12, 0.09, -0.113, 0.1, -0.12, 0.1, -0.152, 0.06, -0.196, -0.203, 3],
+  [0.22, -0.135, 0.062, -0.118, 0.078, -0.112, 0.088, -0.12, 0.088, -0.15, 0.052, -0.188, -0.195, 3],
+  [0.34, -0.13, 0.05, -0.115, 0.064, -0.11, 0.07, -0.12, 0.072, -0.146, 0.043, -0.178, -0.185, 3],
+  [0.45, -0.125, 0.038, -0.112, 0.05, -0.108, 0.054, -0.118, 0.057, -0.142, 0.034, -0.17, -0.176, 2],
+  [0.53, -0.12, 0.028, -0.11, 0.04, -0.105, 0.045, -0.115, 0.047, -0.138, 0.028, -0.163, -0.168, 2],
+  [0.575, -0.116, 0.016, -0.11, 0.026, -0.104, 0.032, -0.11, 0.032, -0.13, 0.02, -0.148, -0.152, 1],
+  [0.592, -0.112, 0.005, -0.108, 0.01, -0.106, 0.013, -0.11, 0.013, -0.12, 0.008, -0.13, -0.132, 1],
   [0.597, -0.115, 0.001, -0.115, 0.002, -0.115, 0.002, -0.116, 0.002, -0.118, 0.001, -0.12, -0.12, 1],
 ];
 // a value of a station table at z (linear between rows): column c
@@ -261,12 +261,12 @@ export function buildHoundModel() {
   const ribZone = (z) => ss(-0.48, -0.32, z) * (1 - ss(0.42, 0.72, z));
   const groove = (q) => { const z = q.c[2], y = q.P[1], fl = Math.pow(Math.abs(q.cs), 0.7) * ss(-0.85, -0.35, q.sn) * (1 - ss(0.25, 0.65, q.sn)); return ribZone(z) * fl * (0.5 - 0.5 * Math.cos(TAU * (z + 0.32 * (y - 1.3)) / 0.1)); };
   const trunkPaint = (q) => {
-    const z = q.c[2], under = ss(0.55, 0.9, -q.sn), r = coat(q.P, { bare: 0.12 * ribZone(z) * Math.abs(q.cs) + 0.22 * under + 0.12 * gauss(z, -0.6, 0.3) - 0.4 * ss(0.7, 0.9, q.sn) });
+    const z = q.c[2], under = ss(0.55, 0.9, -q.sn), r = coat(q.P, { bare: 0.06 * ribZone(z) * Math.abs(q.cs) + 0.2 * under + 0.12 * gauss(z, -0.6, 0.3) - 0.4 * ss(0.7, 0.9, q.sn) });
     const g = groove(q) * (1 - 0.7 * r.fur), k = (1 - 0.3 * g) * (1 - 0.3 * under);
     return { c: r.c.map((v) => v * k), wet: r.wet, fur: r.fur };
   };
   loft(M, T, {
-    seg: 36, cards,
+    seg: 32, cards,
     weights: (q) => {
       const bi = spineBi(q.c), k0 = clamp(Math.floor(bi), 0, 6), k1 = Math.min(6, k0 + 1), fr = bi < 0 ? 0 : smooth(clamp(bi - k0, 0, 1));
       const w = [[spine[k0], 1 - fr + 1e-4], [spine[k1], fr + 1e-4]], z = q.c[2], s = q.cs > 0 ? 'L' : 'R', y = q.P[1];
@@ -299,7 +299,7 @@ export function buildHoundModel() {
       if (top > 0.35 && z > -0.7 && z < 1.72) { p = 2.6 * top; len = 0.1 + 0.11 * gauss(z, 1.05, 0.5) + 0.05 * gauss(z, 0.45, 0.25); stand = 0.36; droop = 0.15; hack = top * ss(-0.7, -0.3, z); wd = 0.05; }
       else if (z > 0.72) { p = 2.4; len = 0.12 + 0.12 * under + 0.04 * side; stand = 0.3; droop = 0.3 + 0.5 * under; hack = 0.45 * (1 - under) * ss(0.85, 1.2, z); wd = 0.055; }
       else if (under > 0.3) { p = 0.6; len = 0.06 + 0.07 * under; droop = 0.9; stand = 0.2; wd = 0.045; }
-      else { p = 1.8 - 0.7 * ribZone(z) * side; len = 0.05 + 0.04 * gauss(z, -1.1, 0.3) + 0.03 * gauss(z, 0.55, 0.25); stand = 0.18; wd = 0.04; }
+      else { p = 1.8 - 0.6 * ribZone(z) * side; len = 0.055 + 0.04 * gauss(z, -1.1, 0.3) + 0.03 * gauss(z, 0.55, 0.25); stand = 0.26; wd = 0.038; }
       if (rnd() > p * ss(0.4, 0.8, pt.fur) - n) return null;
       const comb = [0, -q.t[1] - 0.55 * side * (1 - top), -q.t[2]];   // back along him, and down his sides
       return { len: len * (0.7 + 0.6 * rnd()), stand: stand * (0.7 + 0.6 * rnd()), droop, hack, wd: wd * (0.75 + 0.5 * rnd()), comb };
@@ -317,9 +317,9 @@ export function buildHoundModel() {
   // wrist, the pastern; the broad flat thigh, the stifle, the gaskin, the Achilles cord to the point of the hock
   const legCard = (top) => (q, pt, n) => {
     const y = q.c[1]; if (pt.fur < 0.45 || y < 0.5) return null;
-    const back = ss(0.2, 0.8, -q.sn), p = (y > top ? 1.0 : 0.25 + 0.4 * back) * ss(0.45, 0.8, pt.fur);
+    const back = ss(0.2, 0.8, -q.sn), p = (y > top ? 1.7 : 0.45 + 0.7 * back) * ss(0.45, 0.8, pt.fur);
     if (rnd() > p - n) return null;
-    return { len: (y > top ? 0.06 + 0.05 * rnd() : 0.035 + 0.05 * back * rnd()) * (1 + 0.7 * back), stand: 0.22, droop: 0.3, hack: 0, wd: 0.04, comb: [0, -1, -0.15] };
+    return { len: (y > top ? 0.06 + 0.06 * rnd() : 0.035 + 0.05 * back * rnd()) * (1 + 0.7 * back), stand: 0.32, droop: 0.4, hack: 0, wd: 0.038, comb: [0, -1, -0.15] };
   };
   for (const [s, k] of [[1, 'L'], [-1, 'R']]) {
     const mk = (rows) => rows.map(([x, y, z, w, f, b, bi, n]) => ({ c: [s * x, y, z], w, f, b, bi, n: n || 4, e: 0.9 }));
@@ -372,8 +372,8 @@ export function buildHoundModel() {
     }
   }
 
-  // ---- the head
-  const F = Hf, hBase = M.n;
+  // ---- the head (its surfaces swept back under the nose at the front: the nose overhangs the lip, the chin is behind both)
+  const F = (x, y, z) => Hf(x, y, z - 0.34 * ss(0.5, 0.624, z) * Math.max(0, 0.045 - y) * ss(0.5, 0.56, z)), hBase = M.n;
   const lipW = (t, z) => ss(2.2, 3.8, t) * (1 - ss(4.4, 5.0, t)) * ss(0.22, 0.34, z) * (0.35 + 0.65 * gauss(z, 0.5, 0.09));   // an arch, highest over the fang
   const bridgeW = (t, z) => (1 - ss(0.8, 1.8, t)) * gauss(z, 0.4, 0.09) * 0.3;
   const torn = (q) => (q.side > 0 ? gauss(q.z, 0.43, 0.045) : 0);   // his left upper lip rotted away over the teeth
@@ -393,7 +393,7 @@ export function buildHoundModel() {
       d += 0.008 * gauss(z, 0.5, 0.035) * gauss(t, 3.2, 0.5);                       // the root of the fang under the lip
       d -= 0.01 * Math.exp(-(((x - 0.022) / 0.009) ** 2) - (((q.y - 0.005) / 0.012) ** 2)) * ss(0.59, 0.615, z);   // the nostrils
       d -= 0.004 * gauss(x, 0, 0.006) * ss(0.58, 0.61, z) * (q.y < 0 ? 1 : 0.3);   // the cleft of the nose
-      d += 0.007 * ss(0.57, 0.6, z) * ss(-0.035, -0.01, q.y) * (1 - ss(0.035, 0.05, x));   // the nose stands proud of the lip
+      d += 0.008 * ss(0.57, 0.6, z) * ss(-0.03, -0.01, q.y) * (1 - ss(0.026, 0.04, x));   // the nose stands proud of the lip
       d -= 0.022 * torn(q) * gauss(t, 3.9, 0.45);                                   // the lip eaten away
       return d;
     },
@@ -415,7 +415,7 @@ export function buildHoundModel() {
         const g = Math.max(gum, tr), mv = vn(z * 55, t * 7, q.side * 3 + 4), mot = mix3([0.02, 0.016, 0.018], [0.11, 0.07, 0.072], ss(0.42, 0.6, mv));
         c = mix3(c, mot, g); wet = Math.max(wet, g * 0.55); fur *= 1 - g;
       }
-      const nose = ss(0.583, 0.603, z) * ss(-0.03, -0.012, q.y) * (1 - ss(0.042, 0.052, Math.abs(q.x))); c = mix3(c, [0.007, 0.007, 0.008], nose); wet = Math.max(wet, nose * 0.75); fur *= 1 - nose;
+      const nose = ss(0.585, 0.605, z) * ss(-0.026, -0.01, q.y) * (1 - ss(0.03, 0.04, Math.abs(q.x))); c = mix3(c, [0.007, 0.007, 0.008], nose); wet = Math.max(wet, nose * 0.75); fur *= 1 - nose;
       const nos = Math.exp(-(((Math.abs(q.x) - 0.022) / 0.01) ** 2) - (((q.y - 0.002) / 0.012) ** 2)) * ss(0.595, 0.615, z); c = c.map((v) => v * (1 - 0.8 * nos));
       const wr = (1 - ss(1.0, 2.6, t)) * gauss(z, 0.39, 0.08) + 0.6 * gauss(t, 3.1, 0.5) * gauss(z, 0.3, 0.07);
       return { c, wet, heat: 0, wr, fur };
@@ -519,7 +519,7 @@ function buildCards(geo, cards, rnd) {
   const pa = new V3(), pb = new V3(), pc = new V3();
   const n = cards.length, NV = n * 6, pos = new Float32Array(NV * 3), nrm = new Float32Array(NV * 3), uv = new Float32Array(NV * 2), col = new Float32Array(NV * 3), root = new Float32Array(NV * 3), hk = new Float32Array(NV);
   const si = new Uint16Array(NV * 4), sw = new Float32Array(NV * 4), ind = new Uint32Array(n * 12);
-  const nv = new V3(), cb = new V3(), sd = new V3(), d0 = new V3(), r0 = new V3(), c = new V3(), t1 = new V3(), down = new V3(0, -1, 0);
+  const nv = new V3(), cb = new V3(), sd = new V3(), d0 = new V3(), r0 = new V3(), c = new V3(), t1 = new V3(), bn = new V3(), down = new V3(0, -1, 0);
   let v = 0, ni = 0;
   cards.forEach((C) => {
     nv.fromBufferAttribute(N, C.vi).normalize(); r0.fromBufferAttribute(P, C.vi);
@@ -539,7 +539,8 @@ function buildCards(geo, cards, rnd) {
       const hw = wd * (0.5 - 0.15 * u);
       for (const e of [-1, 1]) {
         t1.copy(c).addScaledVector(sd, e * hw);
-        pos.set([t1.x, t1.y, t1.z], v * 3); nrm.set([nv.x, nv.y, nv.z], v * 3); root.set([r0.x, r0.y, r0.z], v * 3); hk[v] = C.hack || 0;
+        bn.copy(nv).multiplyScalar(0.8).addScaledVector(d0, 0.5 * u + 0.15).normalize();   // lit as the hide, leaning with the hair toward the tip
+        pos.set([t1.x, t1.y, t1.z], v * 3); nrm.set([bn.x, bn.y, bn.z], v * 3); root.set([r0.x, r0.y, r0.z], v * 3); hk[v] = C.hack || 0;
         uv.set([(col0 + (e > 0 ? 1 : 0)) / 4, u], v * 2); col.set([tint, tint, tint], v * 3);
         for (let k = 0; k < 4; k++) { si[v * 4 + k] = top[k] ? top[k][0] : 0; sw[v * 4 + k] = top[k] ? top[k][1] / wsum : 0; }
         v++;
@@ -582,10 +583,10 @@ function houndTextures() {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const u = x / W, v = y / H, i = y * W + x;
     // fur: strands along v, gathered into wet clumps, broken off at random lengths
-    const warp = tn(u * 6, v * 3, 6, 3) * 1.6 + tn(u * 24, v * 6, 24, 6) * 0.5, s = u * 80 + warp * 3, k = Math.floor(s), f = s - k;
-    const brk = tn(k, v * 12 + k * 0.37, 80, 12, 7), clump = tn(u * 10 + warp * 0.5, v * 4, 10, 4, 5);
-    const ridge = Math.pow(Math.sin(Math.PI * f), 1.2) * (0.3 + 0.7 * ss(0.2, 0.7, brk));
-    fh[i] = ridge * 0.45 + clump * 0.6; fa[i] = 0.5 + 0.35 * ridge + 0.25 * (clump - 0.5);
+    const warp = tn(u * 6, v * 3, 6, 3) * 1.6 + tn(u * 24, v * 6, 24, 6) * 0.6, s = u * 64 + warp * 3, k = Math.floor(s), f = s - k;
+    const brk = tn(k, v * 10 + k * 0.37, 64, 10, 7), clump = tn(u * 12 + warp * 0.7, v * 5, 12, 5, 5), cl2 = tn(u * 20 + warp, v * 8, 20, 8, 6);
+    const ridge = Math.pow(Math.sin(Math.PI * f), 1.2) * (0.25 + 0.75 * ss(0.2, 0.7, brk)), lock = Math.pow(Math.abs(Math.sin(Math.PI * (u * 12 + warp * 0.7))), 0.6);
+    fh[i] = ridge * 0.3 + lock * 0.45 * clump + cl2 * 0.3; fa[i] = 0.45 + 0.25 * ridge + 0.35 * lock * clump + 0.15 * (cl2 - 0.5);
     // skin: folds across the grain, pores, scabs
     const fold = tn(u * 5 + tn(u * 3, v * 3, 3, 3) * 0.8, v * 22, 5, 22, 2), pore = tn(u * 90, v * 90, 90, 90, 9), scab = tn(u * 14, v * 14, 14, 14, 4);
     sh[i] = Math.pow(fold, 2) * 0.8 + pore * 0.18 + ss(0.62, 0.8, scab) * 0.5; sa[i] = 0.65 + 0.35 * fold - 0.25 * ss(0.62, 0.8, scab) + 0.15 * pore;
@@ -607,13 +608,13 @@ function cardTexture() {
         for (let dy = -1; dy <= 1; dy++) for (let dx = -rr; dx <= rr; dx++) {
           const px = cx + dx, py = cy + dy; if (px < 1 || px > 62 || py < 0 || py >= H) continue;
           const cov = clamp(r + 0.5 - Math.hypot(px - x, py - y), 0, 1) * (1 - 0.25 * t); if (cov <= 0) continue;
-          const i = py * W + x0 + px; if (cov > A[i]) { A[i] = cov; L[i] = shade * (0.7 + 0.35 * t); }
+          const i = py * W + x0 + px; if (cov > A[i]) { A[i] = cov; L[i] = shade * (0.3 + 0.75 * Math.min(1, t * 1.7)); }
         }
       }
     }
   }
   const out = new Uint8Array(W * H * 4);
-  for (let i = 0; i < W * H; i++) { const l = L[i] || 0.8, c = 0.022 * l, e = (v) => Math.round(255 * Math.pow(clamp(v, 0, 1), 1 / 2.2)); out[i * 4] = e(c * 1.05); out[i * 4 + 1] = e(c); out[i * 4 + 2] = e(c * 0.95); out[i * 4 + 3] = Math.round(255 * clamp(A[i] * 1.15, 0, 1)); }
+  for (let i = 0; i < W * H; i++) { const l = L[i] || 0.5, c = 0.026 * l, e = (v) => Math.round(255 * Math.pow(clamp(v, 0, 1), 1 / 2.2)); out[i * 4] = e(c * 1.05); out[i * 4 + 1] = e(c); out[i * 4 + 2] = e(c * 0.95); out[i * 4 + 3] = Math.round(255 * clamp(A[i] * 1.15, 0, 1)); }
   const t = dataTex(out, W, H, true); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t;
 }
 
@@ -630,7 +631,7 @@ const DISSOLVE = `
 export function houndMaterial() {
   const T = houndTextures();
   const u = { uDissolve: { value: 0 }, uHit: { value: 0 }, uHeat: { value: 0 }, uTime: { value: 0 }, uRim: { value: 0.22 }, uHackle: { value: 0 }, uSnarl: { value: 0 }, uShine: { value: 1 }, uSkin: { value: T.skin } };
-  const mat = new THREE.MeshPhysicalMaterial({ normalMap: T.fur, normalScale: new THREE.Vector2(0.6, 0.6), vertexColors: true, roughness: 0.74, metalness: 0, sheen: 1, sheenColor: new THREE.Color(0.2, 0.21, 0.23), sheenRoughness: 0.5, side: THREE.DoubleSide });
+  const mat = new THREE.MeshPhysicalMaterial({ normalMap: T.fur, normalScale: new THREE.Vector2(0.6, 0.6), vertexColors: true, roughness: 0.8, metalness: 0, specularIntensity: 0.6, sheen: 1, sheenColor: new THREE.Color(0.2, 0.21, 0.23), sheenRoughness: 0.5, side: THREE.DoubleSide });
   mat.userData.u = u;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
@@ -642,9 +643,9 @@ export function houndMaterial() {
       if (uDissolve > 0.0 && dnz < uDissolve) discard;
       float wrk = uSnarl * vSurf.z * (0.5 + 0.5 * cos(vDPos.z * 150.0 + sin(vDPos.x * 60.0) * 1.5));`)
       .replace('#include <map_fragment>', `#include <map_fragment>
-      diffuseColor.rgb *= mix(texture2D(uSkin, vNormalMapUv * 1.4).a, texture2D(normalMap, vNormalMapUv).a, vSurf.w) * 1.45 * (1.0 - 0.55 * wrk);`)
+      diffuseColor.rgb *= mix(texture2D(uSkin, vNormalMapUv * 1.4).a, texture2D(normalMap, vNormalMapUv).a, vSurf.w) * 1.45 * (1.0 - 0.75 * wrk);`)
       .replace('mapN.xy *= normalScale;', `{ vec3 sN = texture2D(uSkin, vNormalMapUv * 1.4).xyz * 2.0 - 1.0; mapN = mix(sN, mapN, vSurf.w); }
-      mapN.xy *= normalScale; mapN.y += 1.4 * uSnarl * vSurf.z * sin(vDPos.z * 150.0 + sin(vDPos.x * 60.0) * 1.5);`)
+      mapN.xy *= normalScale; mapN.y += 2.6 * uSnarl * vSurf.z * sin(vDPos.z * 150.0 + sin(vDPos.x * 60.0) * 1.5);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.13, vSurf.x);')
       .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\nmaterial.sheenColor *= vSurf.w;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>

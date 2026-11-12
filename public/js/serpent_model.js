@@ -29,7 +29,7 @@ const GLSL_COMMON = /* glsl */`
 #define VBW 0.13
 #define HSZ ${HS}
 uniform vec4 uEye;
-float sm(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+float sm(float a, float b, float x) { float t = clamp((x - a) / (abs(b - a) < 1e-5 ? 1e-5 : b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 float sh1(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float sn2(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(sh1(i), sh1(i + vec2(1.0, 0.0)), f.x), mix(sh1(i + vec2(0.0, 1.0)), sh1(i + vec2(1.0, 1.0)), f.x), f.y); }
 // One layer of overlapping keeled scales. p.x across (one scale to a unit), p.y along toward the tail (one row to a
@@ -46,7 +46,7 @@ float scl(vec2 p, float keel, out vec2 cid, out float rim) {
       float ci = cc + float(c), w = p.x - (ci + off);
       float hw = 0.6 * sqrt(max(0.0, 1.0 - pow((s - 0.5) / 0.94, 2.0)));
       float m = hw - abs(w);
-      if (m > 0.0 && m / hw > best) { best = m / hw; cid = vec2(ci + off, r + 0.5); qx = w / max(hw, 1e-3); qt = s / 1.42; rim = sm(0.0, 0.08, m) * sm(0.0, 0.07, 1.42 - s); }
+      if (m > 0.0 && m / hw > best) { best = m / hw; cid = vec2(ci + off, r + 0.5); qx = w / max(hw, 1e-3); qt = s / 1.42; rim = sm(0.0, 0.13, m) * sm(0.0, 0.12, 1.42 - s); }
     }
     if (best > 0.0) break;
   }
@@ -97,7 +97,7 @@ float bodyScar(vec2 p) {
       float a = (sh1(vec2(b, 4.4 + sd)) - 0.5) * 2.2, len = 3.0 + 7.0 * sh1(vec2(b, 5.5 + sd));
       vec2 dir = vec2(cos(a), sin(a)), d = p - c0; d.x -= COLS * floor(d.x / COLS + 0.5);
       float t = clamp(dot(d, dir), -len, len), dist = length(d - dir * t);
-      float wid = (0.2 + 0.3 * sh1(vec2(b, 6.6 + sd))) * (1.0 - pow(abs(t) / len, 2.0)) * (0.65 + 0.7 * sn2(p * 2.3));
+      float wid = max(0.01, (0.2 + 0.3 * sh1(vec2(b, 6.6 + sd))) * (1.0 - pow(abs(t) / len, 2.0)) * (0.65 + 0.7 * sn2(p * 2.3)));
       m = max(m, sm(wid, wid * 0.35, dist));
     }
   }
@@ -232,8 +232,8 @@ export const serpentLip = (L) => -0.11 - 0.06 * gauss(L, 0.12, 0.14) + 0.06 * sm
 const END = (L) => (L < 0.08 ? Math.sqrt(Math.max(0, 1 - ((0.08 - L) / 0.08) ** 2)) : 1) * (L > 0.9 ? Math.sqrt(Math.max(0, 1 - ((L - 0.9) / 0.1) ** 2)) * 0.55 + 0.45 : 1);
 const zOf = (L) => lerp(Z0, Z1, L), jzOf = (Lj) => lerp(JZ0, JZ1, Lj), LuOf = (z) => (z - Z0) / (Z1 - Z0);
 const jEnd = (Lj) => (Lj < 0.07 ? Math.sqrt(Math.max(0, 1 - ((0.07 - Lj) / 0.07) ** 2)) : 1) * (Lj > 0.9 ? Math.sqrt(Math.max(0, 1 - ((Lj - 0.9) / 0.1) ** 2)) * 0.6 + 0.4 : 1);
-const jw = (Lj) => W(LuOf(jzOf(Lj))) * 0.93 * jEnd(Lj);
-const jlip = (Lj) => serpentLip(LuOf(jzOf(Lj))) - 0.035 - 0.05 * smooth(clamp((Lj - 0.88) / 0.12, 0, 1));
+const jw = (Lj) => W(LuOf(jzOf(Lj))) * 0.9 * jEnd(Lj);   // inside the upper lip, which overlaps it
+const jlip = (Lj) => serpentLip(LuOf(jzOf(Lj))) + 0.012 - 0.07 * smooth(clamp((Lj - 0.86) / 0.14, 0, 1));
 // the skull's outside: th 0 (the lip, +x) .. PI/2 (the crown) .. PI (the lip, -x)
 function skullPt(L, th) {
   const e = END(L), w = W(L) * e, h = HT(L) * e, lip = serpentLip(L), z = zOf(L);
