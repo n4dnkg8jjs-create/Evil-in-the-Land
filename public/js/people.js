@@ -943,15 +943,15 @@ diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.014, 0.012), bl * 0.75);
 // frozen through: the dye dull, a bloom of hoarfrost on all of it, and snow lying on what faces the sky
 float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.85) * 0.92;
 float ny = normalize(vFN).y;
-float hoar = (0.06 + 0.1 * vn(vFP * 41.0)) * mix(0.4, 1.0, uSnow) * (1.0 - vFx.x * 0.4);
-float rime = smoothstep(0.55, 0.95, ny + (vn(vFP * 19.0) - 0.5) * 0.3) * mix(0.15, mix(0.34, 0.5, vFx.x), uSnow) * (0.55 + 0.45 * vn(vFP * 5.0));
+float hoar = (0.14 + 0.16 * vn(vFP * 41.0) * vn(vFP * 11.0 + 2.0) * 2.0) * mix(0.35, 1.0, uSnow) * (1.0 - vFx.x * 0.3);
+float rime = smoothstep(0.55, 0.95, ny + (vn(vFP * 19.0) - 0.5) * 0.3) * mix(0.15, mix(0.5, 0.62, vFx.x), uSnow) * (0.6 + 0.4 * vn(vFP * 5.0));
 rime = max(rime, (1.0 - step(0.5, vFx.w + vFx.y + vFx.z + vFx.x)) * step(0.0, ny - 2.0));   // (drifts are snow already)
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), hoar);
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.2;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(vRough, 0.9, max(rime, hoar * 1.5));')
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFx.x * (1.0 - rime) * (1.0 - hoar);');
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFx.x * 0.75 * (1.0 - rime) * (1.0 - hoar);');
   };
-  m.customProgramCacheKey = () => 'frostBaked4';
+  m.customProgramCacheKey = () => 'frostBaked5';
   return m;
 }
 // a garment round a bone, cut into panels with gaps (the slashes); the lining puffs out between them
@@ -1065,7 +1065,9 @@ function drift(L, W, H, sd) {
     pos.push(Math.cos(ang) * t * L * wob, h, Math.sin(ang) * t * W * wob);
   }
   for (let r = 0; r < RN; r++) for (let a = 0; a < SN; a++) { const i0 = r * SN + a, i1 = r * SN + (a + 1) % SN, j0 = i0 + SN, j1 = i1 + SN; idx.push(i0, i1, j0, i1, j1, j0); }
-  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals(); return g;
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  for (let a = 0; a < SN; a++) g.attributes.normal.setXYZ(a, 0, 1, 0);   // its crown: one point, facing up (not a pinwheel of normals)
+  return g;
 }
 // opts: snow (drifts and rime; false in the cave), lean (+1/-1: huddled against a man on that side), cross (a crucifix and
 // rosary held in his hands), sword (his katzbalger under his hand where it fell)
@@ -1190,7 +1192,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   }
   if (seed % 5 === 2 && snow) {   // on a few, blood that ran out of him before it froze: small, dark
     const pg = new THREE.CircleGeometry(0.26, 32), pp = pg.attributes.position, ph = [rnd() * 6, rnd() * 6, rnd() * 6]; for (let i = 1; i < pp.count; i++) { const a = Math.atan2(pp.getY(i), pp.getX(i)), f = 0.8 + 0.18 * Math.sin(a * 2 + ph[0]) + 0.1 * Math.sin(a * 3 + ph[1]) + 0.05 * Math.sin(a * 7 + ph[2]); pp.setXY(i, pp.getX(i) * f * 1.25, pp.getY(i) * f); }
-    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x170506, roughness: 0.5, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.8 }));
+    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3a100d, roughness: 0.6, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.55 }));
     pool.receiveShadow = true; gear.push({ obj: pool, at: [jit(0.15), 0.1], lift: 0.012, tilt: [0, jit(Math.PI), 0], flat: true });
   }
   // lay him on the ground at x,z facing yaw. The body comes to rest as a dead weight would: dropped until it touches,
@@ -1301,7 +1303,17 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
       const base = wrap.quaternion.clone(), c = new THREE.Vector3(); J.hips.getWorldPosition(c);
       const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), XA = new THREE.Vector3(1, 0, 0), ZA = new THREE.Vector3(0, 0, 1);
       const tilt = (u, v) => { qa.setFromAxisAngle(XA, u); qb.setFromAxisAngle(ZA, v); const q = qa.multiply(qb); wrap.quaternion.copy(q).multiply(base); wrap.position.set(x, 0, z).sub(c).applyQuaternion(q).add(c); wrap.position.y = 0; drop(dropIds); };
-      const spread = (u, v) => { tilt(u, v); let lo = 1e9, hi = -1e9; for (const S of sets) { const d = lowOf(ground, S); lo = Math.min(lo, d); hi = Math.max(hi, d); } return hi - lo + (Math.abs(u) + Math.abs(v)) * 0.004; };
+      // his pose does not change while he is tilted, so each resting point is skinned once, into his own frame, and
+      // only turned for each tilt tried (the spread does not depend on how far he is let down)
+      wrap.updateMatrixWorld(true); const wi = wrap.matrixWorld.clone().invert();
+      const loc = sets.map((S) => { const A = new Float32Array(S.length * 3); S.forEach((i, k) => { body.getVertexPosition(i, _v); _v.applyMatrix4(body.matrixWorld).applyMatrix4(wi); A[k * 3] = _v.x; A[k * 3 + 1] = _v.y; A[k * 3 + 2] = _v.z; }); return A; });
+      const _m = new THREE.Matrix4(), _p0 = new THREE.Vector3(), _wq = new THREE.Quaternion(), _one = new THREE.Vector3(1, 1, 1);
+      const spread = (u, v) => {
+        qa.setFromAxisAngle(XA, u); qb.setFromAxisAngle(ZA, v); const q = qa.multiply(qb); _wq.copy(q).multiply(base); _p0.set(x, 0, z).sub(c).applyQuaternion(q).add(c);
+        _m.compose(_p0, _wq, _one); const e = _m.elements; let lo = 1e9, hi = -1e9;
+        for (const A of loc) { let d = 1e9; for (let k = 0; k < A.length; k += 3) { const lx = A[k], ly = A[k + 1], lz = A[k + 2], wx = e[0] * lx + e[4] * ly + e[8] * lz + e[12], wy = e[1] * lx + e[5] * ly + e[9] * lz + e[13], wz = e[2] * lx + e[6] * ly + e[10] * lz + e[14]; const g = wy - ground(wx, wz); if (g < d) d = g; } lo = Math.min(lo, d); hi = Math.max(hi, d); }
+        return hi - lo + (Math.abs(u) + Math.abs(v)) * 0.004;
+      };
       let bu = 0, bv = 0, bs = spread(0, 0);
       for (const [R, st] of [[0.5, 0.1], [0.1, 0.025], [0.025, 0.008]]) { const cu = bu, cv = bv; for (let u = cu - R; u <= cu + R + 1e-6; u += st) for (let v = cv - R; v <= cv + R + 1e-6; v += st) { const sc = spread(u, v); if (sc < bs) { bs = sc; bu = u; bv = v; } } }
       tilt(bu, bv); drop();

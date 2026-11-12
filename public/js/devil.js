@@ -477,7 +477,7 @@ import { instantiateHound, houndMaterial, HOUND_PAW_Y } from './hound_model.js';
 const HOUND_LEGS = [{ f: 1, s: 1, k: 'L', hx: 0.34, hz: 0.5 }, { f: 1, s: -1, k: 'R', hx: -0.34, hz: 0.5 }, { f: 0, s: 1, k: 'L', hx: 0.31, hz: -1.24 }, { f: 0, s: -1, k: 'R', hx: -0.31, hz: -1.24 }];
 const HOUND_FORE = 0.55;   // his place in the world (pos) is the ground under his shoulders: this far ahead of the model's middle
 const HOUND_TROT = [0, 0.5, 0.5, 0], HOUND_GALLOP = [0.56, 0.68, 0, 0.13];   // when each leg steps in the stride: FL FR BL BR
-const HOUND_SNAP = { wind: [0.5, 0.36, 0.62, 0.42], dmg: [18, 15, 26, 22], kb: [4, 4, 9, 6] };   // first bite, second, the slow third, a bite from the flank
+const HOUND_SNAP = { wind: [0.5, 0.36, 0.62, 0.42], dmg: [15, 12, 22, 19], kb: [4, 4, 9, 6] };   // first bite, second, the slow third, a bite from the flank
 const _hv = new THREE.Vector3(), _hw = new THREE.Vector3(), _hp = new THREE.Vector3(), _hq = new THREE.Quaternion(), _hq2 = new THREE.Quaternion(), _hq2w = new THREE.Vector3(), _he = new THREE.Euler(0, 0, 0, 'YXZ');
 
 export class Hound extends Boss {
@@ -491,7 +491,7 @@ export class Hound extends Boss {
     this.phases = [0.66, 0.33]; this.camH = 1.5; this.camD = 1.15; this.alt = 0;
     this.cds = { pounce: 2.5, whirl: 0, maul: 5, dark: 10, howl: 40 }; this.f = {}; this.side = 1; this.sideT = 2; this.combo = 0; this.threat = new Map(); this.hurtT = 0; this.stuck = 0;
     this.look = new THREE.Vector3(0, 0, 8); this.heat = 0;
-    this.calm = clamp(1.6 - 0.2 * this.party, 0.8, 1.4);   // how long he waits between his goes: longer against one or two, shorter against a crowd
+    this.calm = clamp(1.5 - 0.12 * this.party, 1.0, 1.4);   // how long he waits between his goes: longer against one or two, shorter against a crowd
     this.legs = HOUND_LEGS.map(() => ({ p: new THREE.Vector3(), from: new THREE.Vector3(), sw: false, q: 0, qd: 0.13, lift: 0, init: false, fly: false }));
     this.A = { lx: 0, lz: 0, vx: 0, vz: 0, lyaw: 0, yr: 0, gph: 0, gmix: 0, settled: true, breath: 0, ex: 0, ly: 0, lp: 0, hip: 0, chest: 0, shift: 0, sway: 0, neckP: 0, headP: 0, jaw: 0.1, roll: 0, pitch: 0, tail: 0, ears: 0, low: 0, first: true };
     const B = this.B;
@@ -524,7 +524,7 @@ export class Hound extends Boss {
       let iso = 12; for (const o of C.knights) if (o !== k && !o.downed) iso = Math.min(iso, o.pos.distanceTo(k.pos));
       if (iso === 12) iso = 0;
       let s = k.pos.distanceTo(this.pos);
-      if (k.praying || k.reviving) s -= 7;
+      if (k.praying || k.reviving) s -= 5;
       s -= (1 - clamp(k.hp / (k.maxHp || 150), 0, 1)) * 7 + Math.min(iso, 8) * 0.5 + Math.min(8, (this.threat.get(k) || 0) * 0.035);
       if (k.blocking) s += 5;
       if (k.isAI) s += 1.5;
@@ -547,7 +547,7 @@ export class Hound extends Boss {
     return r;
   }
   // the companions are not as quick on their feet as a player: his teeth go a little less deep in them
-  hurt(C, k, dmg, from, opts) { super.hurt(C, k, dmg * (k && k.isAI ? 0.65 : 1), from, opts); }
+  hurt(C, k, dmg, from, opts) { super.hurt(C, k, dmg * (k && k.isAI ? 0.55 : 1), from, opts); }
   canReel() { return !['intro', 'reel', 'vanish', 'prowl'].includes(this.state) && !(this.state === 'leap' && this.alt > 0.05) && !(this.state === 'charge' && this.f.ph === 1); }
   onPoiseBreak(C) { this.interrupt(); this.prey = null; this.alt = 0; this.begin('reel'); C?.ev('bossSfx', this, 'scream'); }
   onPhase(n) { this.howlDue = true; if (n === 3) this.dmgScale = 1.15; this.cds.dark = Math.min(this.cds.dark, 3); }
@@ -640,7 +640,7 @@ export class Hound extends Boss {
           const dur = clamp(0.34 + dist / 24, 0.45, 0.8);
           this.leap = { x0: pos.x, z0: pos.z, x1: pos.x + tx, z1: pos.z + tz, dur, h: 1.2 + dist * 0.09 };
           this.yaw = Math.atan2(tx, tz); this.cds.pounce = this.phase >= 3 ? 3.2 : 5; C.ev('bossSfx', this, 'snarl');
-          this.warn('circle', this.leap.x1 + tx / dist * 0.5, this.leap.z1 + tz / dist * 0.5, 3.0, 0, 0, dur, 0, 1, (Tl) => { this.hurtIn(C, Tl, 30, this.pos.clone(), { knockdown: true }, 0.2); C.ev('slam', new THREE.Vector3(Tl.x, W.heightAt(Tl.x, Tl.z), Tl.z), 3); });
+          this.warn('circle', this.leap.x1 + tx / dist * 0.5, this.leap.z1 + tz / dist * 0.5, 3.0, 0, 0, dur, 0, 1, (Tl) => { this.hurtIn(C, Tl, 25, this.pos.clone(), { knockdown: true }, 0.2); C.ev('slam', new THREE.Vector3(Tl.x, W.heightAt(Tl.x, Tl.z), Tl.z), 3); });
           this.begin('leap', Math.round(dur * 100));
         }
         break;
@@ -683,7 +683,7 @@ export class Hound extends Boss {
         break;
       }
       case 'whirl':   // crowded: he spins, the jaws going right round, and throws them off
-        if (!this.f.c) { this.f.c = 1; this.cds.whirl = 7; C.ev('bossSfx', this, 'snarl'); this.warn('circle', pos.x - Math.sin(this.yaw) * HOUND_FORE, pos.z - Math.cos(this.yaw) * HOUND_FORE, 4.2, 0, 0, 0.55 / cad, 0, 0, (Tl) => this.hurtIn(C, Tl, 12, this.pos.clone(), { knockback: 11 }, 0.3)); }
+        if (!this.f.c) { this.f.c = 1; this.cds.whirl = 7; C.ev('bossSfx', this, 'snarl'); this.warn('circle', pos.x - Math.sin(this.yaw) * HOUND_FORE, pos.z - Math.cos(this.yaw) * HOUND_FORE, 4.2, 0, 0, 0.55 / cad, 0, 0, (Tl) => this.hurtIn(C, Tl, 10, this.pos.clone(), { knockback: 11 }, 0.3)); }
         if (this.t > 0.55 / cad + 0.5) { this.cd = 0.3; this.begin(this.phase >= 2 || R() < 0.5 ? 'backoff' : 'stalk'); }
         break;
       case 'backoff': {   // a bound away and to one side
@@ -726,7 +726,7 @@ export class Hound extends Boss {
         } else if (ph === 1) {
           fwd(21); acc = 10;
           const hx = pos.x + Math.sin(this.yaw) * 1.4, hz = pos.z + Math.cos(this.yaw) * 1.4;
-          for (const k of C.knights) { if (k.downed || this.f.hit.has(k)) continue; if (Math.min(Math.hypot(k.pos.x - pos.x, k.pos.z - pos.z), Math.hypot(k.pos.x - hx, k.pos.z - hz)) < 1.8) { this.f.hit.add(k); this.hurt(C, k, 32, this.pos.clone(), { knockdown: true, knockback: 9 }); } }
+          for (const k of C.knights) { if (k.downed || this.f.hit.has(k)) continue; if (Math.min(Math.hypot(k.pos.x - pos.x, k.pos.z - pos.z), Math.hypot(k.pos.x - hx, k.pos.z - hz)) < 1.8) { this.f.hit.add(k); this.hurt(C, k, 24, this.pos.clone(), { knockdown: true, knockback: 9 }); } }
           if (Math.hypot(pos.x - this.f.x0, pos.z - this.f.z0) >= this.f.len - 1 || this.t > wind + this.f.len / 21 + 0.6 || (this.t > wind + 0.5 && this.vel.length() < 6)) { this.f.ph = 2; this.f.end = this.t; }
         } else {
           acc = 4.5;
@@ -765,7 +765,16 @@ export class Hound extends Boss {
   snap() { return [...this.baseSnap(), +this.look.x.toFixed(1), +this.look.z.toFixed(1), this.tele.snap()]; }
   applySnap(s, dt, W) {
     if (s[5] === this.state && (s[8] !== this.atk || s[6] < this.t - 0.4)) this.t = s[6];   // the same move begun again
+    if (s !== this._ls) {   // a new word from the host: how fast he was going between the last two
+      if (this._ls && this._age > 0.02) { const a = this._age; this._sv = [clamp((s[1] - this._ls[1]) / a, -30, 30), clamp((s[3] - this._ls[3]) / a, -30, 30)]; }
+      this._ls = s; this._age = 0;
+    }
+    this._age += dt;
+    const px = this.pos.x, pz = this.pos.z;
     super.applySnap(s, dt); this.net = true; this.look.set(s[11], 0, s[12]); this.tele.apply(s[13]); if (W) this.world = W;
+    // he runs fast: carry him on at that speed between the host's words instead of trailing a stride behind
+    const v = this._sv || [0, 0], lead = Math.min(this._age, 0.15), tx = s[1] + v[0] * lead, tz = s[3] + v[1] * lead;
+    if (Math.hypot(tx - px, tz - pz) < 8) { const k = 1 - Math.exp(-16 * dt); this.pos.x = px + (tx - px) * k; this.pos.z = pz + (tz - pz) * k; }
   }
   teleFx(T, fx, world) { if (fx && T.fxk === 1) { const p = new THREE.Vector3(T.x, world ? world.heightAt(T.x, T.z) : 0, T.z); fx.dust(p, 9, [0.2, 0.18, 0.15]); fx.dust(p.clone().add(new THREE.Vector3(0.8, 0, 0.5)), 5, [0.17, 0.15, 0.13]); } }
 
@@ -1391,7 +1400,7 @@ export class Serpent extends Boss {
   animate(dt, time, fx) {
     const W = this.world;
     if (this.net && W) {
-      const n = this.net, k = 1 - Math.exp(-12 * dt);
+      const n = this.net, k = 1 - Math.exp(-(this.state === 'strike' || this.state === 'sweep' ? 24 : 14) * dt);   // quick in the lunge and the sweep, or a guest sees the head cut corners
       this.headPos.x += (n.hx - this.headPos.x) * k; this.headPos.z += (n.hz - this.headPos.z) * k; this.rear += (n.rear - this.rear) * k; this.pitch += (n.pitch - this.pitch) * k;
       const y = dampAngle(Math.atan2(this.headDir.x, this.headDir.z), Math.atan2(n.dx, n.dz), 12, dt); this.headDir.set(Math.sin(y), 0, Math.cos(y));
       this.headPos.y = W.heightAt(this.headPos.x, this.headPos.z) + this.rear; this.followChain(W, dt);

@@ -739,7 +739,7 @@ export function buildFallen(world, n, r) {
     if (g < 0.4) {            // a man alone, his gear by him
       count('alone'); man(x, z, yaw); hisKit(x, z); if (q() < 0.3) scraps(x, z, 1 + Math.floor(q() * 2)); if (q() < 0.2) kit('bolts', ...near(x, z, 0.5, 2));
     } else if (g < 0.58) {    // two who went down together, head to foot
-      count('pair'); const d = 0.65 + q() * 0.3, ox = Math.cos(yaw) * d, oz = -Math.sin(yaw) * d;
+      count('pair'); const d = 0.85 + q() * 0.3, ox = Math.cos(yaw) * d, oz = -Math.sin(yaw) * d;
       man(x - ox, z - oz, yaw + (q() - 0.5) * 0.5); man(x + ox, z + oz, yaw + PI + (q() - 0.5) * 0.7); hisKit(x, z); if (q() < 0.5) hisKit(x, z);
     } else if (g < 0.7) {     // a rank of pikemen cut down where it stood, their pikes fallen forward
       count('rank'); const k = 4 + Math.floor(q() * 4), ax = Math.cos(yaw), az = -Math.sin(yaw);
@@ -771,7 +771,7 @@ export function buildFallen(world, n, r) {
     for (const [e, ms] of t.by) {
       if (e.man) for (const m of ms) {   // a man: the full model to stand over, a lighter one from a few paces
         const one = new THREE.LOD(); mm.multiplyMatrices(off, m); one.position.setFromMatrixPosition(mm); mm.premultiply(new THREE.Matrix4().makeTranslation(-one.position.x, -one.position.y, -one.position.z));
-        [e.hi, e.mid].forEach((g, i) => { const me = new THREE.Mesh(g, mat); me.matrixAutoUpdate = false; me.matrix.copy(mm); me.castShadow = i === 0; me.receiveShadow = true; me.customDepthMaterial = DEPTH; one.addLevel(me, i ? 12 : 0, i ? 0.1 : 0); out.push(me); });
+        [e.hi, e.mid].forEach((g, i) => { const me = new THREE.Mesh(g, mat); me.matrixAutoUpdate = false; me.matrix.copy(mm); me.castShadow = i === 0; me.receiveShadow = true; me.customDepthMaterial = DEPTH; one.addLevel(me, i ? 9 : 0, i ? 0.1 : 0); out.push(me); });
         near.add(one); trisHi += e.tris[0]; trisMid += e.tris[1]; calls++;
       } else {
         const im = new THREE.InstancedMesh(e.hi, mat, ms.length); ms.forEach((m, i) => im.setMatrixAt(i, mm.multiplyMatrices(off, m)));
@@ -780,7 +780,7 @@ export function buildFallen(world, n, r) {
       if (e.lo) for (const m of ms) { mm.multiplyMatrices(off, m); mm.elements[13] = 0; joinGeo(far, e.lo, mm); }   // heights above the ground stay heights above the ground
     }
     const lo = new THREE.Mesh(far.geometry(false), mat); lo.geometry.boundingSphere.radius += 9; lo.receiveShadow = true; lo.castShadow = false; out.push(lo); trisLo += far.tris;
-    lod.addLevel(near, 0); lod.addLevel(lo, 38, 0.08); lod.addLevel(new THREE.Group(), 105, 0.05);
+    lod.addLevel(near, 0); lod.addLevel(lo, 32, 0.08); lod.addLevel(new THREE.Group(), 105, 0.05);
     world.group.add(lod);
   }
   stats.tiles = tiles.size; stats.trisHi = trisHi; stats.trisMid = trisMid; stats.trisLo = trisLo; stats.models = calls; stats.libraryMs = L.ms;

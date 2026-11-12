@@ -393,14 +393,14 @@ function houndGrain() {
 // uHeat is raised. It burns away in the same embers as every other demon when he dies.
 export function houndMaterial() {
   const g = houndGrain();
-  const u = { uDissolve: { value: 0 }, uHit: { value: 0 }, uHeat: { value: 0 }, uTime: { value: 0 } };
+  const u = { uDissolve: { value: 0 }, uHit: { value: 0 }, uHeat: { value: 0 }, uTime: { value: 0 }, uRim: { value: 0.22 } };
   const mat = new THREE.MeshStandardMaterial({ map: g.map, normalMap: g.normal, normalScale: new THREE.Vector2(0.7, 0.7), vertexColors: true, roughness: 0.82, metalness: 0, side: THREE.DoubleSide });
   mat.userData.u = u;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 aSurf; varying vec2 vSurf; varying vec3 vDPos;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvDPos = position; vSurf = aSurf;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec2 vSurf; varying vec3 vDPos; uniform float uDissolve, uHit, uHeat, uTime;
+      varying vec2 vSurf; varying vec3 vDPos; uniform float uDissolve, uHit, uHeat, uTime, uRim;
       float dh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
       float dn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
         return mix(mix(mix(dh(i), dh(i+vec3(1,0,0)), f.x), mix(dh(i+vec3(0,1,0)), dh(i+vec3(1,1,0)), f.x), f.y),
@@ -411,10 +411,11 @@ export function houndMaterial() {
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.14, vSurf.x);')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
       totalEmissiveRadiance += vec3(0.9, 0.16, 0.02) * vSurf.y * vSurf.y * uHeat * (0.7 + 0.3 * sin(uTime * 6.0 + vDPos.z * 11.0 + vDPos.y * 7.0));
+      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.5);   // a cold edge of moonlight on the coat, so he reads in the dark
       totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit;
       if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);
   };
-  mat.customProgramCacheKey = () => 'hound-v2';
+  mat.customProgramCacheKey = () => 'hound-v3';
   return mat;
 }
 // build the skinned mesh and its bones; B[name] are the bones, each with userData.rest (its resting place in its parent)
