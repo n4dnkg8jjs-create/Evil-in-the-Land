@@ -1838,7 +1838,7 @@ export class Cryptid extends Boss {
       const t2 = this.deathT, w = smooth(clamp(t2 / 0.6, 0, 1)), sh = Math.sin(time * 41) * 3 * (1 - clamp(t2 / 3, 0, 1));
       mix('spine', [-5, 0, 0], w); mix('chest', [-8 + sh, 0, 0], w); mix('neck', [-16, 0, 0], w); mix('head', [-34, sh * 3, 10], w);
       for (const [k, m] of both) { mix('uArm' + k, [-14, 0, -m * 46 + sh], w); mix('fArm' + k, [-22, 0, 0], w); mix('hand' + k, [36, 0, 0], w); }
-      sink = smooth(clamp((t2 - 1.6) / 2.6, 0, 1));
+      sink = smooth(clamp((t2 - 2.6) / 2.0, 0, 1));   // (once the fire is through him: the robe comes down when there is little left inside it to show)
     } else if (st === 'intro') {
       const r = smooth(clamp((T - 2.0) / 1.6, 0, 1));
       mix('neck', [lerp(26, 6, r), 0, 0], 1); mix('head', [lerp(26, -8, r), 0, lerp(22, 6, r)], 1); mix('spine', [lerp(10, 4, r), 0, 0], 1);

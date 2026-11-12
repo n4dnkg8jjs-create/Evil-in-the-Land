@@ -1051,7 +1051,10 @@ export function buildChurch(K, o) {
 
   // ---- the nave's roof timbers: couples of rafters with their collars, charred, fewer toward the west; tie beams
   // on the wall heads; what fell lies in the nave
-  { const full = (s, z) => info['top' + s + 'n'](z) >= HN - 0.01, nT = 12, pres = [];
+  // (the wall head is whole under a timber only if it stands to full height there and is not broken down to a sill
+  // where a window was torn out, across the timber's width; over an intact window the course above it carries it)
+  { const head = (s, z) => { const t = info['top' + s + 'n'](z), so = info['sol' + s + 'n'](z); return t >= HN - 0.01 && (so >= HN - 0.01 || so === -1); };
+    const full = (s, z) => head(s, z - 0.1) && head(s, z) && head(s, z + 0.1), nT = 12, pres = [];
     for (let k2 = 0; k2 < nT; k2++) {
       const z = ZE + T + 0.45 + k2 * (ZW - ZE - 2 * T - 0.9) / (nT - 1), li = Math.min(7, Math.floor(k2 * 8 / nT)), has = [false, false];
       [-1, 1].forEach((s, si) => {
