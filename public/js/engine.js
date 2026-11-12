@@ -195,7 +195,7 @@ export class Engine {
     this.hemi.color.set(a.hemiSky); this.hemi.groundColor.set(a.hemiGround); this.hemi.intensity = a.hemiIntensity;
     this.fill.color.set(a.fillColor || 0x6070a0); this.fill.intensity = a.fillIntensity ?? 0.25;
     this.scene.fog.color.set(a.fog); this.scene.fog.density = a.fogDensity; u.uFog.value.set(a.fog);
-    this.renderer.toneMappingExposure = a.exposure ?? 1.0;
+    this.renderer.toneMappingExposure = (a.exposure ?? 1.0) * 1.12;   // a touch brighter overall (the owner found it a little too dark)
     this.baseAtmos = a;
     if (env) this.buildEnvironment();
   }

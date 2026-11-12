@@ -1090,17 +1090,27 @@ export class World {
       const corr = new THREE.Group();
       const tubes = [];
       for (let k = 0; k < 7; k++) {
-        const pts = []; const a0 = r() * TAU, turns = r.range(0.8, 1.6), h = r.range(2.2, 4.0);
-        for (let s = 0; s <= 14; s++) { const t = s / 14; const ang = a0 + t * turns * TAU; const rr = 0.28 + (1 - t) * 0.1; pts.push(new THREE.Vector3(Math.cos(ang) * rr, 0.8 + t * h, Math.sin(ang) * rr)); }
+        // they rise from the top of the plinth and wind round the shaft clear of its corners, and stop below the arms
+        // of the cross (they used to start inside the plinth, scrape through the shaft's edges and pass through the arms)
+        const pts = []; const a0 = r() * TAU, turns = r.range(0.8, 1.6), h = 1.35 + (r.range(2.2, 4.0) - 2.2) * 0.38;
+        for (let s = 0; s <= 14; s++) { const t = s / 14; const ang = a0 + t * turns * TAU; const rr = 0.315 + (1 - t) * 0.05; pts.push(new THREE.Vector3(Math.cos(ang) * rr, 0.97 + t * h, Math.sin(ang) * rr)); }
         const tr = 0.05 * r.range(0.7, 1.2); tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, tr, 5));
         // thorns rooted in the vine, standing out from it
         for (let s = 0; s < 6; s++) { const p = pts[2 + s * 2]; const out = new THREE.Vector3(p.x, r.range(-0.3, 0.5), p.z).normalize(); const th = new THREE.ConeGeometry(0.025, 0.16, 4);
           th.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), out)); th.translate(p.x + out.x * (tr + 0.05), p.y + out.y * (tr + 0.05), p.z + out.z * (tr + 0.05)); tubes.push(th); }
       }
       for (let k = 0; k < 9; k++) { // roots crawling over the steps
-        const ang = r() * TAU; const pts = [];
-        for (let s = 0; s <= 8; s++) { const t = s / 8; pts.push(new THREE.Vector3(Math.cos(ang + t * 0.6) * (0.3 + t * 4.5), 0.82 - t * 0.7 + Math.sin(t * 9) * 0.05, Math.sin(ang + t * 0.6) * (0.3 + t * 4.5))); }
-        tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 0.07 * (1 - 0.0), 5));
+        // they lie on the steps and drape over each riser onto the next (they used to run straight down through them)
+        const ang = r() * TAU; const pts = [], RT = 0.07;
+        const stepTop = (x, z) => {   // the top of the octagonal steps at (x, z), or the ground beyond them
+          const d = Math.hypot(x, z), ph = Math.atan2(x, z), k = (((ph % (PI / 4)) + PI / 4) % (PI / 4)) - PI / 8, edge = Math.cos(PI / 8) / Math.cos(k);
+          for (let s2 = 2; s2 >= 0; s2--) if (d < (3.2 - s2 * 0.6) * edge) return 0.26 + s2 * 0.26;
+          return this.heightAt ? this.heightAt(a.x + x, a.z + z) - a.y : 0;
+        };
+        const lie = (x, z) => { let m = stepTop(x, z); for (const rq of [RT, RT * 2.2]) for (let q = 0; q < 12; q++) { const qa = q * PI / 6; m = Math.max(m, stepTop(x + Math.cos(qa) * rq, z + Math.sin(qa) * rq)); } return m + RT * 0.9; };
+        for (let s = 0; s <= 160; s++) { const t = s / 160, rr = 0.42 + t * 4.4, x = Math.cos(ang + t * 0.6) * rr, z = Math.sin(ang + t * 0.6) * rr; pts.push(new THREE.Vector3(x, lie(x, z) + Math.max(0, Math.sin(t * 9)) * 0.03, z)); }
+        if (pts[0].y < 0.97) pts[0].y = 0.97;   // out from the foot of the cross, on the plinth
+        tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 110, RT, 5));
       }
       const cm = new THREE.Mesh(merge(tubes), blight); cm.castShadow = true; corr.add(cm);
       g.add(corr);

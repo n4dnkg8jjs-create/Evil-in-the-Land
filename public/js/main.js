@@ -197,6 +197,8 @@ function setupMenus() {
   $('btnSolo').onclick = () => { enterLobby(true); };
   // testing: straight into the battle on the Peak, alone with two companions
   $('btnTestPeak').onclick = () => { enterLobby(true); $('optAI').value = '2'; $('optChapter').value = String(CHAPTERS.length - 1); $('btnStart').click(); };
+  // testing: the cave inside the mountain on the Ascent, the company at its lower mouth
+  $('btnTestCave').onclick = () => { enterLobby(true); $('optAI').value = '2'; $('optChapter').value = String(CHAPTERS.findIndex((c) => c.id === 'ascent')); app.testAt = 'cave'; $('btnStart').click(); app.testAt = null; };
   $('btnSettings').onclick = () => openSettings('title');
   $('btnHow').onclick = () => { app.howReturn = 'title'; ui.show('how'); };
   $('howBack').onclick = () => ui.show(app.howReturn || 'title');
@@ -455,7 +457,7 @@ function startFromLobby() {
   const players = st.players.map((p) => ({ id: p.id, name: p.name, loadout: p.loadout || { ...app.loadout } }));
   const ai = Math.min(st.opts.ai, 5 - players.length);
   for (let i = 0; i < ai; i++) players.push({ id: 1000 + i, name: AI_NAMES[i], loadout: AI_LOADOUTS[i], ai: true });
-  const m = { players, difficulty: st.opts.diff, chapter: st.opts.chapter };
+  const m = { players, difficulty: st.opts.diff, chapter: st.opts.chapter, at: app.testAt || null };
   if (!L.solo) { app.net.start(m); setTimeout(() => startGame(m), 400); }   // let the word go out before loading freezes the page
   else startGame(m);
 }
@@ -468,7 +470,7 @@ function startGame(m) {
   app.game = new Game(app, { isHost: !!L?.host, solo: !!L?.solo, players: m.players, meId, difficulty: m.difficulty, chapter: m.chapter });
   app.input.gameActive = true; app.paused = false;
   app.audio.init();
-  app.game.loadChapter(m.chapter);
+  app.game.loadChapter(m.chapter, { at: m.at || null });
   app.input.lock();
   account.record('run');
 }
