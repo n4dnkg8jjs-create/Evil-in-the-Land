@@ -706,11 +706,12 @@ function armSamples(B, mesh) {
       else s.p = hd.worldToLocal(c.clone());
       s.r *= 0.92; delete s.pts;   // (the slice's corners: a sphere round the whole slice is a little fat)
     }
-    out[k] = { ua: B['uArm' + k], fa, hd, fore: fore.filter((s) => s.r > 0), hand: hand.filter((s) => s.r > 0) };
+    const F = fore.filter((s) => s.r > 0), Hd = hand.filter((s) => s.r > 0);
+    out[k] = { ua: B['uArm' + k], fa, hd, fore: F, hand: Hd, rf: Math.max(...F.map((s) => s.r + s.off.length())), rh: Math.max(...Hd.map((s) => s.r)) };
   }
   return out;
 }
-const _gv = Array.from({ length: 10 }, () => new THREE.Vector3()), _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gm = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
+const _gv = Array.from({ length: 16 }, () => new THREE.Vector3()), _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gm = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 const _gHorn = [], _gS = new THREE.Vector3();
 // how far a sphere (world centre p, world radius r) is into His robe; sets out to where it must go to clear it
 function intoRobe(robe, p, r, out) {
@@ -735,6 +736,15 @@ function intoRobe(robe, p, r, out) {
   const k = (rmax + m) / rho; out.set(nx * k + dx, y, nz * k * 0.82 + 0.07 + dz).applyMatrix4(robe.matrixWorld).sub(p);
   return d * Math.min(sx, sz);
 }
+// the closest points of segments p0-p1 and q0-q1 (into a and b); returns the parameter along q
+const _ss = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+function segSeg(p0, p1, q0, q1, a, b) {
+  const d1 = _ss[0].subVectors(p1, p0), d2 = _ss[1].subVectors(q1, q0), r = _ss[2].subVectors(p0, q0);
+  const A = d1.dot(d1), E = d2.dot(d2), F = d2.dot(r), C = d1.dot(r), Bd = d1.dot(d2), den = A * E - Bd * Bd;
+  let s = den > 1e-9 ? clamp((Bd * F - C * E) / den, 0, 1) : 0, t = E > 1e-9 ? (Bd * s + F) / E : 0;
+  if (t < 0) { t = 0; s = A > 1e-9 ? clamp(-C / A, 0, 1) : 0; } else if (t > 1) { t = 1; s = A > 1e-9 ? clamp((Bd - C) / A, 0, 1) : 0; }
+  a.copy(p0).addScaledVector(d1, s); b.copy(q0).addScaledVector(d2, t); return t;
+}
 // ... into an ellipsoid (centre c, radii e) in the frame of matrix M (inverse Mi); s: that frame's scale in the world
 function intoEll(M, Mi, s, c, e, p, r, out) {
   const q = _gv[7].copy(p).applyMatrix4(Mi).sub(c), m = r / s, ex = e.x + m, ey = e.y + m, ez = e.z + m;
@@ -756,10 +766,10 @@ export function guardArms(B) {
     for (const line of ud.horns || []) for (const n of line) { const w = _gHorn[nh] || (_gHorn[nh] = { p: new THREE.Vector3(), r: 0, end: false }); w.p.copy(n.p).applyMatrix4(hg.matrixWorld); w.r = n.r * hs; w.end = n === line[line.length - 1]; nh++; }
   }
   const ws = Math.cbrt(Math.abs(B.chest.matrixWorld.determinant()));   // (the model's scale in the world: the samples were measured at 1)
-  const push = _gv[8], best = _gv[9], tmp = _gv[5];
+  const push = _gv[8], best = _gv[9], tmp = _gv[5]; let left = 0;
   for (const k of ['R', 'L']) {
     const A = G[k]; if (!A) continue;
-    for (let it = 0; it < 5; it++) {
+    for (let it = 0; it < 7; it++) {
       let bd = 0;
       const el = _gv[0].setFromMatrixPosition(A.fa.matrixWorld), wr = _gv[1].setFromMatrixPosition(A.hd.matrixWorld);
       const ns = A.fore.length + A.hand.length;
@@ -771,13 +781,21 @@ export function guardArms(B) {
         if (robe && (d = intoRobe(robe, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
         if (ud && (d = intoEll(hg.matrixWorld, _gm2, hs, ud.crown.c, ud.crown.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
         if (ud?.cowl && (d = intoEll(B.chest.matrixWorld, _gm3, cs, ud.cowl.c, ud.cowl.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
-        for (let h = 0; h + 1 < nh; h++) {   // the horns, segment by segment
-          const a = _gHorn[h], b = _gHorn[h + 1]; if (a.end) continue;
-          const ab = tmp.subVectors(b.p, a.p), t = clamp(_gv[4].subVectors(p, a.p).dot(ab) / (ab.lengthSq() || 1), 0, 1), c = _gv[4].copy(a.p).addScaledVector(ab, t);
-          const rr = lerp(a.r, b.r, t) + r, dd = p.distanceTo(c);
-          if (dd < rr && rr - dd > bd) { bd = rr - dd; best.subVectors(p, c).multiplyScalar(bd / (dd || 1e-4)); _gv[3].copy(p); }
+      }
+      // the horns (thin toward the points, so they could slip between those spheres): the forearm and the hand as two
+      // capsules, against each stretch of each horn (its ridges and its flattening make it up to a quarter thicker)
+      if (nh) {
+        const tip = _gv[10].copy(A.hand[A.hand.length - 1].p).applyMatrix4(A.hd.matrixWorld);
+        for (let sg = 0; sg < 2; sg++) {
+          const p0 = sg ? wr : el, p1 = sg ? tip : wr, ra = (sg ? A.rh : A.rf) * ws;
+          for (let h = 0; h + 1 < nh; h++) {
+            const a = _gHorn[h], b = _gHorn[h + 1]; if (a.end) continue;
+            const t = segSeg(p0, p1, a.p, b.p, _gv[11], _gv[12]), rr = lerp(a.r, b.r, t) * 1.25 + ra + 0.01 * ws, dd = _gv[11].distanceTo(_gv[12]);
+            if (dd < rr && rr - dd > bd) { bd = rr - dd; best.subVectors(_gv[11], _gv[12]).multiplyScalar(bd / (dd || 1e-4)); _gv[3].copy(_gv[11]); }
+          }
         }
       }
+      if (it === 6) { left = Math.max(left, bd); break; }   // (what is left after the last swing: for the tests)
       if (bd < 0.002 * ws) break;
       // swing the upper arm at the shoulder, about the axis that carries that point most directly out
       const sh = _gv[0].setFromMatrixPosition(A.ua.matrixWorld), arm = _gv[1].subVectors(_gv[3], sh), L = arm.length(); if (L < 1e-3) break;
@@ -788,6 +806,7 @@ export function guardArms(B) {
       _gq2.setFromAxisAngle(ax, ang); A.ua.quaternion.premultiply(_gq2); A.ua.updateMatrixWorld(true);
     }
   }
+  return left;
 }
 // ---------------------------------------------------------------- motion
 const e = (b, x, y, z) => b.rotation.set(x * D2R, y * D2R, z * D2R);

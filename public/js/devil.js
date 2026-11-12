@@ -1344,10 +1344,17 @@ export class Serpent extends Boss {
     }
     C[M - 1].copy(P[SN - 1]);
     // the first rings run straight back out of the head along its own axis, and bend from there into the path
-    // (a metre of it straight, clear of the jaw however wide it gapes; then over three metres it bends into the path)
-    const JB = 12, hq = this.head.quaternion, hx = this._hx || (this._hx = new THREE.Vector3()), hv = this._hv || (this._hv = new THREE.Vector3()), bw = (j) => smooth(clamp((j - 3) / (JB - 3), 0, 1));
+    // (along a smooth curve that leaves the head straight back, clear of the jaw however wide it gapes, and meets the
+    // path a few metres on, going its way)
+    const JB = 11, hq = this.head.quaternion, hx = this._hx || (this._hx = new THREE.Vector3()), hv = this._hv || (this._hv = new THREE.Vector3()), bw = (j) => smooth(clamp(j / JB, 0, 1));
     hx.set(1, 0, 0).applyQuaternion(hq);
-    for (let j = 0; j < JB; j++) { hv.set(0, NECK.y, NECK.z - j * SSP / SSUB).applyQuaternion(hq).add(this.head.position); C[j].lerpVectors(hv, C[j], bw(j)); }
+    {
+      const q0 = hv.set(0, NECK.y, NECK.z).applyQuaternion(hq).add(this.head.position), d0 = this._hd0 || (this._hd0 = new THREE.Vector3()), d3 = this._hd3 || (this._hd3 = new THREE.Vector3());
+      d0.set(0, 0, -1).applyQuaternion(hq); d3.subVectors(C[JB + 1], C[JB - 1]).normalize();
+      const q3 = C[JB], hl = q0.distanceTo(q3) * 0.42, B = this._nb || (this._nb = Array.from({ length: 25 }, () => new THREE.Vector3())), BL = this._nbl || (this._nbl = new Float32Array(25));
+      for (let m = 0; m < 25; m++) { const t = m / 24, a = (1 - t) ** 3, b = 3 * (1 - t) ** 2 * t, c = 3 * (1 - t) * t * t, d = t ** 3; for (const ax of ['x', 'y', 'z']) B[m][ax] = a * q0[ax] + b * (q0[ax] + d0[ax] * hl) + c * (q3[ax] - d3[ax] * hl) + d * q3[ax]; BL[m] = m ? BL[m - 1] + B[m].distanceTo(B[m - 1]) : 0; }
+      let m = 1; for (let j = 0; j < JB; j++) { const sj = BL[24] * j / JB; while (m < 24 && BL[m] < sj) m++; const f = (sj - BL[m - 1]) / Math.max(1e-6, BL[m] - BL[m - 1]); C[j].lerpVectors(B[m - 1], B[m], f); }
+    }
     const t = this._vt || (this._vt = new THREE.Vector3()), s = this._vs || (this._vs = new THREE.Vector3()), n = this._vn || (this._vn = new THREE.Vector3()), ps = this._vps || (this._vps = new THREE.Vector3());
     const t0 = this._t0 || (this._t0 = new THREE.Vector3()), t1 = this._t1 || (this._t1 = new THREE.Vector3());
     // frames from the tail (always lying on the ground) up to the neck (which may stand straight up), so they never twist

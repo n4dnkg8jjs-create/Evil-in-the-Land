@@ -267,7 +267,7 @@ function hullPt(Lj, th) {
 function floorPt(Lj, f) {
   const e = jEnd(Lj), w = jw(Lj), top = jlip(Lj), c = Math.cos(f * Math.PI), ac = Math.abs(c);
   const inn = smooth(clamp((0.97 - ac) / 0.22, 0, 1));
-  let y = top - 0.03 * smooth(clamp((1 - ac) / 0.03, 0, 1)) - 0.32 * e * inn * (0.6 + 0.4 * Math.sin(Math.PI * clamp(Lj * 1.05, 0, 1)));
+  let y = top - 0.03 * smooth(clamp((1 - ac) / 0.03, 0, 1)) - 0.6 * DEP(Lj) * e * inn;   // (never through the hull beneath it)
   y += 0.075 * e * gauss(c, 0, 0.13) * smooth(clamp((Lj - 0.35) / 0.15, 0, 1)) * (1 - smooth(clamp((Lj - 0.88) / 0.05, 0, 1)));   // the sheath
   y += 0.014 * inn * Math.sin(c * 26) * (1 - gauss(c, 0, 0.2));   // folds running back along it
   return [w * c * (1 - 0.06 * inn), y, jzOf(Lj)];
@@ -344,7 +344,7 @@ export function buildSerpentHead() {
   const skin = serpentSkin(true, [eyeA, zOf(LE), browA, zOf(LE) - 0.03]);
   // (a little light of its own, in proportion to its colour: the light that gets into a mouth, which leaves the throat black)
   // its surface: blotched and veined, wet in places (a noise in the shader, over the head's own frame)
-  const mouth = new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0, clearcoat: 0.25, clearcoatRoughness: 0.18, emissive: 0x3a3a3a, side: THREE.DoubleSide });
+  const mouth = new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0, clearcoat: 0.25, clearcoatRoughness: 0.18, emissive: 0x444444, side: THREE.DoubleSide });
   mouth.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vLp;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLp = position;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
@@ -354,7 +354,7 @@ float mn(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(mix(mh(i), mh(i + vec3(1, 0, 0)), f.x), mix(mh(i + vec3(0, 1, 0)), mh(i + vec3(1, 1, 0)), f.x), f.y), mix(mix(mh(i + vec3(0, 0, 1)), mh(i + vec3(1, 0, 1)), f.x), mix(mh(i + vec3(0, 1, 1)), mh(i + vec3(1, 1, 1)), f.x), f.y), f.z); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
 float mb = mn(vLp * 7.0), mv = abs(mn(vLp * vec3(9.0, 9.0, 2.5) + 3.0) - 0.5);
-diffuseColor.rgb *= (0.72 + 0.5 * mb) * mix(0.55, 1.0, smoothstep(0.0, 0.035, mv));
+diffuseColor.rgb *= (0.72 + 0.5 * mb) * mix(0.82, 1.0, smoothstep(0.0, 0.02, mv + 0.03 * mn(vLp * 23.0)));
 diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= 0.7 + 0.6 * mn(vLp * 4.0 + 9.0);')
       .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance *= vColor.rgb;');
@@ -368,7 +368,7 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   const LT = 0.08, iT = Math.round(LT * NL);
   upper.add(new THREE.Mesh(H(skull), skin));
   const NP = 24;
-  const palate = grid(NL - iT, NP, (i, j) => { const L = (i + iT) / NL, f = j / NP, p = palatePt(L, f), k = (0.35 + 0.65 * smooth(clamp((L - LT) / 0.4, 0, 1))) * (0.85 + 0.15 * Math.cos(f * 40)); return [...p, ...flesh(k * (1 - 0.35 * Math.sin(Math.PI * f)))]; }, true);
+  const palate = grid(NL - iT, NP, (i, j) => { const L = (i + iT) / NL, f = j / NP, p = palatePt(L, f), k = (0.4 + 0.6 * smooth(clamp((L - LT) / 0.35, 0, 1))) * (0.85 + 0.15 * Math.cos(f * 40)); return [...p, ...flesh(k * (1 - 0.15 * Math.sin(Math.PI * f)))]; }, true);
   upper.add(new THREE.Mesh(H(palate), mouth));
   // ---- the lower jaw: its scaled hull, and inside the floor of the mouth
   const NLJ = 52, LjT = (zOf(LT) - JZ0) / (JZ1 - JZ0), ijT = Math.floor(LjT * NLJ);
@@ -590,17 +590,21 @@ diffuseColor.rgb *= vec3(1.0, 0.94 + 0.06 * mb, 0.97);`)
   // face the lining's triangles outward (the skin is drawn on their fronts, the flesh on their backs)
   parts.gape(0.7);
   {
-    const ix = lg.index.array, P = lpos, e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), nn = new THREE.Vector3(), ce = new THREE.Vector3(), ax = new THREE.Vector3(), a0 = new THREE.Vector3();
+    const votes = [0, 0, 0], ix = lg.index.array, P = lpos, e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), nn = new THREE.Vector3(), ce = new THREE.Vector3(), ax = new THREE.Vector3(), a0 = new THREE.Vector3();
     let cx = 0, cy = 0, cz = 0; for (let i = 0; i < RING; i++) { cx += lpos[(T0 + i) * 3]; cy += lpos[(T0 + i) * 3 + 1]; cz += lpos[(T0 + i) * 3 + 2]; } a0.set(cx / RING, cy / RING, cz / RING); ax.copy(THROAT_END).sub(a0).normalize();
     for (let t = 0; t < ix.length; t += 3) {
       const A = ix[t], B = ix[t + 1], Cc = ix[t + 2];
       e1.set(P[B * 3] - P[A * 3], P[B * 3 + 1] - P[A * 3 + 1], P[B * 3 + 2] - P[A * 3 + 2]); e2.set(P[Cc * 3] - P[A * 3], P[Cc * 3 + 1] - P[A * 3 + 1], P[Cc * 3 + 2] - P[A * 3 + 2]); nn.crossVectors(e1, e2);
       ce.set((P[A * 3] + P[B * 3] + P[Cc * 3]) / 3, (P[A * 3 + 1] + P[B * 3 + 1] + P[Cc * 3 + 1]) / 3, (P[A * 3 + 2] + P[B * 3 + 2] + P[Cc * 3 + 2]) / 3);
-      let out;
-      if (A < T0) out = Math.sign(ce.x) * nn.x;                                                     // a cheek: outward is away from the middle
-      else { ce.sub(a0); ce.addScaledVector(ax, -ce.dot(ax)); out = ce.dot(nn); }                  // the throat: away from its axis
-      if (out < 0) { ix[t + 1] = Cc; ix[t + 2] = B; }
+      // a cheek: outward is away from the middle; the throat: away from its axis (the gullet), or back away from the mouth (the funnel)
+      let out, reg;
+      if (A < T0) { reg = A < (CN + 1) * (CM + 1) ? 0 : 1; out = Math.sign(ce.x) * nn.x; }
+      else if (A < T0 + RING) { reg = 2; out = -nn.z; }
+      else { reg = 2; ce.sub(a0); ce.addScaledVector(ax, -ce.dot(ax)); out = ce.dot(nn); }
+      votes[reg] += Math.sign(out) * nn.length();
     }
+    // (each region was built one way round: turn the whole of it, by the vote of its triangles)
+    for (let t = 0; t < ix.length; t += 3) { const A = ix[t], reg = A < T0 ? (A < (CN + 1) * (CM + 1) ? 0 : 1) : 2; if (votes[reg] < 0) { const B = ix[t + 1]; ix[t + 1] = ix[t + 2]; ix[t + 2] = B; } }
     lg.index.needsUpdate = true; lastG = -1;
   }
   parts.gape(0);

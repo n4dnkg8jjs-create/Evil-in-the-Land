@@ -495,8 +495,8 @@ export class World {
   // stand on. The scree under the faces and the settling of what is too steep are done afterwards (weather).
   crag(x, z, s, dx, dz, d) {
     const n = this.noise, H0 = s.hill, k = smooth(clamp(d / 30, 0, 1));
-    const ex = dx + n.fbm(x * 0.011 + 17.3, z * 0.011, 2) * 34 * k, ez = dz + n.fbm(x * 0.011, z * 0.011 - 9.1, 2) * 34 * k;   // the summit stays put
-    const r = Math.hypot(ex, ez), g = Math.exp(-0.5 * (r / 31) ** 2);
+    const ex = dx + n.fbm(x * 0.011 + 17.3, z * 0.011, 2) * 26 * k, ez = dz + n.fbm(x * 0.011, z * 0.011 - 9.1, 2) * 26 * k;   // the summit stays put
+    const r = Math.hypot(ex, ez), g = Math.exp(-0.5 * (r / 31) ** 2) * (1 - smooth(clamp((d - 62) / 48, 0, 1)));   // (its foot dies away before the farms and the road)
     if (g < 0.004) return H0 * 0.84 * g;
     let h = H0 * 0.84 * g;
     // spurs and the hollows between them: the flanks bulge and fall back round the hill

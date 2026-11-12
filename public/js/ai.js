@@ -25,7 +25,12 @@ export class Companion {
     const N = this.nav || (this.nav = { t: 0, px: k.pos.x, pz: k.pos.z, stuck: 0, path: null, pi: 0, pathT: -99, losT: 0, failT: -99, side: 1, gx: 0, gz: 0 });
     let m = Math.hypot(inp.mx, inp.mz);
     if (m < 0.1 || inp.pray || k.action) { N.stuck = 0; N.t = 0; N.px = k.pos.x; N.pz = k.pos.z; return; }
-    const g = this.goal;
+    let g = this.goal;
+    // a goal inside something (the place behind the leader falls in a house): the nearest free ground to it
+    if (g && W.solidAt(g[0], g[1], 0.46)) {
+      let f = null; for (let r = 0.8; r <= 4.8 && !f; r += 0.8) for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2, x = g[0] + Math.cos(a) * r, z = g[1] + Math.sin(a) * r; if (!W.solidAt(x, z, 0.5)) { f = [x, z]; break; } }
+      if (f) { g = f; const dx = g[0] - k.pos.x, dz = g[1] - k.pos.z, l = Math.hypot(dx, dz); if (l > 0.5) { inp.mx = dx / l * m; inp.mz = dz / l * m; } }
+    }
     if (N.path && (!g || Math.hypot(g[0] - N.gx, g[1] - N.gz) > 4 || now > N.pathT + 8)) N.path = null;
     if (g && !N.path && now > N.failT + 3 && Math.hypot(g[0] - k.pos.x, g[1] - k.pos.z) > 1.5) {
       let blocked = N.stuck > 0.8;
