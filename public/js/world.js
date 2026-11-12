@@ -13,6 +13,7 @@ import { WX, WATER_U, WATER_GLSL } from './weather.js';
 import { makeFlame } from './flame.js';
 import { makeFrozen } from './people.js';
 import { buildFallen } from './battlefield.js';
+import { Solids, findPath } from './colliders.js';
 
 const HALF = 150, N = 257, CELL = (HALF * 2) / (N - 1);
 // the Peak: arêtes running out from the summit [angle, is it the knights' way up], and the true summit [x, z, height]
@@ -120,6 +121,7 @@ function jaggedRock(seed, taper = 0, detail = 3) {
   g = g.toNonIndexed(); g.computeVertexNormals(); return g;
 }
 
+const _seatN = new THREE.Vector3(), _seatU = new THREE.Vector3(), _seatV = new THREE.Vector3(), _seatQ = new THREE.Quaternion(), _seatQ2 = new THREE.Quaternion(), _seatE = new THREE.Euler();
 // a lot's corners in world space (pad metres outside it); with n, a grid of n+1 x n+1 sample points over it
 function lotCorners(L, pad = 0, n = 0) {
   const C = Math.cos(L.yaw), S = Math.sin(L.yaw), out = [];
@@ -380,7 +382,7 @@ export class World {
     this.scene = engine.scene;
     this.group = new THREE.Group(); this.scene.add(this.group);
     this.r = rng(this.ch.seed); this.noise = makeNoise(this.ch.seed);
-    this.colliders = []; this.colGrid = new SpatialHash(6);
+    this.colliders = []; this.colGrid = new SpatialHash(6); this.solids = new Solids(4);
     this.time = 0; this.healAnims = []; this.wind = new THREE.Vector3(this.ch.wind[0], 0, this.ch.wind[1]);
     this.fires = []; this.waterLevel = -1000; this.fireSpots = []; this.charSpots = []; this.wells = [];
     this.healedFrac = 0;
@@ -470,7 +472,7 @@ export class World {
         h += (n.ridge(x * 0.032, z * 0.032, 5) - 0.45) * 26 * smooth(clamp(out / 14, 0, 1)) * (1 - path * 0.85);   // broken faces and buttresses
         h += rf * smooth(clamp(out / 5, 0, 1)) * (2 + n.ridge(x * 0.07, z * 0.07, 4) * 6);                     // the arêtes' jagged crests
         // a lip of outcrops round the arena (not across the knights' ridge)
-        h += smooth(clamp((r - 25) / 4, 0, 1)) * (1 - smooth(clamp((r - 30) / 5, 0, 1))) * (1 + n.ridge(x * 0.11, z * 0.11, 3) * 3) * (1 - path);
+        h += smooth(clamp((r - 25) / 4, 0, 1)) * (1 - smooth(clamp((r - 30) / 5, 0, 1))) * (1 + this.softRidge(x * 0.09, z * 0.09, 2) * 3) * (1 - path);   // (weathered blocks, not cones)
         // the summit rises a little to the north: a broad snow dome with a corniced crest, not a spike
         const sd = Math.hypot(x - PEAK_SPIRE[0], (z - PEAK_SPIRE[1]) * 1.4);
         h += PEAK_SPIRE[2] * Math.exp(-((sd / 26) ** 2)) * (0.85 + 0.3 * n.fbm(x * 0.05, z * 0.05, 3));
@@ -478,13 +480,44 @@ export class World {
       }
       default: h = n.fbm(x * 0.009, z * 0.009, 5) * T.amp + n.ridge(x * 0.02, z * 0.02, 4) * T.amp * 0.25;
     }
-    // the Devil's vantage points: broken crags rather than smooth mounds
+    // the Devil's vantage points: old hills of weathered rock rather than smooth mounds (see crag)
+    let cm = 0, cs = 0;
     for (const s of this.devilSpots) {
-      const d2 = (x - s.x) ** 2 + (z - s.z) ** 2; if (d2 > 120 * 120) continue;
-      const g = Math.exp(-d2 / (2 * 30 * 30));
-      h += s.hill * g * (0.62 + 0.55 * n.ridge(x * 0.03 + 7, z * 0.03 - 3, 4)) + s.hill * 0.16 * Math.pow(g, 0.6) * n.fbm(x * 0.11, z * 0.11, 3);
+      const dx = x - s.x, dz = z - s.z, d2 = dx * dx + dz * dz; if (d2 > 120 * 120) continue;
+      if (this._legacy) { const g = Math.exp(-d2 / (2 * 30 * 30)); h += s.hill * g * (0.62 + 0.55 * n.ridge(x * 0.03 + 7, z * 0.03 - 3, 4)) + s.hill * 0.16 * Math.pow(g, 0.6) * n.fbm(x * 0.11, z * 0.11, 3); }   // as the land was first made (see planSettlement)
+      else { const c = this.crag(x, z, s, dx, dz, Math.sqrt(d2)); cs += c; if (c > cm) cm = c; }
     }
-    return h;
+    return h + cm + (cs - cm) * 0.35;   // two hills side by side make a broader one, not one twice as high
+  }
+  // A rocky hill as the weather leaves one: a broad irregular rise, round over the crest and long and concave at
+  // the foot, running out in lobes and spurs; its flanks scored by gullies that run straight down them and open
+  // out below; tors of bare rock about the top, steep-sided and flat-topped, and a crag at the summit for Him to
+  // stand on. The scree under the faces and the settling of what is too steep are done afterwards (weather).
+  crag(x, z, s, dx, dz, d) {
+    const n = this.noise, H0 = s.hill, k = smooth(clamp(d / 30, 0, 1));
+    const ex = dx + n.fbm(x * 0.011 + 17.3, z * 0.011, 2) * 26 * k, ez = dz + n.fbm(x * 0.011, z * 0.011 - 9.1, 2) * 26 * k;   // the summit stays put
+    const r = Math.hypot(ex, ez), g = Math.exp(-0.5 * (r / 31) ** 2) * (1 - smooth(clamp((d - 62) / 48, 0, 1)));   // (its foot dies away before the farms and the road)
+    if (g < 0.004) return H0 * 0.84 * g;
+    let h = H0 * 0.84 * g;
+    // spurs and the hollows between them: the flanks bulge and fall back round the hill
+    const a = Math.atan2(ez, ex), ca = Math.cos(a), sa = Math.sin(a);
+    h *= 1 + 0.16 * n.fbm(ca * 1.6 + s.x * 0.05, sa * 1.6 + s.z * 0.05, 2) * smooth(clamp(r / 20, 0, 1));
+    // gullies down the flanks: a line round the hill where the noise crosses zero, drawn out downhill, deepest
+    // half-way down and gone at the crest and the foot, round in the bottom
+    const flank = 4 * g * (1 - g), gv = n.fbm(ca * 1.5 + s.x * 0.07 + r * 0.012, sa * 1.5 + s.z * 0.07 - r * 0.008, 2);
+    const gl = 1 - smooth(clamp(Math.abs(gv) * (1 + r / 35) / 0.16, 0, 1));   // (a few metres across all the way down)
+    h -= H0 * 0.1 * gl * flank;
+    // tors about the top: blocks of bare rock standing out of the slope, faces a few metres high
+    const crest = smooth(clamp((g - 0.62) / 0.3, 0, 1));
+    if (crest > 0) {
+      const tn = n.fbm(x * 0.045 + 31.7, z * 0.045 - 7.3, 2), tor = smooth(clamp((tn - 0.16) / 0.1, 0, 1));
+      h += crest * tor * (2.6 + 2.4 * n.fbm(x * 0.021 + 5.5, z * 0.021, 2) + 0.3 * n.fbm(x * 0.13, z * 0.13, 1));
+      // the summit crag He stands on: a ragged block a few metres high, its top roughly level
+      const sr = 6.5 + 3.2 * n.fbm(x * 0.07 + 2.1, z * 0.07 + 8.4, 2);
+      h += (1 - smooth(clamp((d - sr) / 3.2, 0, 1))) * (3.8 + 0.3 * n.fbm(x * 0.15, z * 0.15, 1));
+    }
+    // and a little roughness over all of it
+    return h + H0 * 0.025 * Math.sqrt(g) * n.fbm(x * 0.08 + 3.3, z * 0.08, 2);
   }
 
   buildHeights() {
@@ -492,18 +525,21 @@ export class World {
     const T = this.ch.terrain;
     this.makePathHeights();
     if (this.cave && !this.caveSys) this.caveSys = new CavePlan(this);
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) H[j * N + i] = this.rawHeight(-HALF + i * CELL, -HALF + j * CELL);
+    const D = this._pathD = new Float32Array(N * N), Tt = this._pathT = new Float32Array(N * N), o = { d: 0, t: 0 };
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { H[j * N + i] = this.rawHeight(-HALF + i * CELL, -HALF + j * CELL, true, o); D[j * N + i] = o.d; Tt[j * N + i] = o.t; }
+    this.weather();
+    this._pathD = this._pathT = null;
     this.flattenLots();
     if (this.caveSys) this.cutCave();
     for (const a of this.altarT) a.y = this.heightAt(a.x, a.z);
     for (const s of this.devilSpots) s.y = this.groundAt(s.x, s.z);
   }
   // the ground as generated, before any building pad is levelled into it (needs the path heights)
-  rawHeight(x, z, shoulder = true) {
-    const T = this.ch.terrain, PT = 400, pathH = this.pathH;
+  rawHeight(x, z, shoulder = true, out = null) {
+    const T = this.ch.terrain, PT = 400, legacy = this._legacy, pathH = legacy ? this.pathH0 : this.pathH;
     let h = this.baseHeight(x, z);
     if (T.kind !== 'peak') {
-      const nr = this.path.nearest(x, z);
+      const nr = this.path.nearest(x, z); if (out) { out.d = nr.d; out.t = nr.t; }
       const ph = pathH[Math.round(nr.t * PT)];
       if (T.kind === 'mountain') h = this.lidHeight(x, z, nr, ph, h, shoulder);
       else h = lerp(ph, h, smooth(clamp((nr.d - 4) / 14, 0, 1)));
@@ -512,9 +548,71 @@ export class World {
     for (const a of this.altarT) {
       const d = Math.hypot(x - a.x, z - a.z);
       const fr = T.kind === 'peak' ? 5.5 : T.kind === 'mountain' ? 12 : 9;   // on the Ascent, a broad level shelf, so no slope of the gorge comes near the stones
-      if (d < fr * 2) { const ah = this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - fr) / fr, 0, 1))); }
+      const bl = legacy || T.kind === 'peak' || T.kind === 'mountain' ? fr : fr * 1.6;   // in the lowlands the shelf eases out over a long way, so the road climbs onto it gently
+      if (d < fr + bl) { const ah = legacy ? this.pathH0[Math.round(a.t * 400)] : this.altarHeightGuess(a); h = lerp(ah, h, smooth(clamp((d - fr) / bl, 0, 1))); }
     }
     return h;
+  }
+  // Weathering, over the ground as generated. What stands steeper than its rock can hold slumps (a thermal
+  // erosion): soft ground settles toward the angle loose stuff rests at, hard rock keeps a face. Then the scree
+  // shed from every face lies in a cone at its foot (at the angle of repose), so a face rises out of a fan of
+  // its own rubble that eases into the slope below, instead of standing straight out of the turf. Only out in the
+  // land: the road and its banks, the altars' shelves, the cave and the shoulder over it, the Peak's arena and the
+  // knights' ridge are left exactly as they were made.
+  weather() {
+    const T = this.ch.terrain, kind = T.kind; if (kind === 'fen') return;
+    const H = this.H, D = this._pathD, n = this.noise, NN = N * N;
+    const M = new Float32Array(NN), TL = new Float32Array(NN);
+    const mtn = kind === 'mountain', C = this.cave, S = this.caveSys, high = mtn || kind === 'peak';
+    const soft = high ? 0.75 : 0.62, cap = high ? 2.6 : 6;   // (the lowland hills are older and softer: their slopes lie lower)
+    let any = false;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const k = j * N + i, x = -HALF + i * CELL, z = -HALF + j * CELL;
+      let m;
+      if (kind === 'peak') { const r = Math.hypot(x, z); m = smooth(clamp((r - 31) / 6, 0, 1)); if (z < -20) m *= smooth(clamp((Math.abs(x) - 6) / 8, 0, 1)); }
+      else m = smooth(clamp((D[k] - (mtn ? 7.5 : 6)) / 8, 0, 1));
+      if (m > 0) for (const a of this.altarT) { const fr = kind === 'peak' ? 5.5 : mtn ? 12 : 9; m *= smooth(clamp((Math.hypot(x - a.x, z - a.z) - fr * (kind === 'peak' || mtn ? 2 : 2.6) - 1) / 6, 0, 1)); }
+      if (m > 0 && S) {
+        const e = S.sample(x, z); if (e && !e.out) m *= smooth(clamp((e.sdf - 6) / 10, 0, 1));
+        if (m > 0) { const nr = { d: D[k], t: this._pathT[k] }, kk = this.shoulderK(x, z, nr, this.trackHalf(nr.t)); m *= 1 - smooth(clamp(kk * 4, 0, 1)); }   // nor the shoulder over it
+      }
+      m *= smooth(clamp(Math.min(i, j, N - 1 - i, N - 1 - j) / 4, 0, 1));   // (the edge of the map stays as made, to meet the land beyond)
+      M[k] = m; if (m > 0) any = true;
+      // how much rock there is here: hard ground holds a steep face, soft settles (tan 32-37° .. tan 68°, per cell)
+      let hard = high ? smooth(clamp((n.fbm(x * 0.028 + 11.3, z * 0.028 - 5.7, 2) + 0.12) / 0.28 + 0.5, 0, 1)) : 0;   // (in the lowlands only the tops are bare rock)
+      for (const s of this.devilSpots) { const d2 = (x - s.x) ** 2 + (z - s.z) ** 2; if (d2 < 900) hard = Math.max(hard, 1 - smooth(clamp((Math.sqrt(d2) - 18) / 12, 0, 1))); }   // the tors and the summit crag are sound rock
+      TL[k] = (soft + hard * (2.5 - soft)) * CELL;
+    }
+    if (!any) return;
+    const E = H.slice(), dH = new Float32Array(NN);
+    const NB = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, -1, Math.SQRT2]];
+    const off = NB.map(([a, b]) => b * N + a), inv = NB.map((q) => 1 / q[2]), ex = new Float64Array(8);
+    // the slump: a few passes, each moving half the excess over the angle downhill, shared among the lower neighbours
+    for (let it = 0; it < 16; it++) {
+      dH.fill(0);
+      for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+        const k = j * N + i, h = E[k], tl = TL[k]; let dmax = 0, sum = 0;
+        for (let q = 0; q < 8; q++) { const dd = (h - E[k + off[q]]) * inv[q] - tl; ex[q] = dd; if (dd > 0) { sum += dd; if (dd > dmax) dmax = dd; } }
+        if (dmax <= 0) continue;
+        const mv = dmax * 0.5, f = mv / sum; dH[k] -= mv;
+        for (let q = 0; q < 8; q++) if (ex[q] > 0) dH[k + off[q]] += ex[q] * f;
+      }
+      for (let k = 0; k < NN; k++) E[k] += dH[k];
+    }
+    // the scree: from every face (anything still steeper than about 50°) a cone of rubble at the angle of repose
+    // (about 34°), starting a little below the face's top and lying wherever it stands above the ground
+    const F = new Float32Array(NN).fill(-1e9), rep = 0.68 * CELL, rep2 = rep * Math.SQRT2;
+    for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+      const k = j * N + i;
+      const gx = (E[k + 1] - E[k - 1]) / (2 * CELL), gz = (E[k + N] - E[k - N]) / (2 * CELL), g = Math.hypot(gx, gz);
+      if (g > 1.2) F[k] = E[k] - (1.4 + 0.25 * g);
+    }
+    for (let pass = 0; pass < 2; pass++) {
+      for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) { const k = j * N + i; F[k] = Math.max(F[k], F[k - 1] - rep, F[k - N] - rep, F[k - N - 1] - rep2, F[k - N + 1] - rep2); }
+      for (let j = N - 2; j > 0; j--) for (let i = N - 2; i > 0; i--) { const k = j * N + i; F[k] = Math.max(F[k], F[k + 1] - rep, F[k + N] - rep, F[k + N + 1] - rep2, F[k + N - 1] - rep2); }
+    }
+    // (a fan holds only so much: it fills the angle under a face and thins out over the slope below, it never buries one)
+    for (let k = 0; k < NN; k++) { const m = M[k]; if (m > 0) { const f = F[k] - E[k]; H[k] += (E[k] + (f > 0 ? cap * (1 - Math.exp(-f / cap)) : 0) - H[k]) * m; } }
   }
   // half the width of the Ascent's track at t: wide at the foot where the company gathers, narrow above
   trackHalf(t) { return 4.6 + this.noise.fbm(t * 9, 3.1, 2) * 2.2 + 9 * (1 - smooth(clamp(t / 0.07, 0, 1))); }
@@ -527,19 +625,71 @@ export class World {
   lidHeight(x, z, nr, ph, h, shoulder = true) {
     const n = this.noise, t = nr.t;
     const half = this.trackHalf(t), w = Math.max(0, nr.d - half);
+    // out from the track the mountain no longer cares which bend of the track is nearest: the floor it rises from
+    // eases into one smooth surface through the whole of the track, so no cliff runs out across the mountainside
+    // along the line where one bend's ground meets another's
+    if (!this._legacy) ph = lerp(ph, this.trackSurface(x, z), smooth(clamp((nr.d - half - 2) / 16, 0, 1)));
     let rise = w * 0.42 + Math.pow(w, 1.45) * 0.045;
-    rise += (n.ridge(x * 0.045, z * 0.045, 4) - 0.45) * 10 * smooth(clamp(w / 8, 0, 1));    // spurs and gullies
+    rise += (this.softRidge(x * 0.045, z * 0.045, 3) - 0.42) * 10 * smooth(clamp(w / 8, 0, 1));    // spurs and gullies, round-crested
     rise += n.fbm(x * 0.012, z * 0.012, 3) * 18 * smooth(clamp((w - 6) / 30, 0, 1));         // the big folds of the mountain
-    rise += Math.max(0, n.ridge(x * 0.09 + 3, z * 0.09, 3) - 0.62) * 14 * smooth(clamp((w - 3) / 6, 0, 1));   // outcrops
+    // couloirs: gullies running straight down the walls (drawn out across the track's line), cut deeper higher up
+    const cv = n.fbm(t * 11 + x * 0.01, w * 0.016 + z * 0.01, 2), cl = 1 - smooth(clamp(Math.abs(cv) / 0.11, 0, 1));
+    rise -= cl * Math.min(5, w * 0.16) * smooth(clamp((w - 4) / 10, 0, 1)) * (1 - smooth(clamp((w - 22) / 14, 0, 1)));
+    // outcrops: bands and blocks of sound rock standing out of the slope, flat-topped, faces a few metres high
+    // (their foot is filled with scree in weather), rather than spikes
+    const ob = n.fbm(x * 0.05 + 3, z * 0.05 - 1.7, 2);
+    rise += smooth(clamp((ob - 0.14) / 0.1, 0, 1)) * (2.5 + 2.5 * n.fbm(x * 0.02 + 9, z * 0.02, 2)) * smooth(clamp((w - 3) / 6, 0, 1));
     let y = ph + rise + h * 0.1 * smooth(clamp((w - 12) / 20, 0, 1));
     y += n.fbm(x * 0.3, z * 0.3, 2) * 0.14 * (1 - smooth(clamp(w, 0, 1)));                 // the track: rough, gritty
     // the shoulder of rock the cave runs under: it rises steeply right from the entrance
     const C = this.cave;
-    if (C && shoulder) {
-      const k = smooth(clamp((t - C.t0 + C.e) / 0.024, 0, 1)) * smooth(clamp((C.t1 + C.e - t) / 0.024, 0, 1));
-      y += k * (16 + n.fbm(x * 0.05, z * 0.05, 3) * 7) * (1 - smooth(clamp((nr.d - 18) / 30, 0, 1)));
-    }
+    if (C && shoulder) { const k = this.shoulderK(x, z, nr, half); if (k > 0) y += k * (16 + n.fbm(x * 0.05, z * 0.05, 3) * 7); }
     return y;
+  }
+  // how much of the shoulder stands here: by the distance to the stretch of track it lies over (not to whichever
+  // bend is nearest, or it would end in a cliff where another bend becomes the nearer), giving way near other bends
+  shoulderK(x, z, nr, half) {
+    const C = this.cave; let S = this._sh;
+    if (!S) {
+      const P = this.path.poly, L = P.length - 1, i0 = Math.max(0, Math.floor((C.t0 - C.e - 0.03) * L)), i1 = Math.min(L, Math.ceil((C.t1 + C.e + 0.03) * L));
+      let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (let i = i0; i <= i1; i++) { x0 = Math.min(x0, P[i].x); x1 = Math.max(x1, P[i].x); z0 = Math.min(z0, P[i].z); z1 = Math.max(z1, P[i].z); }
+      let len = 0; for (let i = 0; i < L; i++) len += Math.hypot(P[i + 1].x - P[i].x, P[i + 1].z - P[i].z);
+      S = this._sh = { i0, i1, L, len, x0: x0 - 50, x1: x1 + 50, z0: z0 - 50, z1: z1 + 50 };
+    }
+    if (x < S.x0 || x > S.x1 || z < S.z0 || z > S.z1) return 0;
+    // the most any point of that stretch lends here (a maximum of smooth things, so smooth itself)
+    const P = this.path.poly; let k = 0, best = 1e9;
+    for (let i = S.i0; i < S.i1; i++) {
+      const a = P[i], b = P[i + 1], abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz || 1, u = clamp(((x - a.x) * abx + (z - a.z) * abz) / l2, 0, 1);
+      const d2 = (x - a.x - abx * u) ** 2 + (z - a.z - abz * u) ** 2; if (d2 >= 2304 && d2 >= best * best) continue;
+      const d = Math.sqrt(d2); if (d < best) best = d;
+      // (a point of the stretch lends as much as its own place along the track would, taken that much nearer the
+      // stretch's ends as this is far from it: so the shoulder ends where it did along the track, bevelled off to the sides)
+      if (d < 48) { const tt = (i + u) / S.L, dt = d / S.len; k = Math.max(k, smooth(clamp((tt - dt - C.t0 + C.e) / 0.024, 0, 1)) * smooth(clamp((C.t1 + C.e - tt - dt) / 0.024, 0, 1)) * (1 - smooth(clamp((d - 18) / 30, 0, 1)))); }
+    }
+    return k * Math.max(smooth(clamp((nr.d - half - 2) / 12, 0, 1)), smooth(clamp((nr.d + 3 - best) / 3, 0, 1)));
+  }
+  // the Ascent: a smooth surface through the heights of the whole track (each point of it weighted by nearness),
+  // on a coarse grid; far from the track the mountain rises from this rather than from its nearest bend
+  trackSurface(x, z) {
+    let G = this._ts;
+    if (!G) {
+      const PT = 400, S = 46, st = (HALF * 2 + 20) / (S - 1), pts = []; for (let i = 0; i <= PT; i += 2) { const p = this.path.at(i / PT); pts.push(p.x, p.z, this.pathH[i]); }
+      G = this._ts = { S, st, v: new Float32Array(S * S) };
+      for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+        const gx = -HALF - 10 + i * st, gz = -HALF - 10 + j * st; let sw = 0, sh = 0;
+        for (let k = 0; k < pts.length; k += 3) { const w = 1 / ((gx - pts[k]) ** 2 + (gz - pts[k + 1]) ** 2 + 400); const w2 = w * w; sw += w2; sh += w2 * pts[k + 2]; }
+        G.v[j * S + i] = sh / sw;
+      }
+    }
+    const fx = clamp((x + HALF + 10) / G.st, 0, G.S - 1.001), fz = clamp((z + HALF + 10) / G.st, 0, G.S - 1.001), i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, V = G.v, S = G.S;
+    return (V[j * S + i] * (1 - u) + V[j * S + i + 1] * u) * (1 - v) + (V[(j + 1) * S + i] * (1 - u) + V[(j + 1) * S + i + 1] * u) * v;
+  }
+  // a ridged noise with its creases rounded: crests and gully floors are curves rather than knife-edges
+  softRidge(x, z, oct) {
+    const n2 = this.noise.n2; let a = 0.5, f = 1, s = 0, prev = 1;
+    for (let o = 0; o < oct; o++) { const v = n2(x * f, z * f); let r = 1 - Math.sqrt(v * v + 0.015); r *= r; s += r * a * prev; prev = r; a *= 0.5; f *= 2.03; }
+    return s;
   }
   // in the cave (pad metres out into its rock), or over the stretch of the track the shoulder has buried
   inCaveZone(x, z, pad = 2) {
@@ -592,7 +742,9 @@ export class World {
       for (const [cx, cz] of corners) { if (!this.inBounds(cx, cz) || this.path.nearest(cx, cz).d < 5.5) return false; for (const a of this.altarT) if (Math.hypot(cx - a.x, cz - a.z) < 13) return false; }
       for (const a of this.altarT) if (Math.hypot(lot.x - a.x, lot.z - a.z) < 16) return false;
       for (const o of this.lots) if (lotsOverlap(o, lot, 0.6)) return false;
-      let lo = 1e9, hi = -1e9; for (const [cx, cz] of lotCorners(lot, 0, 3)) { const h = this.rawHeight(cx, cz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+      // judged on the land as it was first made, so the houses and farms stand where they always stood (their pads
+      // are levelled into the ground as it is now, in flattenLots)
+      let lo = 1e9, hi = -1e9; this._legacy = true; for (const [cx, cz] of lotCorners(lot, 0, 3)) { const h = this.rawHeight(cx, cz); lo = Math.min(lo, h); hi = Math.max(hi, h); } this._legacy = false;
       return hi - lo < (lot.kind === 'field' ? 5 : 3.2);
     };
     const add = (lot) => { lot.rad = Math.hypot(Math.max(-lot.x0, lot.x1), Math.max(-lot.z0, lot.z1)); if (!fits(lot)) return null; this.lots.push(lot); return lot; };
@@ -670,14 +822,40 @@ export class World {
   }
   makePathHeights() {
     if (this.pathH) return;
-    const T = this.ch.terrain, PT = 400; const pathH = new Float32Array(PT + 1);
-    for (let i = 0; i <= PT; i++) {
-      const p = this.path.at(i / PT);
-      if (T.kind === 'mountain') pathH[i] = (i / PT) * T.rise;
-      else if (T.kind === 'fen') pathH[i] = Math.max(0.5, this.baseHeight(p.x, p.z) * 0.3 + 0.6);
-      else pathH[i] = this.baseHeight(p.x, p.z) * 0.6;
+    const T = this.ch.terrain, PT = 400;
+    const make = () => {
+      const pathH = new Float32Array(PT + 1);
+      for (let i = 0; i <= PT; i++) {
+        const p = this.path.at(i / PT);
+        if (T.kind === 'mountain') pathH[i] = (i / PT) * T.rise;
+        else if (T.kind === 'fen') pathH[i] = Math.max(0.5, this.baseHeight(p.x, p.z) * 0.3 + 0.6);
+        else pathH[i] = this.baseHeight(p.x, p.z) * 0.6;
+      }
+      for (let pass = 0; pass < 6; pass++) for (let i = 1; i < PT; i++) pathH[i] = (pathH[i - 1] + pathH[i] * 2 + pathH[i + 1]) / 4;
+      return pathH;
+    };
+    // the road as it was first made, before the crags were weathered: the farms and the village are laid out on it
+    // (planSettlement), and the road keeps its heights, only eased where it was too steep
+    this._legacy = true; this.pathH0 = make(); this._legacy = false;
+    const pathH = this.pathH0.slice();
+    if (T.kind !== 'mountain') {
+      // a road does not climb straight over the foot of a crag: where it would be steeper than a cart can take, it is
+      // cut into the rise and banked up across the dip, and it runs level across each altar's shelf, climbing onto it
+      // at that grade too
+      const L = new Float32Array(PT), pin = new Uint8Array(PT + 1);
+      for (let i = 0; i < PT; i++) { const a = this.path.at(i / PT), b = this.path.at((i + 1) / PT); L[i] = Math.hypot(b.x - a.x, b.z - a.z) * 0.25; }
+      for (const a of this.altarT) {
+        if (a.t === undefined) continue; const ah = pathH[Math.round(a.t * PT)];
+        for (let i = 0; i <= PT; i++) { const p = this.path.at(i / PT); if (Math.hypot(p.x - a.x, p.z - a.z) < 10) { pathH[i] = ah; pin[i] = 1; } }
+      }
+      const cut = pathH.slice(), fill = pathH.slice();   // the rises cut down, the dips filled up; the road takes half of each
+      for (let i = 1; i <= PT; i++) if (!pin[i]) { cut[i] = Math.min(cut[i], cut[i - 1] + L[i - 1]); fill[i] = Math.max(fill[i], fill[i - 1] - L[i - 1]); }
+      for (let i = PT - 1; i >= 0; i--) if (!pin[i]) { cut[i] = Math.min(cut[i], cut[i + 1] + L[i]); fill[i] = Math.max(fill[i], fill[i + 1] - L[i]); }
+      for (let i = 0; i <= PT; i++) pathH[i] = (cut[i] + fill[i]) / 2;
+      for (let i = 1; i <= PT; i++) if (!pin[i]) pathH[i] = clamp(pathH[i], pathH[i - 1] - L[i - 1], pathH[i - 1] + L[i - 1]);   // (and up onto the shelves)
+      for (let i = PT - 1; i >= 0; i--) if (!pin[i]) pathH[i] = clamp(pathH[i], pathH[i + 1] - L[i], pathH[i + 1] + L[i]);
+      for (let pass = 0; pass < 3; pass++) for (let i = 1; i < PT; i++) if (!pin[i]) pathH[i] = (pathH[i - 1] + pathH[i] * 2 + pathH[i + 1]) / 4;
     }
-    for (let pass = 0; pass < 6; pass++) for (let i = 1; i < PT; i++) pathH[i] = (pathH[i - 1] + pathH[i] * 2 + pathH[i + 1]) / 4;
     this.pathH = pathH;
   }
   // level a pad under every building (not under fields), blending out over a few metres
@@ -685,7 +863,7 @@ export class World {
     const H = this.H;
     for (const L of this.lots) {
       if (L.kind === 'field' || L.kind === 'paddock') continue;
-      let sum = 0, n = 0; if (L.padH === undefined) for (const [cx, cz] of lotCorners(L, 0, 4)) { sum += this.rawHeight(cx, cz); n++; }
+      let sum = 0, n = 0; if (L.padH === undefined) { this._legacy = true; for (const [cx, cz] of lotCorners(L, 0, 4)) { sum += this.rawHeight(cx, cz); n++; } this._legacy = false; }   // (at the height it always stood: see planSettlement)
       const ph = L.padH ?? (L.padH = sum / n); const B = L.kind === 'camp' ? 4 : 7;
       const C = Math.cos(L.yaw), S = Math.sin(L.yaw), R = L.rad + B;
       const i0 = Math.max(0, Math.floor((L.x - R + HALF) / CELL)), i1 = Math.min(N - 1, Math.ceil((L.x + R + HALF) / CELL));
@@ -751,13 +929,16 @@ export class World {
       for (let i = 0; i < total; i++) {
         const [x, z] = P2[i]; if (!ok[i] || gap[i]) continue; const y = this.heightAt(x, z);
         posts.push({ x, y: y - 0.32, z, ry: r() * 0.4, rx: r.range(-0.04, 0.04), rz: r.range(-0.04, 0.04) });
+        this.solids.circle(x, z, 0.09, { low: true, h: 1.08 });   // (a knight vaults the run; a post alone he walks round)
         if (i + 1 >= total || !ok[i + 1] || gap[i + 1]) continue;
         const [x2, z2] = P2[i + 1], y2 = this.heightAt(x2, z2), L = Math.hypot(x2 - x, z2 - z);
         if (i === gi) { gates.push({ hx: x, hz: z, y, ry: Math.atan2(-(z2 - z), x2 - x), L }); continue; }
+        const nRails = rails.length;
         // the ground between posts must not rise through the rails
         let bump = 0; for (const f of [0.25, 0.5, 0.75]) bump = Math.max(bump, this.heightAt(x + (x2 - x) * f, z + (z2 - z) * f) - (y + (y2 - y) * f));
         const pitch = Math.atan2(y2 - y, L), ry = Math.atan2(-(z2 - z), x2 - x);
         for (const hh of [0.42, 0.88]) { if (r() < 0.08) continue; rails.push({ x: (x + x2) / 2, y: (y + y2) / 2 + hh + bump, z: (z + z2) / 2, ry, rz: pitch, sx: L + 0.12 }); }
+        if (rails.length > nRails) this.solids.capsule(x, z, x2, z2, 0.07, { low: true, h: 0.93 + bump, tag: 'fence' });   // the run between two posts: a knight vaults it
       }
     }
     const post = new THREE.BoxGeometry(0.13, 1.4, 0.13); post.translate(0, 0.7, 0);
@@ -771,6 +952,7 @@ export class World {
       const open = 0.5, ry = G.ry + open, dx = Math.cos(ry), dz = -Math.sin(ry), len = G.L * 0.92, hx = G.hx + dx * 0.1, hz = G.hz + dz * 0.1;
       const gy0 = Math.max(G.y, this.heightAt(hx + dx * len, hz + dz * len)) + 0.08;   // the free end clears the ground
       for (let k = 0; k < 4; k++) gateList.push({ x: hx + dx * len / 2, y: gy0 + 0.12 + k * 0.22, z: hz + dz * len / 2, ry, sx: len });
+      this.solids.capsule(hx, hz, hx + dx * len, hz + dz * len, 0.05, { low: true, h: gy0 - G.y + 0.9, tag: 'gate' });   // the gate standing ajar
       for (const f of [0, 1]) stiles.push({ x: hx + dx * len * f, y: gy0 + 0.45, z: hz + dz * len * f, ry, sy: 0.86 });
       stiles.push({ x: hx + dx * len / 2, y: gy0 + 0.45, z: hz + dz * len / 2, ry, rz: Math.atan2(0.66, len * 0.94), sx: Math.hypot(0.66, len * 0.94), sy: 1 });
     }
@@ -898,9 +1080,13 @@ export class World {
         // healed high ground: the same stone and grit, its blighted cast gone, a little paler and warmer
         vec3 cleanCol = mix(mix(dead.rgb, dead2.rgb, 0.4), rock.rgb, 0.5) * vec3(1.32, 1.26, 1.16);
         vec3 ground = mix(deadCol, mix(cleanCol, mix(grass.rgb, grass2.rgb, 0.4) * uAliveTint, uAliveGrass), aliveMix);
-        float rockMix = smoothstep(0.30, 0.52, slope + (rock.a - 0.5) * 0.18);
+        float rockMix = smoothstep(0.27, 0.5, slope + (rock.a - 0.5) * 0.2);
         rockMix = max(rockMix, uRockAll * smoothstep(0.25, 0.6, rock.a + dead2.a * 0.4));   // the summit: bare broken rock with grit in the hollows
         vec3 rockC = rock.rgb * mix(0.62, 1.0, aliveMix);
+        // scree: on the slopes at the angle rubble rests at (the fans under the faces) the ground is stony, grey grit
+        // with the rock's colour coming through in patches, so a face runs down into its scree and the scree into the turf
+        float scree = smoothstep(0.12, 0.26, slope + (rock.a - 0.5) * 0.12 + (dead2.a - 0.5) * 0.08) * (1.0 - rockMix) * 0.55;
+        ground = mix(ground, mix(ground, rockC * 0.8, 0.75), scree);
         // the gorge walls: bedded strata, pale and dark bands that kink with the folds of the rock
         float bed = vWPos.y * 0.55 + sin(vWPos.x * 0.05 + vWPos.z * 0.04) * 2.2 + rock.a * 1.2;
         rockC *= mix(1.0, 0.72 + 0.5 * smoothstep(0.2, 0.8, abs(fract(bed) - 0.5) * 2.0) + 0.15 * sin(bed * 0.37), uStrata);
@@ -1162,21 +1348,79 @@ export class World {
   }
 
   // ---------------------------------------------------------------- props
-  addCollider(x, z, r) { const c = { x, z, r }; this.colliders.push(c); this.colGrid.insert(c, x, z); return c; }
-  // keep an entity out of colliders and inside the world
-  collide(ent, radius) {
-    const p = ent.pos; const near = this.colGrid.query(p.x, p.z, radius + 3, this._q || (this._q = []));
-    for (const c of near) {
-      const dx = p.x - c.x, dz = p.z - c.z; const d = Math.hypot(dx, dz); const m = c.r + radius;
-      if (d < m && d > 1e-4) { p.x = c.x + dx / d * m; p.z = c.z + dz / d * m; }
+  // A round collider. It goes in the solids that stop bodies (colliders.js) and in the old list of circles that
+  // other placement reads (the wagon's road, the battlefield's dead, a charger's wall). Setting its r below 0 later
+  // takes it away (the wagon's, when it leaves).
+  addCollider(x, z, r) { const c = { t: 0, x, z, r, low: false, h: 2 }; this.colliders.push(c); this.colGrid.insert(c, x, z); this.solids.insert(c); return c; }
+  // only in that old list: where the true shape of the thing is a wall, a box or a fence run in the solids instead
+  legacyCollider(x, z, r) { const c = { x, z, r }; this.colliders.push(c); this.colGrid.insert(c, x, z); return c; }
+  // the true shapes (see colliders.js): o.low marks what a knight may vault (o.h: how high it stands)
+  solidCircle(x, z, r, o) { return this.solids.circle(x, z, r, o); }
+  solidCapsule(ax, az, bx, bz, r, o) { return this.solids.capsule(ax, az, bx, bz, r, o); }
+  solidBox(x, z, hx, hz, rot, o) { return this.solids.box(x, z, hx, hz, rot, o); }
+  // shapes given in a building's own frame ({ box: [x, z, hx, hz, rot] } or { seg: [ax, az, bx, bz, r] }, with low, h)
+  addSolids(list, toW, yaw) {
+    for (const o of list || []) {
+      const opt = { low: !!o.low, h: o.h ?? 3 };
+      if (o.box) { const [bx, bz, hx, hz, rot] = o.box, [wx, wz] = toW(bx, bz); this.solids.box(wx, wz, hx, hz, yaw + rot, opt); }
+      else if (o.seg) { const [ax, az, bx, bz, r] = o.seg, A = toW(ax, az), B = toW(bx, bz); this.solids.capsule(A[0], A[1], B[0], B[1], r, opt); }
+      else if (o.circle) { const [cx, cz, r] = o.circle, [wx, wz] = toW(cx, cz); this.solids.circle(wx, wz, r, opt); }
     }
+  }
+  // does a body of radius r at (x, z) overlap anything solid (low things too, unless low = false)?
+  solidAt(x, z, r, low = true) { return this.solids.solidAt(x, z, r, low); }
+  clearLine(ax, az, bx, bz, r, low = true) { return this.solids.clear(ax, az, bx, bz, r, low); }
+  // a way round what is solid for a body of radius r (companions), as a list of [x, z], or null
+  findPath(x0, z0, x1, z1, r = 0.45) {
+    return findPath(x0, z0, x1, z1, (x, z) => !!this.solids.solidAt(x, z, r, true), (ax, az, bx, bz) => this.solids.clear(ax, az, bx, bz, r, true, 0.3));
+  }
+  // A knight at (x, z) going along (dx, dz) would vault what? The low thing ahead within `reach` of his body,
+  // with clear ground to come down on beyond it and nothing tall in the way: { x, z (where he lands), cx, cz
+  // (where he crosses), h }, or null.
+  vaultCheck(x, z, dx, dz, rad = 0.42, reach = 1.2) {
+    const l = Math.hypot(dx, dz); if (l < 1e-6) return null; dx /= l; dz /= l;
+    const v = this.solids.vaultLine(x, z, dx, dz, rad, reach); if (!v || v.h > 1.3) return null;
+    let land = v.land, lx = 0, lz = 0, ok = false;
+    for (let k = 0; k < 3 && !ok; k++, land += 0.3) { lx = x + dx * land; lz = z + dz * land; ok = !this.solids.solidAt(lx, lz, rad + 0.02, true); }
+    if (!ok) return null;
+    if (!this.solids.clear(x, z, lx, lz, rad * 0.7, false, 0.25)) return null;   // a tree, a house, a rock in the way
+    const probe = { pos: { x: lx, z: lz }, blockLow: true }; this.collide(probe, rad);
+    if (Math.hypot(probe.pos.x - lx, probe.pos.z - lz) > 0.05) return null;       // off the world, out of the ravine, into the cave's rock
+    if (Math.abs(this.standAt(lx, lz) - this.standAt(x, z)) > 0.9) return null;   // a drop or a bank on the far side
+    return { x: lx, z: lz, cx: v.cx, cz: v.cz, h: v.h };
+  }
+  // out of the walls of whatever building (x, z) is inside, to the nearest side (a demon put down in a wreck)
+  outOfBuildings(p, pad) {
+    const L = this.inFootprint(p.x, p.z, pad); if (!L) return false;
+    const C = Math.cos(L.yaw), S = Math.sin(L.yaw), dx = p.x - L.x, dz = p.z - L.z; let lx = dx * C - dz * S, lz = dx * S + dz * C;
+    const hw = (L.kind === 'church' ? 6.2 : L.w / 2 + 0.45) + pad, z0 = (L.kind === 'church' ? -10.9 : -L.d / 2 - 0.7) - pad, z1 = (L.kind === 'church' ? 15.7 : L.d / 2 + 0.7) + pad;
+    const e = [hw - lx, hw + lx, z1 - lz, lz - z0], m = Math.min(...e);
+    if (m === e[0]) lx = hw + 0.05; else if (m === e[1]) lx = -hw - 0.05; else if (m === e[2]) lz = z1 + 0.05; else lz = z0 - 0.05;
+    p.x = L.x + lx * C + lz * S; p.z = L.z - lx * S + lz * C; return true;
+  }
+  // Keep an entity out of what is solid and inside the world. A knight (ent.blockLow) is stopped by low things
+  // too (he vaults them); demons and bosses clamber over those. Where it stood last time is kept on it, so a thin
+  // fence is never stepped through between two frames however fast it moves.
+  collide(ent, radius) {
+    const p = ent.pos, knight = ent.blockLow === true, prev = ent._cx !== undefined ? (this._pv || (this._pv = { x: 0, z: 0 })) : null;
+    if (prev) { prev.x = ent._cx; prev.z = ent._cz; }
+    else if (!knight && this.lots?.length) this.outOfBuildings(p, radius);   // a body put down, not walked here: never inside a building
+    this.solids.resolve(p, radius, knight, prev, ent.vel && ent.vel.isVector3 ? ent.vel : null, !knight && ent.vel ? (ent._slide || (ent._slide = { sign: 1 })) : null);
+    // the edges of the world (the summit's rim, the ravine, the crevasse, the map's border); where they push a
+    // body back into something solid (a rock on the rim), the two are settled together once more
+    const bx = p.x, bz = p.z; if (this.keepIn(p, radius)) { ent._cx = p.x; ent._cz = p.z; return; }
+    if ((p.x - bx) ** 2 + (p.z - bz) ** 2 > 1e-8) { this.solids.resolve(p, radius, knight, null, null, null); this.keepIn(p, radius); }
+    ent._cx = p.x; ent._cz = p.z;
+  }
+  // inside the world's edges; true when the cave has taken over (its own walls)
+  keepIn(p, radius) {
     const lim = HALF - 8;
     if (this.ch.terrain.kind === 'peak') { const r = Math.hypot(p.x, p.z); if (r > 33) { p.x *= 33 / r; p.z *= 33 / r; } }
     else if (this.ch.terrain.kind === 'mountain') {
       // stay in the ravine
       const nr = this.path.nearest(p.x, p.z);
       // along the ledge, the outer edge is the edge of the world
-      if (this.caveSys && this.caveSys.collide(p, radius, nr)) return;   // in and about the cave: its own walls
+      if (this.caveSys && this.caveSys.collide(p, radius, nr)) return true;   // in and about the cave: its own walls
       let lim = 13; const L = this.ledge;
       if (L && nr.t > L.t0 && nr.t < L.t1) { const a = this.path.at(nr.t), b = this.path.at(Math.min(1, nr.t + 0.004)); const side = Math.sign((p.x - a.x) * -(b.z - a.z) + (p.z - a.z) * (b.x - a.x)); if (side === L.side) lim = 3.0; }
       if (nr.d > lim) { const q = this.path.at(nr.t); const k = lim / nr.d; p.x = q.x + (p.x - q.x) * k; p.z = q.z + (p.z - q.z) * k; }
@@ -1185,6 +1429,7 @@ export class World {
       if (C && B) { const d = (p.x - C.x) * C.nx + (p.z - C.z) * C.nz, along = (p.x - C.x) * C.nz - (p.z - C.z) * C.nx;
         if (Math.abs(d) < 3.6 && Math.abs(along) < 16 && Math.abs(along) > 0.95) { const push = (Math.sign(d) || 1) * 3.6 - d; p.x += C.nx * push; p.z += C.nz * push; } }
     } else { p.x = clamp(p.x, -lim, lim); p.z = clamp(p.z, -lim, lim); }
+    return false;
   }
   inBounds(x, z) { return Math.abs(x) < HALF - 10 && Math.abs(z) < HALF - 10; }
 
@@ -1196,6 +1441,32 @@ export class World {
     if (this.inLot(x, z, 1.5)) return false;
     if (this.paving && this.onPaving(x, z)) return false;
     return true;
+  }
+  // a rock laid on the ground as it lies: tilted with the slope (follow: how far), and let down wherever the ground
+  // under its rim falls away below the plane it rests on, so no edge stands clear of a slope or a crest. Draws
+  // nothing from the generator.
+  seat(it, follow = 0.8) {
+    const n = this.normalAt(it.x, it.z, _seatN), h = this.heightAt(it.x, it.z), s = it.s || 1, sy = it.sy || s;
+    if (follow > 0) follow = Math.max(follow, smooth(clamp((0.8 - n.y) / 0.3, 0, 1)));   // (on a steep face it lies flat against it)
+    _seatU.set(0, 1, 0);
+    if (follow > 0 && n.y < 0.9995) {
+      _seatU.lerp(n, follow).normalize(); _seatQ.setFromUnitVectors(_seatV.set(0, 1, 0), _seatU);
+      _seatE.set(it.rx || 0, it.ry || 0, it.rz || 0); _seatQ.multiply(_seatQ2.setFromEuler(_seatE)); _seatE.setFromQuaternion(_seatQ, 'XYZ');
+      it.rx = _seatE.x; it.ry = _seatE.y; it.rz = _seatE.z;
+    }
+    // as deep in the slope (measured square to it) as it was meant to lie in level ground: its centre stands that far
+    // off the slope's plane, which on a slope is further down the vertical through it
+    const c = _seatU.dot(n), e = Math.sqrt(sy * sy * c * c + s * s * (1 - c * c)), y0 = it.y - h;
+    it.y = h + (y0 + e - sy) / lerp(1, Math.max(n.y, 0.35), smooth(clamp((0.85 - n.y) / 0.3, 0, 1)));   // (on a gentle slope it keeps its height)
+    // and let down wherever the ground under its rim falls away below that plane
+    let dip = 0, lo = h; const R = s * 0.9, gx = -n.x / n.y, gz = -n.z / n.y;
+    for (let k = 0; k < 8; k++) { const dx = Math.cos(k * PI / 4) * R, dz = Math.sin(k * PI / 4) * R, gh = this.heightAt(it.x + dx, it.z + dz); lo = Math.min(lo, gh); dip = Math.min(dip, gh - (h + gx * dx + gz * dz)); }
+    it.y += Math.max(dip, -lerp(0.12, 0.3, smooth(clamp((0.9 - n.y) / 0.2, 0, 1))) * sy);   // (never so far that it sinks out of sight)
+    // on a steep slope or the brink of a drop, its rim (as tilted) goes no higher than the ground under it anywhere round
+    const ws = smooth(clamp((0.85 - n.y) / 0.25, 0, 1));
+    if (ws > 0 && follow > 0) { let rim = 1e9; const ux = -_seatU.x / _seatU.y, uz = -_seatU.z / _seatU.y; for (let k = 0; k < 12; k++) { const dx = Math.cos(k * PI / 6) * s * 1.15, dz = Math.sin(k * PI / 6) * s * 1.15; rim = Math.min(rim, this.heightAt(it.x + dx, it.z + dz) - (ux * dx + uz * dz)); } it.y = lerp(it.y, Math.min(it.y, rim - 0.05), ws); }
+    // on a face too steep to rest on, it is a block standing out of the rock: set into the face as low as its foot
+    return (it.y = lerp(it.y, Math.min(it.y, lo + y0), smooth(clamp((0.55 - n.y) / 0.25, 0, 1)))), it;
   }
   scatter(n, test, cb, tries = 6) {
     const r = this.r; let placed = 0;
@@ -1332,8 +1603,8 @@ export class World {
     if (P.rocks || P.crags) {
       const rocks = []; for (let v = 0; v < 5; v++) rocks.push(lumpy(icoSmooth(2), 0.35, 30 + v));
       const lists = rocks.map(() => []);
-      this.scatter(P.rocks || 0, (x, z) => this.okSpot(x, z, 4, 11), (x, z, y) => { const s = r.range(0.4, 1.6); lists[r.int(0, 4)].push({ x, y: y - s * 0.3, z, s, sy: s * r.range(0.6, 1), ry: r() * TAU }); if (s > 0.9) this.addCollider(x, z, s * 0.8); });
-      if (P.crags && kind !== 'peak' && kind !== 'mountain') this.scatter(P.crags, (x, z) => this.okSpot(x, z, 11, 14), (x, z, y) => { const s = r.range(2.5, 6); lists[r.int(0, 4)].push({ x, y: y + s * 0.4, z, s, sy: s * r.range(1.4, 2.6), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }); this.addCollider(x, z, s * 0.85); });
+      this.scatter(P.rocks || 0, (x, z) => this.okSpot(x, z, 4, 11), (x, z, y) => { const s = r.range(0.4, 1.6); lists[r.int(0, 4)].push(this.seat({ x, y: y - s * 0.3, z, s, sy: s * r.range(0.6, 1), ry: r() * TAU })); if (s > 0.9) this.addCollider(x, z, s * 0.8); });
+      if (P.crags && kind !== 'peak' && kind !== 'mountain') this.scatter(P.crags, (x, z) => this.okSpot(x, z, 11, 14), (x, z, y) => { const s = r.range(2.5, 6); lists[r.int(0, 4)].push(this.seat({ x, y: y + s * 0.4, z, s, sy: s * r.range(1.4, 2.6), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }, 0.4)); this.addCollider(x, z, s * 0.85); });
       if (kind === 'peak') {
         // fractured outcrops on the lip of the arena and along the arêtes, leaning spires of black rock, the summit fang
         const jag = [], spires = []; for (let v = 0; v < 4; v++) { jag.push(jaggedRock(500 + v)); spires.push(jaggedRock(600 + v, 0.35)); }
@@ -1341,11 +1612,11 @@ export class World {
         for (let k = 0; k < 46; k++) {
           const a = r() * TAU; let da = a + Math.PI / 2; da = Math.atan2(Math.sin(da), Math.cos(da)); if (Math.abs(da) < 0.28) continue;   // keep the way up clear
           const d = r.range(27, 34), x = Math.cos(a) * d, z = Math.sin(a) * d, s = r.range(0.8, 2.6);
-          jl[k % 4].push({ x, y: this.heightAt(x, z) + s * 0.25, z, s, sy: s * r.range(0.7, 1.5), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) }); if (s > 1.4) this.addCollider(x, z, s * 0.8);
+          jl[k % 4].push(this.seat({ x, y: this.heightAt(x, z) + s * 0.25, z, s, sy: s * r.range(0.7, 1.5), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) }, 0.5)); if (s > 1.4) this.addCollider(x, z, s * 0.8);
         }
         for (let k = 0; k < 50; k++) {   // out on the faces and crests: broken buttresses half-buried in snow
           const a = r() * TAU, d = r.range(38, 110), x = Math.cos(a) * d, z = Math.sin(a) * d; const s = r.range(2.5, 6);
-          (k % 4 ? jl : sl)[k % 4].push({ x, y: this.heightAt(x, z) - s * 0.15, z, s, sy: s * r.range(0.8, 1.6), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) });
+          (k % 4 ? jl : sl)[k % 4].push(this.seat({ x, y: this.heightAt(x, z) - s * 0.15, z, s, sy: s * r.range(0.8, 1.6), ry: r() * TAU, rx: r.range(-0.3, 0.3), rz: r.range(-0.3, 0.3) }, 0.4));
         }
         const dark = snowyRock(stoneMat.clone()); dark.color = new THREE.Color(0x77726e); dark.flatShading = true;
         jag.forEach((g, i) => this.instanced(g, dark, jl[i])); spires.forEach((g, i) => this.instanced(g, dark, sl[i]));
@@ -1377,6 +1648,7 @@ export class World {
       const cg = merge([xf(new THREE.BoxGeometry(0.1, 1.6, 0.1), [0, 0.7, 0]), xf(new THREE.BoxGeometry(0.7, 0.09, 0.09), [0, 1.1, 0])]);
       const list = []; this.scatter(P.crosses, (x, z) => this.okSpot(x, z, 3, 12) && this.normalAt(x, z).y > 0.86, (x, z, y) => list.push({ x, y: y - 0.1, z, ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.2, 0.2) }));
       this.instanced(cg, woodMat, list);
+      for (const c of list) this.solids.circle(c.x, c.z, 0.12, { h: 1.6 });
     }
     this.buildFences(woodMat.clone());
     // --- the farms and the village of Saint Aldric, on their planned lots
@@ -1416,7 +1688,8 @@ export class World {
     }
     if (P.logs) {
       const lg = new THREE.CylinderGeometry(0.35, 0.4, 6, 10, 1); lg.rotateZ(PI / 2);
-      const list = []; this.scatter(P.logs, (x, z) => this.okSpot(x, z, 6, 12) && this.normalAt(x, z).y > 0.93, (x, z, y) => { const ry = r() * TAU; list.push({ x, y: y + 0.25, z, ry }); for (let s = -2; s <= 2; s++) this.addCollider(x + Math.cos(ry) * s * 1.2, z - Math.sin(ry) * s * 1.2, 0.45); });
+      const list = []; this.scatter(P.logs, (x, z) => this.okSpot(x, z, 6, 12) && this.normalAt(x, z).y > 0.93, (x, z, y) => { const ry = r() * TAU; list.push({ x, y: y + 0.25, z, ry }); for (let s = -2; s <= 2; s++) this.legacyCollider(x + Math.cos(ry) * s * 1.2, z - Math.sin(ry) * s * 1.2, 0.45);
+        this.solids.capsule(x - Math.cos(ry) * 2.75, z + Math.sin(ry) * 2.75, x + Math.cos(ry) * 2.75, z - Math.sin(ry) * 2.75, 0.4, { low: true, h: 0.65 }); });   // a fallen trunk: a knight vaults it
       this.instanced(lg, barkMat, list);
     }
     if (P.boardwalk) {
@@ -1445,7 +1718,7 @@ export class World {
         const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, 2.4, 14), bronze); barrel.rotation.x = PI / 2 - 0.15; barrel.position.y = 0.75; g.add(barrel);
         for (const s of [-1, 1]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.07, 6, 14), woodMat); w.position.set(s * 0.45, 0.5, 0); w.rotation.y = PI / 2; g.add(w); }
         const carriage = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 2.0), charMat); carriage.position.set(0, 0.45, -0.5); carriage.rotation.x = 0.25; g.add(carriage);
-        g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.addCollider(x, z, 1.2);
+        g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.legacyCollider(x, z, 1.2); this.solids.box(x + Math.sin(g.rotation.y) * -0.2, z + Math.cos(g.rotation.y) * -0.2, 0.62, 1.3, g.rotation.y, { h: 1.1 });   // barrel, wheels and trail
       }
     }
     if (P.wagons) for (let k = 0; k < P.wagons; k++) {
@@ -1453,7 +1726,7 @@ export class World {
       const g = new THREE.Group(); g.position.set(x, this.heightAt(x, z) - 0.1, z); g.rotation.set(0, r() * TAU, r.range(-0.3, 0.3));
       const bed = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3.2), charMat); bed.position.y = 0.8; g.add(bed);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.06, 6, 12), woodMat); w.position.set(sx * 0.85, 0.45, sz * 1.1); w.rotation.y = PI / 2; g.add(w); }
-      g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.addCollider(x, z, 1.8);
+      g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.legacyCollider(x, z, 1.8); this.solids.box(x, z, 0.9, 1.65, g.rotation.y, { h: 1.1 });   // the wagon's bed on its wheels
     }
     if (kind === 'mountain') this.buildAscent(stoneMat, woodMat, charMat);
     // --- mountain crevices: dark clefts where eyes will watch
@@ -1509,6 +1782,7 @@ export class World {
       const lean = r() < 0.25, sunk = r() < 0.2;
       const g = { ...it, y: it.y + 0.15 - (sunk ? r.range(0.12, 0.3) : 0.02), rx: lean ? r.range(-0.3, 0.22) : it.rx * 0.5, rz: lean ? r.range(-0.18, 0.18) : it.rz * 0.5 };
       if (kind === 4) wooden.push({ ...g, s: r.range(0.9, 1.1) }); else buckets[kind].push(g);
+      this.solids.box(it.x, it.z, (kind === 4 ? 0.32 : 0.29) * (it.s || 1), kind === 2 ? 0.18 : 0.1, it.ry || 0, { low: true, h: [0.86, 0.86, 1.05, 0.62, 1.0][kind] * (it.s || 1) });   // the stone: a knight vaults it
       // the grave itself: a long low mound of earth in front of the stone, some of them sunk into a hollow
       const C = Math.cos(it.ry), S = Math.sin(it.ry), mx = it.x + S * 0.95, mz = it.z + C * 0.95;
       mounds.push({ x: mx, y: this.heightAt(mx, mz) - (sunk ? 0.1 : 0.02), z: mz, ry: it.ry, s: 1, sx: r.range(0.42, 0.5), sy: sunk ? 0.08 : r.range(0.12, 0.2), sz: r.range(0.72, 0.82) });
@@ -1707,7 +1981,7 @@ export class World {
           if (!ruin && sg % 2 === 1 && r() < 0.5) sp.head = true;
           if (!ruin && r() < 0.22) sp.fire = { s: r.range(0.45, 0.75) };   // a burning house burns at its wall tops too
         }
-        this.addCollider(...toW(wx, wz), 0.6);
+        this.legacyCollider(...toW(wx, wz), 0.6);   // (the walls themselves: info.solid, below)
       }
     };
     wall(w, 0, dpt / 2, 0, true); wall(w, 0, -dpt / 2, 0, false); wall(dpt, w / 2, 0, PI / 2, false); wall(dpt, -w / 2, 0, PI / 2, false);
@@ -1746,7 +2020,9 @@ export class World {
     for (let k = 0; k < 4; k++) plan.beams.push({ len: r.range(2, 4), lx: r.range(-w / 3, w / 3), lz: r.range(-dpt / 3, dpt / 3), rx: r.range(-0.08, 0.08), ry: r() * TAU, rz: r.range(-0.08, 0.08) });
     for (let k = 0; k < 14; k++) plan.stones14.push({ sz: r.range(0.2, 0.55), lx: r.range(-w / 2 - 1.2, w / 2 + 1.2), lz: r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2), rx: r() * 0.4, ry: r() * 3, rz: r() * 0.4 });
     // the yard: barrels, crates, a woodpile against the wall, a cart, a fence
-    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind, toW, y });
+    const yardCols = [];
+    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind, toW, y, cols: yardCols });
+    this.addSolids(yardCols, toW, yaw);
     // a burnt house still burning: a fire in the wreck on its floor; or its timbers heaped and smouldering
     if (!intact && !big) {
       const lx = r.range(-w / 4, w / 4), lz = r.range(-dpt / 4, dpt / 4), [px, pz] = toW(lx, lz);
@@ -1757,6 +2033,7 @@ export class World {
     const info = buildHouse(K, { w, d: dpt, big, plan, q: rng(lotSeed(lot)), gH, village: !!lot.village, footing });
     lot.intact = intact; lot.style = info.style;
     for (const [hx, hz, cr] of info.colliders) this.addCollider(...toW(hx, hz), cr);
+    this.addSolids(info.solid, toW, yaw);
     // and the burning houses burn along their wall tops, wherever those now are
     plan.walls.forEach((WP, li) => { for (const sp of WP.segs) if (sp.fire) { const [fx, fz] = toW(sp.wx, sp.wz); (this.wallFires || (this.wallFires = [])).push({ x: fx, y: y + info.tops[[0, 2, 1, 3][li]](li === 1 || li === 3 ? -sp.lx : sp.lx), z: fz, s: sp.fire.s, yaw: yaw + WP.rot, wall: true }); } });
     const B = this.buildingMats();
@@ -1775,6 +2052,7 @@ export class World {
   }
 
   dressYard(r, w, dpt, walls, timber, intact, gy, X = {}) {
+    const sol = (o) => { if (X.cols) X.cols.push(o); };   // what in the yard stops a body, in the house's frame
     // everything out in the yard stands on the yard's own ground (gy: local ground height), not the house floor
     // Each object is settled as a whole: all its parts move together, so its lowest point (over the feet it stands
     // on) just meets the yard's ground beneath that point. Nothing floats on a slope, and a stack or a winch keeps together.
@@ -1803,10 +2081,12 @@ export class World {
       const b = new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10); const hoop = new THREE.CylinderGeometry(0.335, 0.335, 0.62, 10, 1, true);
       const bg = merge([b, hoop]);
       T.push(xf(bg, [ox, over ? 0.3 : 0.43, oz], over ? [PI / 2, r() * TAU, 0] : [0, r() * TAU, 0]));
+      sol({ circle: [ox, oz, over ? 0.45 : 0.33], h: 0.85 });
     }
-    for (let k = 0; k < 2; k++) { const [ox, oz] = along(Math.floor(r() * 4)); const sz = r.range(0.5, 0.8); obj(() => { T.push(xf(new THREE.BoxGeometry(sz, sz * 0.8, sz), [ox, sz * 0.4, oz], [0, r() * TAU, 0])); if (r() < 0.5) T.push(xf(new THREE.BoxGeometry(sz * 0.8, sz * 0.6, sz * 0.8), [ox + 0.05, sz * 0.8 + sz * 0.3, oz], [0, r() * TAU, 0]), false); }); }
+    for (let k = 0; k < 2; k++) { const [ox, oz] = along(Math.floor(r() * 4)); const sz = r.range(0.5, 0.8); obj(() => { T.push(xf(new THREE.BoxGeometry(sz, sz * 0.8, sz), [ox, sz * 0.4, oz], [0, r() * TAU, 0])); if (r() < 0.5) T.push(xf(new THREE.BoxGeometry(sz * 0.8, sz * 0.6, sz * 0.8), [ox + 0.05, sz * 0.8 + sz * 0.3, oz], [0, r() * TAU, 0]), false); }); sol({ circle: [ox, oz, sz * 0.62], h: sz }); }
     // a woodpile under the eaves of one wall
-    obj(() => { const sx = r() < 0.5 ? -1 : 1; for (let row = 0; row < 3; row++) for (let k = 0; k < 6 - row; k++) T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), [sx * (w / 2 + 0.45), 0.09 + row * 0.16, -dpt / 4 + (k + row * 0.5) * 0.19], [PI / 2, 0, PI / 2]), row === 0); });
+    obj(() => { const sx = r() < 0.5 ? -1 : 1; for (let row = 0; row < 3; row++) for (let k = 0; k < 6 - row; k++) T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), [sx * (w / 2 + 0.45), 0.09 + row * 0.16, -dpt / 4 + (k + row * 0.5) * 0.19], [PI / 2, 0, PI / 2]), row === 0);
+      sol({ box: [sx * (w / 2 + 0.45), -dpt / 4 + 0.47, 0.45, 0.55, 0], low: true, h: 0.5 }); });
     // a cart, tipped, its wheel off
     if (r() < 0.45) {
       const cx = r.range(-w / 2, w / 2), cz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 2.6), yawC = r.range(0, TAU);
@@ -1828,6 +2108,7 @@ export class World {
         const M = new THREE.Matrix4().makeTranslation(cx, 0, cz).multiply(new THREE.Matrix4().makeRotationY(yawC)).multiply(new THREE.Matrix4().makeTranslation(0.85, 0.5, 0)).multiply(new THREE.Matrix4().makeRotationZ(th)).multiply(new THREE.Matrix4().makeTranslation(-0.85, -0.5, 0));
         parts.forEach((p2, k) => { p2.applyMatrix4(M); T.push(p2, feet.has(k)); });
       }, 0.02, 0, true);
+      sol({ box: [cx - Math.sin(yawC) * 0.85, cz - Math.cos(yawC) * 0.85, 0.9, 2.05, yawC], h: 1.2 });   // the cart and its shafts
       { const a = yawC + 2.2; obj(() => T.push(xf(new THREE.TorusGeometry(0.5, 0.06, 5, 14), [cx + Math.cos(a) * 1.9, 0.07, cz + Math.sin(a) * 1.9], [PI / 2, 0, 0])), 0.03); }   // the lost wheel, flat in the mud
     }
     const Y = (list) => ({ push: (g, foot) => add(g, list, foot) });
@@ -1847,11 +2128,12 @@ export class World {
       for (const sz2 of [-1, 1]) T.push(xf(new THREE.BoxGeometry(2.2, 0.06, 0.8), [wx, 2.37 - 0.4 * Math.sin(0.5) + 0.03, wz + sz2 * 0.4 * Math.cos(0.5)], [sz2 * 0.5, 0, 0]));
       });
       if (X.toW) { const [px, pz] = X.toW(wx, wz); (this.wells || (this.wells = [])).push({ x: px, z: pz, y: X.y + dyW, r: 0.76, top: 0.85 }); }
+      if (!this.ch.props.village) sol({ circle: [wx, wz, 1.0], h: 2.3 });   // (the village's wells get theirs in buildWells)
     }
     // a trough of standing water
-    if (r() < 0.45) { const [ox, oz] = along(Math.floor(r() * 4)); const tx2 = ox * 1.15, tz2 = oz * 1.15; obj(() => { for (const [a, b, c2, d] of [[1.6, 0.5, 0.06, [0, 0.25, 0.27]], [1.6, 0.5, 0.06, [0, 0.25, -0.27]], [0.06, 0.5, 0.6, [0.8, 0.25, 0]], [0.06, 0.5, 0.6, [-0.8, 0.25, 0]], [1.6, 0.06, 0.6, [0, 0.03, 0]]]) T.push(xf(new THREE.BoxGeometry(a, b, c2), [tx2 + d[0], d[1], tz2 + d[2]])); Wt.push(xf(new THREE.PlaneGeometry(1.5, 0.5), [tx2, 0.4, tz2], [-PI / 2, 0, 0])); }); }
+    if (r() < 0.45) { const [ox, oz] = along(Math.floor(r() * 4)); const tx2 = ox * 1.15, tz2 = oz * 1.15; obj(() => { for (const [a, b, c2, d] of [[1.6, 0.5, 0.06, [0, 0.25, 0.27]], [1.6, 0.5, 0.06, [0, 0.25, -0.27]], [0.06, 0.5, 0.6, [0.8, 0.25, 0]], [0.06, 0.5, 0.6, [-0.8, 0.25, 0]], [1.6, 0.06, 0.6, [0, 0.03, 0]]]) T.push(xf(new THREE.BoxGeometry(a, b, c2), [tx2 + d[0], d[1], tz2 + d[2]])); Wt.push(xf(new THREE.PlaneGeometry(1.5, 0.5), [tx2, 0.4, tz2], [-PI / 2, 0, 0])); }); sol({ box: [tx2, tz2, 0.83, 0.3, 0], low: true, h: 0.5 }); }
     // a hay heap, or a rick
-    if (r() < 0.4) { const [ox, oz] = along(Math.floor(r() * 4)); const hg = new THREE.SphereGeometry(1, 14, 10, 0, TAU, 0, PI / 2); hg.scale(1.1, 0.9, 0.9); obj(() => Hy.push(xf(hg, [ox * 1.3, -0.05, oz * 1.3], [0, r() * TAU, 0])), 0.06, 0.3); }
+    if (r() < 0.4) { const [ox, oz] = along(Math.floor(r() * 4)); const hg = new THREE.SphereGeometry(1, 14, 10, 0, TAU, 0, PI / 2); hg.scale(1.1, 0.9, 0.9); obj(() => Hy.push(xf(hg, [ox * 1.3, -0.05, oz * 1.3], [0, r() * TAU, 0])), 0.06, 0.3); sol({ circle: [ox * 1.3, oz * 1.3, 0.95], h: 0.9 }); }
     // tools left leaning on the wall: a pitchfork, a scythe
     if (r() < 0.6) {
       const sx = r() < 0.5 ? -1 : 1, lz = r.range(-dpt / 3, dpt / 3);
@@ -1875,12 +2157,13 @@ export class World {
     if (intact && r() < 0.45) {
       const lz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 2.2), x0 = -w / 2 + 0.5, x1 = w / 2 - 0.5;
       const dP = [x0, x1].map((xx) => obj(() => T.push(xf(new THREE.BoxGeometry(0.1, 2.1, 0.1), [xx, 1.05, lz])), 0.12));
+      for (const xx of [x0, x1]) sol({ circle: [xx, lz, 0.08], h: 2.1 });
       const yA = 1.95 + dP[0], yB = 1.95 + dP[1], lineY = (xx) => yA + (yB - yA) * (xx - x0) / (x1 - x0);
       { const d = new THREE.Vector3(x1 - x0, yB - yA, 0), L = d.length(), c = new THREE.CylinderGeometry(0.008, 0.008, L, 4); c.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize())); c.translate((x0 + x1) / 2, (yA + yB) / 2, lz); timber.push(c); }
       for (let k = 0; k < 3; k++) { const cx = x0 + 0.8 + k * 1.1; const sh = new THREE.PlaneGeometry(0.9, 1.1, 4, 4); const P3 = sh.attributes.position; for (let i = 0; i < P3.count; i++) P3.setZ(i, Math.sin(P3.getX(i) * 4 + k) * 0.05 + (P3.getY(i) < 0 ? -P3.getY(i) * 0.08 : 0)); sh.computeVertexNormals(); (X.cloth || timber).push(xf(sh, [cx, lineY(cx) - 0.55, lz], [0, 0, r.range(-0.05, 0.05)])); }
     }
     // a wattle fence round part of the yard
-    if (r() < 0.6) { const sz = -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; obj(() => { T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)]), false); }, 0.15); } }
+    if (r() < 0.6) { const sz = -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; sol({ circle: [fx, sz * (dpt / 2 + 4), 0.07], low: true, h: 0.9 }); obj(() => { T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) { T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)]), false); sol({ seg: [fx, sz * (dpt / 2 + 4), fx + (w + 3) / 7, sz * (dpt / 2 + 4), 0.06], low: true, h: 0.8 }); } }, 0.15); } }
   }
 
   placeChurch(r, brickMat, charMat) {
@@ -1953,6 +2236,8 @@ export class World {
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     for (const [lx, lz, cr] of info.colliders) this.addCollider(...toW(lx, lz), cr);
+    for (const [lx, lz, cr] of info.legacy) this.legacyCollider(...toW(lx, lz), cr);
+    this.addSolids(info.solid, toW, yaw);
     this.church = { x, y, z, yaw, toW };
     const bf = toW(0, L / 2 + 2.7);
     this.belfry = new THREE.Vector3(bf[0], y + 17.5, bf[1]);
@@ -1978,7 +2263,7 @@ export class World {
       const t = r.range(0.02, 0.98), F = frame(t), side = r.sign();
       const d = half(t) + r.range(0.5, 14), x = F.p.x + F.nx * side * d, z = F.p.z + F.nz * side * d;
       if (!rest(x, z)) continue;
-      const s = r.range(0.4, 1.7) * (d > half(t) + 6 ? 1.4 : 1); put({ x, y: this.heightAt(x, z) - s * 0.45, z, s, sy: s * r.range(0.55, 0.9), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) });
+      const s = r.range(0.4, 1.7) * (d > half(t) + 6 ? 1.4 : 1); put(this.seat({ x, y: this.heightAt(x, z) - s * 0.45, z, s, sy: s * r.range(0.55, 0.9), ry: r() * TAU, rx: r.range(-0.2, 0.2), rz: r.range(-0.2, 0.2) }));
       if (s > 1.1 && d < half(t) + 1.5) this.addCollider(x, z, s * 0.75);
     }
     for (let fan = 0; fan < 30; fan++) {
@@ -1987,7 +2272,7 @@ export class World {
       for (let k = 0; k < 26; k++) {
         const a = r() * TAU, d2 = Math.sqrt(r()) * 5, x = cx + Math.cos(a) * d2, z = cz + Math.sin(a) * d2;
         if (!this.inBounds(x, z) || this.inCaveZone(x, z, 2) || nearAltar(x, z, 11) || this.path.nearest(x, z).d < half(t) - 0.5 || this.normalAt(x, z).y < 0.6) continue;
-        const s = r.range(0.1, 0.38); put({ x, y: this.heightAt(x, z) - s * 0.3, z, s, sy: s * 0.6, ry: r() * TAU, rx: r() * 2, rz: r() * 2 });
+        const s = r.range(0.1, 0.38); put(this.seat({ x, y: this.heightAt(x, z) - s * 0.3, z, s, sy: s * 0.6, ry: r() * TAU, rx: r() * 2, rz: r() * 2 }, 0));
       }
     }
     geos.forEach((g, i) => this.instanced(g, rockM, lists[i]));
@@ -2114,6 +2399,7 @@ export class World {
     const poles = [], cloths = colors.map(() => []);
     this.scatter(n, (x, z) => this.okSpot(x, z, 4, 10), (x, z, y) => { const it = { x, y: y - 0.3, z, ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.25, 0.25) }; poles.push(it); cloths[r.int(0, colors.length - 1)].push(it); });
     this.instanced(poleGeo, woodMat, poles);
+    for (const p of poles) this.solids.circle(p.x, p.z, 0.07, { h: 4 });
     cloths.forEach((l, i) => this.instanced(clothGeo, clothMats[i], l, { shadow: true }));
   }
 
@@ -2347,6 +2633,7 @@ export class World {
       if (this.ch.terrain.kind === 'mountain') { const n = this.path.nearest(x, z); if (n.d > 11 || this.inCaveZone(x, z, 3)) continue; }
       if (this.ch.terrain.kind === 'peak') { if (Math.hypot(x, z) > 32) continue; }
       if (!this.inBounds(x, z)) continue;
+      if (this.inFootprint(x, z, 2) || this.solids.solidAt(x, z, 1.2, false)) continue;   // not inside a house, a rock, a tree
       return { x, y: this.heightAt(x, z), z };
     }
     return { x: altar.x + 20, y: this.heightAt(altar.x + 20, altar.z), z: altar.z };

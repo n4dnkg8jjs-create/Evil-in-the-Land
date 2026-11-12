@@ -253,6 +253,7 @@ class Cape {
 // ---------------------------------------------------------------- knight
 const _wq = new THREE.Quaternion(), _hq = new THREE.Quaternion(), _rq = new THREE.Quaternion();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3(), _u = new THREE.Vector3();
+const _vp = { x: 0, z: 0 };   // where the vault has him this frame
 
 // The knight's own head, inside the helmet: a weathered face under a quilted arming cap, eyes that catch the
 // light through the sights. The body model stops at the neck (the helmet replaces it), but every helmet has
@@ -419,6 +420,32 @@ export class Knight {
     this.startAction(c, 'roll'); this.combo = 0;
     return true;
   }
+  // Over a fence, a low wall, a grave: the double tap of the dodge key, facing it and near it. The world says what
+  // is there and where he comes down (world.vaultCheck); he crosses it at a fixed beat of the clip, with a hand on
+  // it, so the hand meets the rail whatever the run-up.
+  vaultAhead(mx, mz, world) {
+    if (!this.canAct || !world?.vaultCheck) return null;
+    if (this.action && !(this.actT >= (this.action.cancel ?? 99))) return null;
+    const y = Math.hypot(mx, mz) > 0.2 ? Math.atan2(mx, mz) : this.yaw;
+    const v = world.vaultCheck(this.pos.x, this.pos.z, Math.sin(y), Math.cos(y), 0.42, 1.2);
+    return v ? { v, yaw: y } : null;
+  }
+  tryVault(world, mx, mz) {
+    if (this.stamina < 8) return false;
+    const a = this.vaultAhead(mx, mz, world); if (!a) return false;
+    this.stamina -= 8; this.staminaDelay = 0.6; this.yaw = a.yaw; this.blocking = false;
+    this.vault = { x0: this.pos.x, z0: this.pos.z, cx: a.v.cx, cz: a.v.cz, x1: a.v.x, z1: a.v.z };
+    this.startAction(this.common.vault, 'vault'); this.combo = 0;
+    return true;
+  }
+  // where the vault has him at time t of the clip: up to the obstacle by T_CROSS (gathering pace), over it and
+  // down beyond by T_LAND (slowing), standing after
+  vaultPos(t, out) {
+    const V = this.vault, T0 = 0.05, TC = 0.34, TL = 0.6;
+    if (t < TC) { const u = clamp((t - T0) / (TC - T0), 0, 1), e = 1 - Math.cos(u * Math.PI / 2); out.x = lerp(V.x0, V.cx, e); out.z = lerp(V.z0, V.cz, e); }
+    else { const u = clamp((t - TC) / (TL - TC), 0, 1), e = Math.sin(u * Math.PI / 2); out.x = lerp(V.cx, V.x1, e); out.z = lerp(V.cz, V.z1, e); }
+    return out;
+  }
   tryRelic() {
     if (!this.canAct || this.action || this.relicCd > 0) return false;
     const r = this.loadout.relic;
@@ -499,6 +526,7 @@ export class Knight {
     // actions
     if (this.buffered) { this.buffered.t -= dt; if (this.buffered.t <= 0) this.buffered = null; }
     if (this.canAct) {
+      if (input.vault && !this.tryVault(world, input.mx, input.mz)) input = { ...input, dodge: true };   // nothing to vault after all: the dodge
       if (input.dodge) { const my = Math.hypot(input.mx, input.mz) > 0.2 ? Math.atan2(input.mx, input.mz) : this.yaw; this.tryDodge(my); }
       if (input.attack) this.tryAttack(false);
       if (input.heavy) this.tryAttack(true);
@@ -544,7 +572,12 @@ export class Knight {
         this.yaw = dampAngle(this.yaw, Math.atan2(input.mx, input.mz), input.sprint ? 7 : 11, dt);
       }
     }
-    this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt;
+    const vaulting = this.action && this.actKind === 'vault' && this.vault;
+    if (vaulting) {   // the vault carries him: over the fence and down on the far side, through it only now
+      const q = this.vaultPos(this.actT, _vp), idt = 1 / Math.max(dt, 1e-4);
+      this.vel.x = (q.x - this.pos.x) * idt; this.vel.z = (q.z - this.pos.z) * idt; this.pos.x = q.x; this.pos.z = q.z;
+    } else { this.pos.x += this.vel.x * dt; this.pos.z += this.vel.z * dt; }
+    this.blockLow = !vaulting;   // fences and low walls stop him, unless he is going over one
     world.collide(this, 0.42);
     this.pos.y = standY(world, this.pos.x, this.pos.z);
     this.speed = Math.hypot(this.vel.x, this.vel.z);
@@ -561,7 +594,7 @@ export class Knight {
       hs = this.biteT < this.biteFreeze ? 0.05 : lerp(0.22, 1, smooth(clamp((this.biteT - this.biteFreeze) / this.biteDrag, 0, 1)));
     }
     this.biteScale = hs;
-    this.actT += hs * dt * (this.actKind === 'roll' ? (this.fleetMul || 1) : this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' ? 1 : this.actionSpeed());
+    this.actT += hs * dt * (this.actKind === 'roll' ? (this.fleetMul || 1) : this.actKind === 'stagger' || this.actKind === 'knockdown' || this.actKind === 'getup' || this.actKind === 'vault' ? 1 : this.actionSpeed());
     // sound cues
     if (a.sfx) while (this.sfxIdx < a.sfx.length && this.actT >= a.sfx[this.sfxIdx].t) { this.events.push({ type: 'sfx', k: a.sfx[this.sfxIdx].k }); this.sfxIdx++; }
     if (a.release !== undefined && !this.released && this.actT >= a.release) { this.released = true; this.events.push({ type: 'relic', relic: this.actExtra.relic }); }
@@ -823,7 +856,8 @@ export class Knight {
     this.group.rotation.set(0, this.yaw + spin, 0);
     this.group.updateMatrixWorld(true);
     // feet on the real ground: on slopes the hips sink to the lower foot and each leg reaches its own ground
-    if (world && !this.downed && this.kneel < 0.05 && this.actKind !== 'roll') this.plantFeet(world, dt);
+    const airborne = this.action && (this.actKind === 'roll' || this.action === this.common.roll || this.action === this.common.vault);
+    if (world && !this.downed && this.kneel < 0.05 && !airborne) this.plantFeet(world, dt);
     this.renderYaw = this.yaw + spin;
     const rootQ = _rq.setFromAxisAngle(_a.set(0, 1, 0), this.yaw + spin);
     const toWorld = (x, y, z, out) => out.set(x, y, z).applyQuaternion(rootQ).add(this.pos);

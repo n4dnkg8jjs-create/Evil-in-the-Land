@@ -238,6 +238,7 @@ export class Game {
 
     // ---- local player
     const inCine = this.cinema.active || (this.obj && this.obj.ph === 'intro');
+    if (inCine) { this.spaceHold = this.time + 0.4; this.tapAt = null; }   // a Space that skipped a scene is not a dodge or a vault
     const me = this.me;
     const myInput = inCine || this.paused ? this.emptyInput() : this.readInput(dt);
     if (this.world) {
@@ -317,7 +318,17 @@ export class Game {
       document.getElementById('hud')?.classList.toggle('locked', !!this.shiftLock);
     }
     if ((attack || heavy) && !this.shiftLock) aim = this.softAim(aim);
-    return { mx, mz, aimYaw: aim, lock: !!this.shiftLock, sprint: runKeys.some((k) => I.held(k)), block: I.held('KeyQ') || I.held('Mouse3'), pray: I.held('KeyE'), attack, heavy, dodge: I.pressed('Space'), relic: I.pressed('KeyR') };
+    // Space dodges; a quick double tap facing a fence, a low wall or a grave vaults it. Only when there is
+    // something to vault ahead is the first tap held back (0.3 s) to see whether a second follows; elsewhere the
+    // dodge goes at once, as it always did.
+    let dodge = false, vault = false;
+    if (this.tapAt != null && this.time - this.tapAt > 0.3) { dodge = true; this.tapAt = null; }   // no second tap: the dodge after all
+    if (I.pressed('Space') && this.time >= (this.spaceHold || 0)) {
+      if (this.tapAt != null) { vault = true; dodge = false; this.tapAt = null; }
+      else if (this.world && this.me.vaultAhead?.(mx, mz, this.worldCtx())) this.tapAt = this.time;
+      else dodge = true;
+    }
+    return { mx, mz, aimYaw: aim, lock: !!this.shiftLock, sprint: runKeys.some((k) => I.held(k)), block: I.held('KeyQ') || I.held('Mouse3'), pray: I.held('KeyE'), attack, heavy, dodge, vault, relic: I.pressed('KeyR') };
   }
   // gentle aim assist toward the most threatening demon in front
   softAim(yaw) {
@@ -335,6 +346,7 @@ export class Game {
     const w = this.world, self = this;
     return {
       heightAt: (x, z) => w.standAt(x, z), collide: (e, r) => w.collide(e, r), wind: w.wind,
+      vaultCheck: (x, z, dx, dz, r, reach) => w.vaultCheck(x, z, dx, dz, r, reach),
       canPrayAt(k) { return self.altarFor(k) !== null || self.downedNear(k) !== null; },
     };
   }
