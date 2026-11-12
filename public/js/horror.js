@@ -569,12 +569,17 @@ function dressDevil(B, K, def, DU) {
   // the robe: gathered at the throat, broad over the shoulders, then falling in deep pleats to a hem that pools and drags
   // (heights below the waist go by L, so the skirt only ever runs down: an older profile folded back on itself under
   // the ground, and the ragged edge of the fold stood up out of the earth round his feet like scraps of cloth)
-  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.4, -0.2], [0.39, -0.5], [0.43, -0.59 * L], [0.52, -0.8 * L], [0.64, -0.93 * L], [0.84, -0.985 * L], [0.96, -L]];
+  // Below the hands it widens in a long A-line, and the hem pools on the ground in a ring of cloth that lies flat on
+  // it (the last pass had made the skirt a straight column down to a small flare, which read as a cylinder; the pool
+  // runs only outward along the ground, never back up, so nothing folds back under the earth)
+  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.4, -0.2], [0.39, -0.5], [0.45, -0.56 * L], [0.56, -0.72 * L], [0.68, -0.85 * L], [0.8, -0.94 * L], [0.94, -0.985 * L], [1.08, -L], [1.24, -L]];
   const pts = []; for (let i = 0; i < prof.length - 1; i++) for (let k = 0; k < 4; k++) { const t = k / 4; pts.push([lerp(prof[i][0], prof[i + 1][0], t), lerp(prof[i][1], prof[i + 1][1], t)]); } pts.push(prof[prof.length - 1]);
   const robeGeo = lathe(pts, 96, (v, a) => {
     const t = clamp(-v.y / L, 0, 1);
     // pleats: few and soft at the shoulders, deep and many below the waist, each one wandering
-    const pleat = Math.sin(a * 11 + Math.sin(v.y * 2.1 + a) * 0.9) * (0.012 + 0.06 * t) + Math.sin(a * 5 + 1.3 + v.y * 0.7) * 0.035 * t;
+    const pleat = Math.sin(a * 11 + Math.sin(v.y * 2.1 + a) * 0.9) * (0.012 + 0.06 * t) + Math.sin(a * 5 + 1.3 + v.y * 0.7) * 0.035 * t
+      // and a few great deep folds falling from the hips, uneven round him, so the skirt is never a round column
+      + (Math.sin(a * 3 + 0.7 + Math.sin(a * 2.2) * 0.8) * 0.5 + Math.sin(a * 7 + 2.1) * 0.3) * 0.09 * t * t;
     // wrinkles where the cloth breaks over the shoulders and bunches at the waist
     const wr = (wn(a * 6, v.y * 9) - 0.5) * 0.03 * (Math.exp(-(((v.y - 0.12) / 0.12) ** 2)) + Math.exp(-(((v.y + 0.45) / 0.15) ** 2)));
     const r = Math.hypot(v.x, v.z) + pleat + wr;
