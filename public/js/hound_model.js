@@ -410,7 +410,7 @@ export function houndMaterial() {
       if (uDissolve > 0.0 && dnz < uDissolve) discard;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.14, vSurf.x);')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(1.0, 0.3, 0.05) * vSurf.y * uHeat * (0.7 + 0.3 * sin(uTime * 6.0 + vDPos.z * 11.0 + vDPos.y * 7.0));
+      totalEmissiveRadiance += vec3(0.9, 0.16, 0.02) * vSurf.y * vSurf.y * uHeat * (0.7 + 0.3 * sin(uTime * 6.0 + vDPos.z * 11.0 + vDPos.y * 7.0));
       totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit;
       if (uDissolve > 0.0) totalEmissiveRadiance += vec3(1.0, 0.35, 0.08) * 6.0 * (1.0 - smoothstep(uDissolve, uDissolve + 0.07, dnz));`);
   };

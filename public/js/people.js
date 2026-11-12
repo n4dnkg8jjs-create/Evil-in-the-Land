@@ -206,13 +206,16 @@ function personMat(look) {
           float shade = clamp(sock * 0.9 + lid * 0.3 + cheek * 0.75 + temple * 0.6 + nose * 0.4 + jaw * 0.6, 0.0, 0.92);
           skin = mix(skin, skin * vec3(0.3, 0.24, 0.27), shade * uDead);
         }
-        skin = mix(skin, vec3(0.5, 0.56, 0.62) * (0.75 + 0.35 * blot) + vec3(0.06, 0.0, 0.03) * pn(vObj * 20.0), fz * 0.9);
+        // (livid grey, mottled dark where the blood settled and the frost bit; the eyes frosted over)
+        skin = mix(skin, mix(vec3(0.3, 0.33, 0.37), vec3(0.15, 0.12, 0.15), smoothstep(0.42, 0.78, pn(vObj * 13.0 + 5.0))) * (0.8 + 0.35 * blot), fz * 0.93);
+        eye = mix(eye, vec3(0.6, 0.66, 0.72) * (0.8 + 0.3 * blot), fz * 0.8);
         hair = mix(hair, vec3(0.75, 0.78, 0.82) * (0.7 + 0.5 * strand), fz * 0.6);
         shoe = mix(shoe, skin * 0.8, uDead); cloth = mix(cloth, skin * 0.95, uDead);
         vec3 col0 = skin * rS + hair * rH + shoe * rShoe + eye * rE + cloth * rC;
-        float rime = fz * smoothstep(0.25, 0.75, normalize(vWN).y + (pn(vObj * 45.0) - 0.5) * 0.5);
+        float rime = fz * smoothstep(0.15, 0.7, normalize(vWN).y + (pn(vObj * 45.0) - 0.5) * 0.6);
         float glint = fz * step(0.975, ph(floor(vObj * 260.0))) * rime;
-        col0 = mix(col0, vec3(0.86, 0.9, 0.95), rime * 0.8) + glint * 0.6;
+        col0 = mix(col0, vec3(0.6, 0.66, 0.74), fz * (0.1 + 0.22 * pn(vObj * 70.0)));   // hoarfrost on all of him
+        col0 = mix(col0, vec3(0.86, 0.9, 0.95), rime * 0.9) + glint * 0.35;
         col0 = mix(col0, col0 * vec3(0.8, 0.9, 1.05), fz * 0.4);
         diffuseColor.rgb = col0;`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -223,14 +226,14 @@ function personMat(look) {
           vec3 grad = sign(det) * (dFdx(hw) * R1 + dFdy(hw) * R2) * 0.55;
           normal = normalize(abs(det) * normal + grad);
         }`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS, 0.28, uFrozen * 0.7);')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.62 * rS + 0.75 * rH + 0.55 * rShoe + 0.08 * rE + 0.95 * rC - 0.08 * blot * rS, 0.72 + 0.2 * rime, uFrozen);')
       // light through the skin: a warm wrap where it turns from the light
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         reflectedLight.indirectDiffuse += rS * uSkin * vec3(0.10, 0.03, 0.02) * (1.0 - uFrozen) * (1.0 - uDead);
         reflectedLight.indirectDiffuse *= 1.0 - 0.45 * uDead;   // the dead one: no fill in the hollows, only hard light and dark
         reflectedLight.directDiffuse *= uShade; reflectedLight.indirectDiffuse *= uShade; reflectedLight.directSpecular *= mix(uShade, 1.0, 0.35); reflectedLight.indirectSpecular *= uShade;   // in the dark of a helmet`);
   };
-  mat.customProgramCacheKey = () => 'personSkin-v7';
+  mat.customProgramCacheKey = () => 'personSkin-v8';
   return mat;
 }
 function personMesh(rig, P, look) {
@@ -878,6 +881,11 @@ export function makePerson(kind, quality) {
 // fallen beside him. Posed as men really lie dead (curled on the side, face down with an arm caught under him,
 // hunched sitting, slumped back against the rock), dirt and old blood in the cloth, and settled onto the ground
 // under them (tilted to the slope, the lowest flesh resting on it) with what they dropped lying round them.
+// Frozen through: the dyes gone dull under hoarfrost, snow lying on every face of them that looks at the sky.
+//
+// A frozen man never moves again, so once he is settled he is baked: his clothes, his gear, the ice and the drifts
+// become one plain mesh with one material (the colours in its vertices), and of his body only what shows (head,
+// neck, hands) is kept. Two draw calls a man, where there were eighty, and nothing to skin but his head and hands.
 function frostMat(color, rough = 0.85, metal = 0, grime = 1, { quilt = 0, weave = 0 } = {}) {
   const m = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
@@ -907,6 +915,42 @@ diffuseColor.rgb = mix(diffuseColor.rgb * 0.88, vec3(0.86, 0.9, 0.95), rime * ${
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, rime);');
   };
   m.customProgramCacheKey = () => 'frost3' + metal + grime + quilt + weave;
+  m.userData.fx = { metal, grime, quilt, weave, rough };
+  return m;
+}
+// The one material a baked frozen man's clothes and gear are drawn with: what frostMat does, read from the vertices
+// (colour; aFx = metal, quilted, woven, grime; aRough). snow: 1 out on the mountain, less in the cave.
+const BAKED = {};
+function frostBaked(snow) {
+  if (BAKED[snow]) return BAKED[snow];
+  const m = BAKED[snow] = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uSnow = { value: snow };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aFx; attribute float aRough; varying vec4 vFx; varying float vRough; varying vec3 vFN; varying vec3 vFP;').replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvFN = normalize(mat3(modelMatrix) * objectNormal); vFx = aFx; vRough = aRough;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec4 vFx; varying float vRough; varying vec3 vFN; varying vec3 vFP; uniform float uSnow;
+float fh(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }
+float vn(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(fh(i), fh(i + vec3(1,0,0)), f.x), mix(fh(i + vec3(0,1,0)), fh(i + vec3(1,1,0)), f.x), f.y), mix(mix(fh(i + vec3(0,0,1)), fh(i + vec3(1,0,1)), f.x), mix(fh(i + vec3(0,1,1)), fh(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+float n1 = vn(vFP * 7.0) * 0.6 + vn(vFP * 23.0) * 0.4;
+if (vFx.y > 0.5) { float qa = abs(fract((vFP.x + vFP.z) * 16.0) - 0.5), qb = abs(fract((vFP.x - vFP.z) * 16.0 + vFP.y * 10.0) - 0.5); diffuseColor.rgb *= 0.5 + 0.5 * smoothstep(0.02, 0.1, min(qa, qb)) + 0.12 * (1.0 - 2.0 * max(qa, qb)); }   // quilted
+if (vFx.z > 0.5) { float tw = sin((vFP.x + vFP.y * 0.7 + vFP.z) * 900.0) * 0.5 + 0.5; diffuseColor.rgb *= 0.86 + 0.14 * tw + (vn(vFP * vec3(60.0, 400.0, 60.0)) - 0.5) * 0.12; }   // woven
+// dirt worked into the cloth, and old blood frozen near black in a few places
+diffuseColor.rgb *= mix(1.0, 0.5 + n1 * 0.4, vFx.w);
+float bl = smoothstep(0.76, 0.84, vn(vFP * 3.1 + 7.3)) * vFx.w * (1.0 - smoothstep(0.2, 0.4, vFx.x));
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.014, 0.012), bl * 0.75);
+// frozen through: the dye dull, a bloom of hoarfrost on all of it, and snow lying on what faces the sky
+float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.72) * 0.9;
+float ny = normalize(vFN).y * (gl_FrontFacing ? 1.0 : -1.0);
+float hoar = (0.1 + 0.26 * vn(vFP * 37.0) * vn(vFP * 9.0 + 3.0)) * mix(0.5, 1.0, uSnow);
+float rime = smoothstep(0.12, 0.62, ny + (fh(floor(vFP * 18.0)) - 0.5) * 0.3 + (n1 - 0.5) * 0.55) * mix(0.3, 0.94, uSnow);
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.6, 0.66, 0.74), hoar);
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.25;`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(vRough, 0.9, max(rime, hoar * 1.5));')
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFx.x * (1.0 - rime) * (1.0 - hoar);');
+  };
+  m.customProgramCacheKey = () => 'frostBaked2';
   return m;
 }
 // a garment round a bone, cut into panels with gaps (the slashes); the lining puffs out between them
@@ -942,7 +986,7 @@ function skinLayer(body, pick, off, mat, smooth = 0, key = null) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', hit.pos); geo.setAttribute('normal', hit.nrm); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);
     if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(hit.idx);
-    const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true;
+    const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.userData.keep = hit.keep;
     body.parent.add(m); m.bind(body.skeleton, body.bindMatrix); return m;
   }
   const n = P.count, keep = new Uint8Array(n), v = new THREE.Vector3();
@@ -997,8 +1041,8 @@ function skinLayer(body, pick, off, mat, smooth = 0, key = null) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);
   if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(idx); if (smooth) geo.computeVertexNormals();
-  if (ck0) LC.set(ck0, { pos: geo.attributes.position, nrm: geo.attributes.normal, idx: geo.index });
-  const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true;
+  if (ck0) LC.set(ck0, { pos: geo.attributes.position, nrm: geo.attributes.normal, idx: geo.index, keep });
+  const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.userData.keep = keep;
   body.parent.add(m); m.bind(body.skeleton, body.bindMatrix); return m;
 }
 // the Landsknecht's short sword, the katzbalger: a broad blade, an S-shaped guard, a short grip and a flat pommel
@@ -1033,31 +1077,38 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const pick = (a) => a[Math.floor(rnd() * a.length) % a.length], jit = (d) => (rnd() - 0.5) * 2 * d;
   const rig = new Rig(0.96 + rnd() * 0.08), J = rig.j;
   const hose = pick(HOSE);
-  const body = personMesh(rig, P, { skin: 0x9aa0a6, hair: [0x2a2420, 0x4a3420, 0x1c1814, 0x6a5038][seed % 4], cloth: hose, eyes: P.eyes, frozen: 1, dead: 1 });
+  const body = personMesh(rig, P, { skin: 0x9aa0a6, hair: [0x2a2420, 0x4a3420, 0x1c1814, 0x6a5038][seed % 4], cloth: hose, eyes: P.eyes, frozen: 1, dead: 0.45 });   // (half 'dead': the face sunken, but his hair and beard left him)
   const iron = frostMat(0x4a4540, 0.6, 0.65, 0.6), leather = frostMat(0x2a1e16, 0.75, 0, 0.6);
   // where his joints sit in the body's own (bind) space, to divide it into garments
   const bindAt = (n) => new THREE.Vector3().applyMatrix4(body.skeleton.boneInverses[JOINTS.indexOf(n)].clone().invert());
   const headY = bindAt('head').y, hipsY = bindAt('hips').y;
   const LEGS = new Set(['thighR', 'thighL', 'shinR', 'shinL', 'footR', 'footL']), TORSO = new Set(['spine', 'chest', 'clavR', 'clavL']), ARMS = new Set(['uArmR', 'uArmL', 'fArmR', 'fArmL']);
   // under everything: his hose (feet stockinged, the shoes over them) and a linen shirt to the throat and wrists
-  skinLayer(body, (b, v) => LEGS.has(b) || (b === 'hips' && v.y < hipsY + 0.06), 0.004, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 4, 'hose|' + hipsY);
+  const hoseL = skinLayer(body, (b, v) => LEGS.has(b) || (b === 'hips' && v.y < hipsY + 0.06), 0.004, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 4, 'hose|' + hipsY);
   const shirt = frostMat(pick([0x8e8676, 0x9a9282, 0x7e7666]), 0.95, 0, 1, { weave: 1 });
-  skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y >= hipsY - 0.01) || (b === 'neck' && v.y < headY - 0.012), 0.006, shirt, 2, 'shirt|' + hipsY + '|' + headY);   // over the top of the hose at the waist, no gap between
+  const shirtL = skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y >= hipsY - 0.01) || (b === 'neck' && v.y < headY - 0.012), 0.006, shirt, 2, 'shirt|' + hipsY + '|' + headY);   // over the top of the hose at the waist, no gap between
   const gambeson = seed % 3 === 1, plate = seed % 3 === 0 || seed % 5 === 0;
   const [cO, cI] = pick(DOUBLET);
   if (gambeson) {   // quilted linen over him, body and sleeves, down over the hips
     const q = frostMat(pick([0x7a6440, 0x5a6068, 0x7a4a32, 0x6a6250]), 0.95, 0, 1, { quilt: 1 });
-    skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y > hipsY - 0.1) || (b === 'neck' && v.y < headY - 0.06), 0.024, q, 30, 'gambeson|' + hipsY + '|' + headY);
+    shirtL.userData.under = skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y > hipsY - 0.1) || (b === 'neck' && v.y < headY - 0.06), 0.024, q, 30, 'gambeson|' + hipsY + '|' + headY).userData.keep;
   } else {          // a doublet fitted to him; the sleeves puffed and slashed to show the shirt and lining
     const o = frostMat(cO, 0.9), i = frostMat(cI, 0.9);
-    skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24, 'doublet|' + hipsY + '|' + headY);
+    shirtL.userData.under = skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24, 'doublet|' + hipsY + '|' + headY).userData.keep;
     for (const k of ['R', 'L']) { slashed(J, 'uArm' + k, [[0.088, 0.03], [0.108, -0.06], [0.11, -0.16], [0.09, -0.3]], o, i, 7); slashed(J, 'fArm' + k, [[0.07, 0.02], [0.074, -0.08], [0.058, -0.2]], o, i, 6); }
   }
   // the upper hose: puffed and slashed to above the knee (the Landsknecht's pluderhose)
   { const o = frostMat(hose, 0.92), i = frostMat(pick([0x8a2a20, 0xa89878, 0x5a5a62]), 0.9);
     for (const k of ['R', 'L']) slashed(J, 'thigh' + k, [[0.112, 0.06], [0.132, -0.08], [0.126, -0.26], [0.09, -0.42]], o, i, 6); }
   // shoes: plain leather, broad at the toe
-  for (const k of ['R', 'L']) { const g = new THREE.SphereGeometry(0.06, 14, 10).scale(0.95, 0.75, 2.0).translate(0, -0.055, 0.075); J['foot' + k].add(new THREE.Mesh(g, leather)); }
+  // (the 'cow's mouth': a flat sole, low sides, the toe as broad as the ball of the foot and cut off square)
+  { const RN = 9, SN = 14, pos = [], idx = [];
+    for (let j = 0; j <= RN; j++) { const t = j / RN, z = -0.075 + 0.275 * t, wd = (0.04 + 0.022 * Math.sin(Math.min(1, t * 1.25) * Math.PI * 0.5)) * (j === 0 || j === RN ? 0.72 : 1) * (t > 0.88 ? 0.97 : 1), ht = t < 0.3 ? 0.085 : 0.085 - 0.04 * Math.min(1, (t - 0.3) / 0.45);
+      for (let a = 0; a < SN; a++) { const an = (a / SN) * Math.PI * 2, c = Math.cos(an), sn = Math.sin(an), sq = Math.sign(c) * Math.abs(c) ** 0.6; pos.push(sq * wd, -0.098 + (sn > 0 ? sn ** 0.7 * ht * (j === 0 || j === RN ? 0.7 : 1) : sn * 0.012), z); } }
+    for (let j = 0; j < RN; j++) for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; idx.push(i0, i0 + SN, i1, i1, i0 + SN, i1 + SN); }
+    for (const [j, f] of [[0, 1], [RN, 0]]) { const c = pos.length / 3; pos.push(0, -0.07, j ? 0.2 : -0.075); for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; if (f) idx.push(c, i0, i1); else idx.push(c, i1, i0); } }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+    for (const k of ['R', 'L']) J['foot' + k].add(new THREE.Mesh(g, leather)); }
   // a belt
   J.hips.add(new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.016, 6, 24).rotateX(Math.PI / 2).scale(1, 1, 0.82).translate(0, 0.06, 0.012), frostMat(0x2a2018, 0.7)));
   // a breastplate over the doublet on some: a rounded peascod front, strapped at the back
@@ -1083,8 +1134,8 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
       if (Math.abs(v.x) < 0.012 && v.y < ey - 0.05 && v.y > ey - 0.085 && (!mouth || v.z > mouth.z)) mouth = v.clone();
       if (Math.abs(v.x) < 0.02 && v.y < ey - 0.09 && (!chin || v.z - v.y * 0.6 > chin.z - chin.y * 0.6)) chin = v.clone();
     }
-    const ice = new THREE.MeshStandardMaterial({ color: 0xdfeaf4, roughness: 0.08, metalness: 0, transparent: true, opacity: 0.82 });
-    const rime = new THREE.MeshStandardMaterial({ color: 0xf2f6fa, roughness: 0.9 });
+    const ice = new THREE.MeshStandardMaterial({ color: 0xdfeaf4, roughness: 0.08, metalness: 0, transparent: true, opacity: 0.82 }); ice.userData.fx = { metal: 0, grime: 0, quilt: 0, weave: 0, rough: 0.12 };
+    const rime = new THREE.MeshStandardMaterial({ color: 0xf2f6fa, roughness: 0.9 }); rime.userData.fx = { metal: 0, grime: 0, quilt: 0, weave: 0, rough: 0.9 };
     const grp = new THREE.Group(); J.head.add(grp);
     if (chin) { const c = chin.applyMatrix4(inv); for (let k = 0; k < 7; k++) { const L = 0.012 + rnd() * 0.026; const m = new THREE.Mesh(new THREE.ConeGeometry(0.0025 + rnd() * 0.002, L, 5).rotateX(Math.PI).translate(0, -L / 2, 0), ice); m.position.set(c.x + jit(0.024), c.y + 0.004, c.z - 0.006 - rnd() * 0.014); m.rotation.z = jit(0.2); grp.add(m); } }
     if (mouth) { const c = mouth.applyMatrix4(inv); for (let k = 0; k < 14; k++) { const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.0022 + rnd() * 0.002, 0), rnd() < 0.6 ? rime : ice); m.position.set(c.x + jit(0.022), c.y + jit(0.012) + 0.008, c.z - 0.002 + jit(0.003)); grp.add(m); } }
@@ -1094,8 +1145,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const lean = opts.lean || 0;
   if (pose === 'sit') {   // hunched on the ground, knees drawn up, arms round them, head down on them (or on the next man's shoulder)
     e('spine', 30, 0, -lean * 10 + jit(6)); e('chest', 20, 0, -lean * 6); e('neck', 26, 0, -lean * 22 + jit(8)); e('head', 20, jit(15), -lean * 16 + jit(8));
-    lr((k, s) => { e('thigh' + k, -112, 0, s * 10); e('shin' + k, 130, 0, 0); e('foot' + k, -15, 0, s * 8); e('uArm' + k, -58, 0, s * 20); e('fArm' + k, -82, -s * 48, 0); e('hand' + k, 15, 0, s * 10); });
-    if (opts.cross) { lr((k, s) => { e('uArm' + k, -40, 0, s * 12); e('fArm' + k, -100, -s * 62, 0); e('hand' + k, 0, 0, s * 20); }); }
+    lr((k, s) => { e('thigh' + k, -112, 0, s * 10); e('shin' + k, 130, 0, 0); e('foot' + k, -15, 0, s * 8); e('uArm' + k, -40, 0, s * 12); e('fArm' + k, k === 'R' ? -100 : -108, -s * (k === 'R' ? 62 : 56), 0); e('hand' + k, 0, 0, s * 20); });   // his hands drawn in to his chest
   } else if (pose === 'slump') {   // sat where he stopped, legs out unevenly, head fallen onto his shoulder, hands down at his sides
     const ln = jit(1) > 0 ? 1 : -1;
     e('spine', -4, 0, ln * 4); e('chest', 6, 0, ln * 3); e('neck', 22, 0, ln * 26); e('head', 18, ln * 10, ln * 22);
@@ -1137,9 +1187,9 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     gear.push({ obj: a, at: [jit(0.5) - 0.9, jit(1.0)], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
     gear.push({ obj: new THREE.Mesh(sh(L2), wood), at: [jit(0.6) + 0.5, jit(1.2) + 0.6], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
   }
-  if (seed % 3 !== 1 && snow) {
-    const pg = new THREE.CircleGeometry(0.5, 40), pp = pg.attributes.position, ph = [rnd() * 6, rnd() * 6, rnd() * 6]; for (let i = 1; i < pp.count; i++) { const a = Math.atan2(pp.getY(i), pp.getX(i)), f = 0.8 + 0.18 * Math.sin(a * 2 + ph[0]) + 0.1 * Math.sin(a * 3 + ph[1]) + 0.05 * Math.sin(a * 7 + ph[2]); pp.setXY(i, pp.getX(i) * f * 1.25, pp.getY(i) * f); }
-    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3a0a0c, roughness: 0.55, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.7 }));
+  if (seed % 5 === 2 && snow) {   // on a few, blood that ran out of him before it froze: small, dark
+    const pg = new THREE.CircleGeometry(0.26, 32), pp = pg.attributes.position, ph = [rnd() * 6, rnd() * 6, rnd() * 6]; for (let i = 1; i < pp.count; i++) { const a = Math.atan2(pp.getY(i), pp.getX(i)), f = 0.8 + 0.18 * Math.sin(a * 2 + ph[0]) + 0.1 * Math.sin(a * 3 + ph[1]) + 0.05 * Math.sin(a * 7 + ph[2]); pp.setXY(i, pp.getX(i) * f * 1.25, pp.getY(i) * f); }
+    const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x170506, roughness: 0.5, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.8 }));
     pool.receiveShadow = true; gear.push({ obj: pool, at: [jit(0.15), 0.1], lift: 0.012, tilt: [0, jit(Math.PI), 0], flat: true });
   }
   // lay him on the ground at x,z facing yaw. The body comes to rest as a dead weight would: dropped until it touches,
@@ -1159,6 +1209,42 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const SUB = { spine: ['spine', 'chest'], thighR: ['thighR', 'shinR', 'footR'], thighL: ['thighL', 'shinL', 'footL'], clavR: ['uArmR', 'fArmR', 'handR'], clavL: ['uArmL', 'fArmL', 'handL'], neck: ['neck', 'head'] };
   const SUBPEN = { spine: ['spine', 'chest', 'clavR', 'clavL', 'neck'], thighR: SUB.thighR, thighL: SUB.thighL, clavR: SUB.clavR, clavL: SUB.clavL, neck: SUB.neck };
   const thin = (ids, k) => (ids || []).filter((_, i) => i % k === 0);
+  // Of his body, only what no garment covers is drawn (head, neck, hands).
+  if (body.geometry.index) { const cov = [hoseL, shirtL].map((m) => m.userData.keep), ix = body.geometry.index.array, keepI = [];
+    for (let t = 0; t < ix.length; t += 3) { const a = ix[t], b = ix[t + 1], c = ix[t + 2]; if (cov.some((K) => K[a] && K[b] && K[c])) continue; keepI.push(a, b, c); }
+    const bg = new THREE.BufferGeometry(); for (const n in body.geometry.attributes) bg.setAttribute(n, body.geometry.attributes[n]); bg.setIndex(keepI); body.geometry = bg; }
+  // Once he lies as he will lie: everything on him and round him made one mesh. Garments are skinned here, once,
+  // to where they are (their normals with them); gear, ice and drifts are taken as they stand.
+  const baked = new THREE.Group(); wrap.add(baked);
+  const bake = () => {
+    for (const c of [...baked.children]) { baked.remove(c); c.geometry.dispose(); }
+    wrap.updateMatrixWorld(true);
+    const inv = wrap.matrixWorld.clone().invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3(), v = new THREE.Vector3(), w = new THREE.Vector3(), nn = new THREE.Vector3();
+    const pos = [], nrm = [], col = [], fxs = [], rgh = [], idx = [], list = [];
+    wrap.traverse((o) => { if (o.isMesh && o !== body && o.parent !== baked && o.material.userData.fx) list.push(o); });
+    for (const o of list) {
+      const g = o.geometry, P = g.attributes.position, N = g.attributes.normal, ix = g.index ? g.index.array : null, fx = o.material.userData.fx, c = o.material.color, base = pos.length / 3;
+      M.multiplyMatrices(inv, o.matrixWorld); NM.getNormalMatrix(M);
+      const put = (i) => {
+        if (o.isSkinnedMesh) { o.getVertexPosition(i, v); w.fromBufferAttribute(P, i).addScaledVector(nn.fromBufferAttribute(N, i), 0.01); o.applyBoneTransform(i, w); nn.subVectors(w, v).transformDirection(M); v.applyMatrix4(M); }
+        else { v.fromBufferAttribute(P, i).applyMatrix4(M); nn.fromBufferAttribute(N, i).applyMatrix3(NM).normalize(); }
+        pos.push(v.x, v.y, v.z); nrm.push(nn.x, nn.y, nn.z); col.push(c.r, c.g, c.b); fxs.push(fx.metal, fx.quilt, fx.weave, fx.snow ? 0 : fx.grime); rgh.push(fx.rough);
+      };
+      if (o.isSkinnedMesh) {   // only the vertices its faces use; and no face that lies wholly under the garment over it
+        const map = new Int32Array(P.count).fill(-1), under = o.userData.under; let nv = 0;
+        for (let t = 0; t < ix.length; t += 3) {
+          const a = ix[t], b = ix[t + 1], d = ix[t + 2]; if (under && under[a] && under[b] && under[d]) continue;
+          for (const q of [a, b, d]) { if (map[q] < 0) { map[q] = nv++; put(q); } idx.push(base + map[q]); }
+        }
+      } else { for (let i = 0; i < P.count; i++) put(i); if (ix) for (let t = 0; t < ix.length; t++) idx.push(base + ix[t]); else for (let t = 0; t < P.count; t++) idx.push(base + t); }
+      o.visible = false;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('aFx', new THREE.Float32BufferAttribute(fxs, 4)); g.setAttribute('aRough', new THREE.Float32BufferAttribute(rgh, 1)); g.setIndex(idx);
+    const m = new THREE.Mesh(g, frostBaked(snow ? 1 : 0)); m.castShadow = true; m.receiveShadow = true; baked.add(m);
+    body.computeBoundingSphere(); body.frustumCulled = true;   // he will not move again: his bounds are known
+  };
   const settle = (ground, x, z, yaw, sink = 0.01) => {
     // the search below always gives the same answer for the same man on the same ground: remember it, so reloading
     // the chapter (after a wipe, say) need not search again
@@ -1248,7 +1334,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     if (snow) {
       if (!settle.drifts) { settle.drifts = new THREE.Group(); wrap.add(settle.drifts); }
       const D = settle.drifts; for (const c of [...D.children]) { D.remove(c); c.geometry.dispose(); }
-      const wd = new THREE.Vector3(-0.6, 0, -0.8), sm = settle.snowMat ||= new THREE.MeshStandardMaterial({ color: 0xe9eef3, roughness: 0.92 });
+      const wd = new THREE.Vector3(-0.6, 0, -0.8), sm = settle.snowMat ||= Object.assign(new THREE.MeshStandardMaterial({ color: 0xe9eef3, roughness: 0.92 }), { userData: { fx: { metal: 0, grime: 0, quilt: 0, weave: 0, rough: 0.92, snow: 1 } } });
       const bones = { sit: ['hips', 'thighR', 'thighL', 'shinR'], slump: ['hips', 'shinR', 'shinL', 'spine'], prone: ['hips', 'chest', 'thighR', 'shinL'], lie: ['hips', 'chest', 'thighL', 'shinR'] }[pose];
       let k = 0;
       // lying on his side the snow is packed in under the hollow of his waist too
@@ -1267,6 +1353,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
       }
     }
     wrap.updateMatrixWorld(true);
+    bake();
     return wrap;
   };
   // for a check: how far the lowest of him is above (+) or below (-) the ground, overall and at each part that should bear on it
@@ -1274,6 +1361,6 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     wrap.updateMatrixWorld(true); const per = {}; for (const b of [...CONTACT.rest, ...CONTACT.must]) per[b] = lowOf(ground, byBone[b] || []);
     return { low: lowOf(ground, all), per };
   };
-  settle(() => 0, 0, 0, 0);
+  if (opts.settle !== false) settle(() => 0, 0, 0, 0);   // (a caller that will settle him on his own ground says so, and saves the search)
   return { root: wrap, rig, head: J.head, settle, gaps, pose, log: () => settle.log };
 }

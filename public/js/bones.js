@@ -305,7 +305,7 @@ function handGeo(curl = 0.6, lo = false, seed = 3) {
       if (j > 0) bend += c1 * (j === 1 ? 0.7 : 0.95);
       const d = V(Math.sin(splay) * Math.cos(bend), Math.cos(splay) * Math.cos(bend), Math.sin(bend)), q = p.clone().addScaledVector(d, L);
       if (lo) { if (j % 2 === 0) parts.push(loft([p, q.clone().addScaledVector(d, lens[j + 1] || 0)], [rad, rad * 0.8], 3, false)); }
-      else parts.push(loft([p, p.clone().lerp(q, 0.14), p.clone().lerp(q, 0.86), q], [rad * 1.2, rad * 0.82, rad * 0.78, rad * 1.12], 5, true));
+      else parts.push(loft([p, p.clone().lerp(q, 0.5), q], [rad * 1.2, rad * 0.76, rad * 1.12], 4, true));
       p = q.addScaledVector(d, 0.002);
     });
   }
@@ -317,42 +317,46 @@ function handGeo(curl = 0.6, lo = false, seed = 3) {
 const CACHE = {};
 export function boneLibrary(level = 'hi') {
   if (CACHE[level]) return CACHE[level];
-  const k = { hi: 1, mid: 1.42, lo: 2.1, far: 3.4 }[level] || 1, lo = k > 2, far = k > 3, L = {};
+  const k = { hi: 1, mid: 1.42, lo: 2.1, far: 3.7 }[level] || 1, lo = k > 2, far = k > 3, L = {}, once = (fn) => { let v; return () => (v ||= fn()); };
+  // each bone is made the first time it is asked for (with vertex samples for resting it on the ground)
+  const def = (key, fn) => Object.defineProperty(L, key, { enumerable: true, configurable: true, get() {
+    const g = fn(), P = g.attributes.position, step = Math.max(1, Math.floor(P.count / 500)), pts = []; for (let i = 0; i < P.count; i += step) pts.push(new THREE.Vector3().fromBufferAttribute(P, i));
+    if (!g.userData.pts) g.userData.pts = pts; Object.defineProperty(L, key, { value: g, enumerable: true }); return g; } });
   const withTeeth = (g, teeth) => (lo ? g : mergeGeometries([g, ...teeth]));
-  const jaw = mesh(mandibleSDF(), [-0.066, -0.084, -0.022], [0.066, -0.012, 0.09], 0.005 * Math.min(k, 2.4), 13);
+  const skull = once(() => mesh(skullSDF(), [-0.084, -0.068, -0.122], [0.084, 0.125, 0.112], 0.0068 * k, 11, 1, skullSDF(true)));
+  const jaw = once(() => mesh(mandibleSDF(), [-0.066, -0.084, -0.022], [0.066, -0.012, 0.09], 0.005 * Math.min(k, 3.1), 13));
   for (const v of [0, 1]) {
-    const gone = v ? [2, 9, 13] : [5, 11];
-    L['skull' + v] = withTeeth(mesh(skullSDF(), [-0.084, -0.068, -0.122], [0.084, 0.125, 0.112], 0.0068 * k, 11 + v, 1, skullSDF(true)), teethGeo(true, gone, 40 + v));
-    L['jaw' + v] = withTeeth(jaw, teethGeo(false, v ? [0, 6, 12] : [3, 15], 44 + v));
+    def('skull' + v, () => withTeeth(skull(), teethGeo(true, v ? [2, 9, 13] : [5, 11], 40 + v)));
+    def('jaw' + v, () => withTeeth(jaw(), teethGeo(false, v ? [0, 6, 12] : [3, 15], 44 + v)));
   }
-  L.mandible = L.jaw0;
-  L.pelvis = mesh(pelvisSDF(), [-0.175, -0.125, -0.085], [0.175, 0.14, 0.11], 0.009 * k, 17, 1.3);
-  L.femur = mesh(femurSDF(), [-0.075, -0.008, -0.035], [0.04, 0.468, 0.035], 0.007 * k, 19);
-  L.humerus = mesh(humerusSDF(), [-0.045, -0.006, -0.035], [0.045, 0.33, 0.035], 0.0068 * k, 23);
-  L.tibia = mesh(tibiaSDF(), [-0.045, -0.014, -0.036], [0.045, 0.372, 0.036], 0.007 * k, 29);
-  L.shin = mesh(shinSDF(), [-0.045, -0.02, -0.036], [0.05, 0.372, 0.036], 0.0066 * Math.min(k, 2.2), 29);
-  L.forearm = mesh(forearmSDF(), [-0.032, -0.012, -0.028], [0.028, 0.285, 0.024], 0.0056 * Math.min(k, 1.9), 37);
-  L.clavicle = mesh(clavicleSDF(), [-0.016, -0.016, -0.034], [0.165, 0.026, 0.03], 0.0058 * Math.min(k, 1.7), 41);
-  L.scapula = mesh(scapulaSDF(), [-0.115, -0.145, -0.05], [0.04, 0.05, 0.012], 0.0056 * Math.min(k, 1.5), 43, 1.2);
-  L.vertebra = mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0045 * Math.min(k, 2.1), 31);
-  const vCage = lo ? null : mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0072 * (k > 1 ? 1.25 : 1), 32);
-  L.rib = ribGeo(5, 1, 1, lo);
+  def('mandible', () => L.jaw0);
+  def('pelvis', () => mesh(pelvisSDF(), [-0.175, -0.125, -0.085], [0.175, 0.14, 0.11], 0.009 * k, 17, 1.3));
+  const V = (x, y, z) => new THREE.Vector3(x, y, z), rodB = (len, r, k0, k1, seed) => solid(loft([V(0, 0, 0), V(0, len * 0.1, 0), V(0, len * 0.9, 0), V(0, len, 0)], [r * k0, r, r, r * k1], 4, true), seed);
+  // from far off a long bone is a rod with a knob at each end
+  def('femur', () => (far ? rodB(0.45, 0.014, 2.2, 1.9, 19) : mesh(femurSDF(), [-0.075, -0.008, -0.035], [0.04, 0.468, 0.035], 0.007 * k, 19)));
+  def('humerus', () => (far ? rodB(0.31, 0.011, 2, 1.9, 23) : mesh(humerusSDF(), [-0.045, -0.006, -0.035], [0.045, 0.33, 0.035], 0.0068 * k, 23)));
+  def('tibia', () => (far ? rodB(0.36, 0.012, 1.6, 2.4, 29) : mesh(tibiaSDF(), [-0.045, -0.014, -0.036], [0.045, 0.372, 0.036], 0.007 * k, 29)));
+  def('shin', () => (far ? rodB(0.36, 0.013, 1.7, 2.4, 29) : mesh(shinSDF(), [-0.045, -0.02, -0.036], [0.05, 0.372, 0.036], 0.0066 * Math.min(k, 2.2), 29)));
+  def('forearm', () => (far ? rodB(0.26, 0.011, 1.5, 1.3, 37) : mesh(forearmSDF(), [-0.032, -0.012, -0.028], [0.028, 0.285, 0.024], 0.0056 * Math.min(k, 1.9), 37)));
+  def('clavicle', () => (far ? solid(loft([V(0, 0, 0), V(0.15, 0.01, -0.02)], [0.007, 0.007], 3, true), 41) : mesh(clavicleSDF(), [-0.016, -0.016, -0.034], [0.165, 0.026, 0.03], 0.0058 * Math.min(k, 1.7), 41)));
+  def('scapula', () => (far ? solid(new THREE.BoxGeometry(0.08, 0.13, 0.008).translate(-0.045, -0.04, -0.02), 43) : mesh(scapulaSDF(), [-0.115, -0.145, -0.05], [0.04, 0.05, 0.012], 0.0056 * Math.min(k, 1.5), 43, 1.2)));
+  def('vertebra', () => (far ? solid(new THREE.BoxGeometry(0.034, 0.02, 0.05).translate(0, 0, -0.016), 31) : mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0045 * Math.min(k, 2.1), 31)));
+  def('rib', () => ribGeo(5, 1, 1, lo));
   // a ribcage: the thoracic column with its twelve pairs, some broken short, a few gone, the sternum fallen in
-  for (const v of [0, 1]) {
-    const r = rng(90 + v), parts = [];
+  const vCage = once(() => (lo ? null : mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0072 * (k > 1 ? 1.25 : 1), 32)));
+  for (const v of [0, 1]) def('cage' + v, () => {
+    const r = rng(90 + v), parts = [], vc = vCage();
     for (let i = 0; i < 12; i++) {
-      if (vCage) { const vg = vCage.clone(); vg.translate(0, -i * 0.023, 0); parts.push(vg); }
+      if (vc) { const vg = vc.clone(); vg.translate(0, -i * 0.023, 0); parts.push(vg); }
       else if (!far || i % 2 === 0) { const vg = solid(new THREE.BoxGeometry(0.03, far ? 0.04 : 0.018, 0.05), 32); vg.translate(0, -i * 0.023, -0.015); parts.push(vg); }
       for (const s of [-1, 1]) { const q = r(); if (q < 0.12 || (far && i % 2)) continue; parts.push(ribGeo(i, s, q < 0.35 ? 0.55 + r() * 0.3 : 1, lo, far, k > 1 && !lo)); }
     }
     const st = solid(new THREE.BoxGeometry(0.03, 0.14, 0.008, 2, lo ? 1 : 6, 1), 77); st.rotateX(0.25); st.translate(0.01, -0.11, 0.1); parts.push(st);
-    L['cage' + v] = mergeAll(parts);
-  }
+    return mergeAll(parts);
+  });
   // a hand or foot's worth of small bones, scattered flat
-  { const r = rng(5), parts = []; for (let i = 0; i < 12; i++) { const len = 0.018 + r() * 0.035; const g = solid(new THREE.CapsuleGeometry(0.0045 + r() * 0.002, len, lo ? 1 : 3, lo ? 4 : 6), 60 + i); g.rotateZ(Math.PI / 2); g.rotateY(r() * Math.PI); g.translate((r() - 0.5) * 0.14, 0.005, (r() - 0.5) * 0.14); parts.push(g); } L.small = mergeAll(parts); }
-  L.hand = handGeo(0.6, lo, 3); L.hand1 = handGeo(1.0, lo, 4);
-  // vertex samples for resting each bone on the ground
-  for (const key in L) { const g = L[key]; const P = g.attributes.position; const step = Math.max(1, Math.floor(P.count / 500)); const pts = []; for (let i = 0; i < P.count; i += step) pts.push(new THREE.Vector3().fromBufferAttribute(P, i)); g.userData.pts = pts; }
+  def('small', () => { const r = rng(5), parts = []; for (let i = 0; i < 12; i++) { const len = 0.018 + r() * 0.035; const g = solid(new THREE.CapsuleGeometry(0.0045 + r() * 0.002, len, lo ? 1 : 3, lo ? 4 : 6), 60 + i); g.rotateZ(Math.PI / 2); g.rotateY(r() * Math.PI); g.translate((r() - 0.5) * 0.14, 0.005, (r() - 0.5) * 0.14); parts.push(g); } return mergeAll(parts); });
+  def('hand', () => handGeo(0.6, lo, 3)); def('hand1', () => handGeo(1.0, lo, 4));
   CACHE[level] = L; return L;
 }
 // how far below a bone's origin its lowest point lies, once turned by q
