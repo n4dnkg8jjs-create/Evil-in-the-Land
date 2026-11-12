@@ -98,9 +98,12 @@ the server on **port 7797**:
 | `title.py` | Renders the title screen. |
 | `bootcheck.py [url]` | Boots the full game and reports errors. |
 | `mp2.py` | Two-browser multiplayer test: host, join by code, start, sync, drop. Point `URL` at the live site to test production. |
-| `floaters.js`, `cavewalk.js` | Numeric checks: floating props in the village; walking the cave and firing its scares. |
+| `floaters.js` (village floating check; 0 floating is the baseline), `cavewalk.js` | Numeric checks: floating props in the village; walking the cave and firing its scares. |
 
 Testing gotchas:
+- `node --check` misses ES-module errors: copy the file to a `.mjs` name and check that.
+- When several agents edit at once, ship one piece by applying it to a clean `git worktree` of `origin/main` and
+  testing that copy on a second port (`PORT=7798 node server.js` from the worktree).
 - SwiftShader is very slow (about 1 fps for the full game) and crashes ("Target crashed") on long single
   `evaluate` calls. Step the simulation in short chunks.
 - Full-chapter renders of the Ascent can run out of memory. Prefer `dev.html` scenes.
@@ -112,7 +115,8 @@ Testing gotchas:
 ## Architecture (public/js)
 
 **Boot and flow**
-- `main.js`: boot, menus, lobby, the main loop, the title stage, pause (losing the pointer lock = pause; P also
+- `main.js`: boot, menus, lobby (title buttons "Test: the Peak battle" and "Test: the cave", which loads the Ascent
+  with `loadChapter(n, { at: 'cave' })`), the main loop, the title stage, pause (losing the pointer lock = pause; P also
   pauses).
 - `ui.js`: DOM screens and HUD; keyboard and controller focus navigation.
 - `intro.js`: the first-visit cinematic. `?intro` forces it, `?nointro` skips it.
@@ -134,6 +138,13 @@ Testing gotchas:
 - `buildings.js`: the church of Saint Aldric, the houses, barns and burnt wrecks, as real geometry (Fachwerk frames,
   jetties, traceried windows, buttresses, the broach spire). `placeHouse` and `placeChurch` in `world.js` call it.
   It draws its own detail randomness from a generator seeded per lot, so it does not shift the rest of the world.
+- `colliders.js` (`Solids`): circle, capsule and oriented-box colliders in a 4 m grid, swept against last frame's
+  position; `world.collide` uses it. `low` colliders (fences, low walls, graves, pews, logs) stop knights only and
+  can be vaulted (`world.vaultCheck`; double-tap Space, `COMMON.vault`). The old circle list `world.colliders` is
+  kept unchanged for the wagon's road, the battlefield and the charger. Companions use `world.findPath` (A*).
+- Terrain (`world.js`): `crag()` hills plus a `weather()` erosion pass (masked off road, altar shelves, cave, Peak
+  arena); the Ascent uses `trackSurface()`/`softRidge()`; rocks are seated with `seat()`. Lots are accepted on the
+  original terrain (`_legacy`) so the village layout never moves.
 - `weather.js`: rain, snow, splashes, the water ripple simulation (shared by every water surface), wading wakes, the
   calm near healed ground.
 - `vista.js`: the far city and mountain, lightning (`onThunder`).
