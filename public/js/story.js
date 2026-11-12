@@ -170,6 +170,7 @@ export class Story {
       }
       const { g, page } = cairn(r);
       g.position.set(x, world.heightAt(x, z) - 0.04, z); g.rotation.y = r() * TAU; this.group.add(g);
+      world.solidCircle?.(x, z, 0.35, { low: true, h: 0.5 });   // his cairn: walked round or vaulted, not through
       this.spots.push({ x, y: g.position.y, z, pageIdx, page, taken: false });
     }
     this.buildLore(world, chIdx, r);
@@ -187,6 +188,7 @@ export class Story {
       }
       const { g, page } = loreModel(L.kind, r);
       g.position.set(x, world.heightAt(x, z) - 0.05, z); g.rotation.y = this.loreYaw ?? 0; this.group.add(g);   // faces the road
+      world.solidCircle?.(x, z, { cross: 0.5, shrine: g.userData.faceYaw !== undefined ? 0.75 : 0.5, relief: 0.5, standard: 0.08 }[L.kind] ?? 0.4, { low: L.kind === 'letter', h: 1.5 });   // solid: no walking through it
       this.spots.push({ x, y: g.position.y, z, lore: L, loreKey: chIdx + ':' + k, page, taken: false, yaw: g.rotation.y, g });
     });
   }

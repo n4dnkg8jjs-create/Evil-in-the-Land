@@ -271,7 +271,7 @@ export function buildHouse(K, o) {
   const pitch = (big ? q.range(47, 50) : style === 'kate' ? q.range(53, 57) : q.range(50, 55)) * PI / 180, tanP = Math.tan(pitch), cosP = Math.cos(pitch), sinP = Math.sin(pitch);
   const jf = (style === 'stock' || style === 'fach') ? q.range(0.3, 0.4) : 0;
   const f0 = style === 'stock' || style === 'wreck' ? 0 : -0.04;      // the frame's face, in from the plinth's
-  const info = { style, gableFront, colliders: [], tops: null };
+  const info = { style, gableFront, colliders: [], solid: [], tops: null };
   const pick = (arr) => arr[Math.floor(q() * arr.length) % arr.length];
 
   // ---- the four walls, in order round the house (front, right, back, left): each wall's right end meets the next
@@ -660,6 +660,7 @@ export function buildHouse(K, o) {
       if (q() < 0.6 && Math.abs(bu) < dW.len / 2 - 0.8) {   // a bench against the wall: a plank on two blocks
         const [hx, hz] = toH(0, bu, 0.3), gy = gH(hx, hz);
         K.box(BRD, bu - 0.72, gy + 0.4, 0.06, bu + 0.72, gy + 0.45, 0.4, 'x'); for (const sd of [-1, 1]) K.box('stone', bu + sd * 0.52 - 0.12, gy - 0.15, 0.08, bu + sd * 0.52 + 0.12, gy + 0.4, 0.38);
+        info.solid.push({ box: [...toH(0, bu, 0.23), 0.74, 0.19, Ws[0].rot], low: true, h: 0.45 });
       }
     });
     // ---- an open lean-to against the back wall, for the wood and the cart
@@ -762,6 +763,25 @@ export function buildHouse(K, o) {
     // a standing house has a little of the same about its walls, outside
     for (const sb of plan.stones14) if (Math.abs(sb.lx) > w / 2 + 0.7 || Math.abs(sb.lz) > d / 2 + 0.7) rest('stone', sb.lx, sb.lz, sb.sz, sb.sz * 0.6, sb.sz * 0.8, sb.rx, sb.ry, sb.rz, gH(sb.lx, sb.lz), sb.sz * 0.12);
   }
+  // ---- what stops a body, in the house's frame (world.js makes the colliders): a standing house or barn is
+  // shut (its doors are closed, or open too little to pass, and it is black within); a wreck is its walls, open
+  // at the doorway and where they are down to the knee, low enough to vault where broken to the waist; the door
+  // leaf where it still hangs; the chimney stack
+  if (style !== 'wreck') info.solid.push({ box: [0, 0, w / 2 + 0.3, d / 2 + 0.3, 0] });
+  else {
+    Ws.forEach((W, i) => {
+      const e = i % 2 ? WT : 0, u0 = -W.half + e, u1 = W.half - e, n = Math.max(2, Math.ceil((u1 - u0) / 0.1)), du = (u1 - u0) / n;
+      const top = (u) => (W.door && Math.abs(u - W.door.u) < 0.5 ? 0 : W.top(u)), cls = (t) => (t < 0.5 ? 0 : t < 1.2 ? 1 : 2);
+      for (let j = 0; j < n;) {
+        const c = cls(top(u0 + (j + 0.5) * du)); let k = j, hm = 0;
+        while (k < n && cls(top(u0 + (k + 0.5) * du)) === c) { hm = Math.max(hm, top(u0 + (k + 0.5) * du)); k++; }
+        if (c) { const ua = u0 + j * du, ub = u0 + k * du; info.solid.push({ box: [...toH(i, (ua + ub) / 2, -WT / 2), (ub - ua) / 2, WT / 2, W.rot], low: c === 1, h: hm }); }
+        j = k;
+      }
+      const D = W.door; if (D && D.leaf) { const o = D.leaf.open, [ax, az] = toH(i, D.u - 0.4, -0.1), [bx, bz] = toH(i, D.u - 0.4 + 0.8 * Math.cos(o), -0.1 + 0.8 * Math.sin(o)); info.solid.push({ seg: [ax, az, bx, bz, 0.05], h: 1.95 }); }
+    });
+    if (plan.chimney) { const sx = plan.chimney.sx; info.solid.push({ box: [sx * (w / 2 - 0.24) - sx * 0.425, 0, 0.425, 0.62, 0], h: 1.6 }); }
+  }
   return info;
 }
 
@@ -844,7 +864,7 @@ export function buildChurch(K, o) {
   const T = 0.8, WN = 4.9, HN = 22 * COURSE, XC = 3.62, TC = 0.7, HC = 19 * COURSE, ZE = -2.4, ZW = 10.4;
   const TWH = 2.7, TZ1 = 15.4, TT = 0.85, SH = 44 * COURSE, BH = 16 * COURSE, TZ = 12.7, TOP = SH + BH;
   const PITCH = 54 * PI / 180, tanR = Math.tan(PITCH), cosR = Math.cos(PITCH), sinR = Math.sin(PITCH);
-  const info = { colliders: [], bell: [0, TOP - 1.5, TZ] }, col = (x, z, r2) => info.colliders.push([x, z, r2]);
+  const info = { colliders: [], legacy: [], solid: [], bell: [0, TOP - 1.5, TZ] }, col = (x, z, r2) => info.colliders.push([x, z, r2]), leg = (x, z, r2) => info.legacy.push([x, z, r2]);
   const wallF = (ax, az, bx, bz, fn) => { const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz); K.at((ax + bx) / 2, 0, (az + bz) / 2, Math.atan2(-dz, dx)); fn(L); K.pop(); };
   const rest = (k, x, z, sx, sy, sz, rx, ry, rz, base, sink = 0.02, g) => { const e = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)).elements; K.obox(k, x, base + (Math.abs(e[1]) * sx + Math.abs(e[5]) * sy + Math.abs(e[9]) * sz) / 2 - sink, z, sx, sy, sz, rx, ry, rz, g); };
 
@@ -984,7 +1004,7 @@ export function buildChurch(K, o) {
     for (const [z, sg] of [[z0, -1], [z1, 1]]) { const xa = z === z1 ? -WN : x1; K.quadTo(ST, [x0, h0, z], [xa, h0, z], [xa, h0 + (h1 - h0) * (xa - x0) / (x1 - x0), z], [x0, h0, z], 0, 0, sg); K.quadTo(ST, [x0, h0, z - sg * Ts], [xa, h0, z - sg * Ts], [xa, h0 + (h1 - h0) * (xa - x0) / (x1 - x0), z - sg * Ts], [x0, h0, z - sg * Ts], 0, 0, -sg); }
     const mS = (h1 - h0) / (x1 - x0), kS = Math.hypot(1, mS), sl = (x1 - x0 + 0.3) * kS, U = [0, 0, -1], V = [1 / kS, mS / kS, 0];
     roofSheet(K, SL, OAK, [x0 - 0.3, h0 - 0.3 * mS, z1], U, V, [0, z1 - z0 + 0.25], [0, sl], 0.07, null);
-    for (const z of [-3.2, -4.4, -5.6]) col(x0 + 0.25, z, 0.7); col(-5.2, z0 + 0.25, 0.62); col(-4.3, z0 + 0.25, 0.62); col(-5.45, z1 - 0.2, 0.62);
+    for (const z of [-3.2, -4.4, -5.6]) leg(x0 + 0.25, z, 0.7); leg(-5.2, z0 + 0.25, 0.62); leg(-4.3, z0 + 0.25, 0.62); leg(-5.45, z1 - 0.2, 0.62);
   }
 
   // ---- plinth and string course round the whole church (mitred at the corners), cut at the door and at the breach
@@ -1063,6 +1083,7 @@ export function buildChurch(K, o) {
     K.rot(sx * 2.15 + (pw.over ? pw.dx : 0), pw.over ? 0.24 : 0, pz, 0, pw.ry, 0); K.rot(0, 0, 0, pw.over ? PI / 2 - 0.1 : 0, 0, 0);
     K.box(CHAR, -1.5, 0.41, -0.22, 1.5, 0.49, 0.22, 'x'); K.box(CHAR, -1.5, 0.49, 0.18, 1.5, 1.02, 0.24, 'x'); for (const e of [-1.46, 1.46]) K.box(CHAR, e - 0.04, 0, -0.22, e + 0.04, 0.72, 0.24, 'y');
     K.pop(); K.pop();
+    info.solid.push({ box: [sx * 2.15 + (pw.over ? pw.dx : 0), pz + (pw.over ? 0.42 : 0), 1.5, pw.over ? 0.62 : 0.24, pw.ry], low: true, h: pw.over ? 0.5 : 1.02 });
   }));
   for (const s of [-1, 1]) plan.bays[s < 0 ? 0 : 1].forEach((b, k) => {
     if (!b.broken) return; const zc0 = -9 + 2 * k; if (!b.breach && !(zc0 > -1.5) && !(s > 0 && zc0 < -2.5 && zc0 > -8)) return;
@@ -1072,14 +1093,32 @@ export function buildChurch(K, o) {
       rest(ST, x, z, sz, sz * 0.55, sz * 0.85, rb.rx * 0.12, rb.ry, rb.rz * 0.12, ins || Math.abs(rb.off) < 0.4 ? 0 : gH(x, z), sz * 0.1); }
   });
 
-  // ---- what stops a knight: the walls (the breach and the two doorways left open), the buttress feet
-  for (const s of [-1, 1]) { for (const z of [9, 7, 5, 3]) col(s * 4.5, z, 1.0); if (s < 0) { col(-4.5, 1, 1.0); col(-4.5, -1, 1.0); } else { col(4.5, BR1 + 1.0, 1.0); col(4.5, BR0 - 0.62, 0.6); }
-    for (const z of [-3.1, -4.5, -5.9, -7.2]) col(s * (XC - 0.35), z, 0.75); col(s * 2.6, -8.95, 0.75); col(s * 1.0, -9.7, 0.7);
-    col(s * 4.25, ZE + 0.4, 0.7); col(s * 2.95, ZE + 0.4, 0.72);
-    for (const x of [4.3, 3.1, 1.95]) col(s * x, 10.0, 0.65); col(s * 2.0, 10.65, 0.65);
-    for (const z of [11.5, 12.7, 13.9, 14.95]) col(s * (TWH - 0.4), z, 0.62); col(s * 1.72, 15.05, 0.62);
+  // ---- the old round stand-ins for the walls (kept for what placed things round them); the walls themselves below
+  for (const s of [-1, 1]) { for (const z of [9, 7, 5, 3]) leg(s * 4.5, z, 1.0); if (s < 0) { leg(-4.5, 1, 1.0); leg(-4.5, -1, 1.0); } else { leg(4.5, BR1 + 1.0, 1.0); leg(4.5, BR0 - 0.62, 0.6); }
+    for (const z of [-3.1, -4.5, -5.9, -7.2]) leg(s * (XC - 0.35), z, 0.75); leg(s * 2.6, -8.95, 0.75); leg(s * 1.0, -9.7, 0.7);
+    leg(s * 4.25, ZE + 0.4, 0.7); leg(s * 2.95, ZE + 0.4, 0.72);
+    for (const x of [4.3, 3.1, 1.95]) leg(s * x, 10.0, 0.65); leg(s * 2.0, 10.65, 0.65);
+    for (const z of [11.5, 12.7, 13.9, 14.95]) leg(s * (TWH - 0.4), z, 0.62); leg(s * 1.72, 15.05, 0.62);
   }
-  col(0, -9.75, 0.7);
+  leg(0, -9.75, 0.7);
+  // ---- what stops a body, in the church's frame (world.js makes the colliders): the walls as they stand, open at
+  // the breach, the chancel arch, the tower arch and the west door; low enough to vault where broken to the waist;
+  // the sacristy shut; the pews
+  { const wallB = (xa, za, xb, zb, low = false, h = 9) => info.solid.push({ box: [(xa + xb) / 2, (za + zb) / 2, Math.abs(xb - xa) / 2, Math.abs(zb - za) / 2, 0], low, h });
+    for (const s of [-1, 1]) {
+      const tf = info['top' + s + 'n'], cls = (t) => (t < 0.5 ? 0 : t < 1.2 ? 1 : 2), n = Math.ceil((ZW - ZE) / 0.1), dz = (ZW - ZE) / n;
+      for (let j = 0; j < n;) { const c = cls(tf(ZE + (j + 0.5) * dz)); let k = j, hm = 0; while (k < n && cls(tf(ZE + (k + 0.5) * dz)) === c) { hm = Math.max(hm, tf(ZE + (k + 0.5) * dz)); k++; }
+        if (c) wallB(s * (WN - T), ZE + j * dz, s * WN, ZE + k * dz, c === 1, hm); j = k; }
+      wallB(s * (XC - TC), -7.88, s * XC, ZE);                 // the chancel's sides
+      wallB(s * 2.75, ZE, s * WN, ZE + T);                     // the nave's east wall, either side of the chancel arch
+      wallB(s * 1.35, ZW - T, s * WN, ZW); wallB(s * 1.35, ZW, s * TWH, ZW + 0.45);   // its west wall and the tower's, either side of the tower arch
+      wallB(s * (TWH - TT), TZ - TWH, s * TWH, TZ1);           // the tower's sides
+      wallB(s * 1.08, TZ1 - TT, s * TWH, TZ1);                 // its west front, either side of the door
+    }
+    for (let i = 0; i < 3; i++) { const [ax, az] = AP[i], [bx, bz] = AP[i + 1], l = Math.hypot(bx - ax, bz - az); let nx = -(bz - az) / l, nz = (bx - ax) / l; if (nx * ((ax + bx) / 2) + nz * ((az + bz) / 2 + 6.38) > 0) { nx = -nx; nz = -nz; }
+      info.solid.push({ seg: [ax + nx * TC / 2, az + nz * TC / 2, bx + nx * TC / 2, bz + nz * TC / 2, TC / 2], h: 9 }); }   // the apse, three sides of an octagon
+    wallB(-6.0, -6.6, -XC, ZE);                                 // the sacristy, its door shut
+  }
   info.height = TOP + 12.7;
   return info;
 }

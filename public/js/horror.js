@@ -274,6 +274,21 @@ function hornGeo(len, r, curl, seg = 12) {
   for (let i = 0; i < pos.count; i++) { const ring = Math.floor(i / 8); const t = ring / (seg * 2); const c = curve.getPoint(t); v.fromBufferAttribute(pos, i).sub(c).multiplyScalar(1 - t * 0.94).add(c); pos.setXYZ(i, v.x, v.y, v.z); }
   tg.computeVertexNormals(); return tg;
 }
+// His horns: a tapering tube along a curve, ringed with growth ridges, with a slow twist in the ridging
+// (hg units: the hood's own space, +x his left, +z forward). One horn; the other is its mirror.
+const DEVIL_HORN = [[0.095, 0.16, 0.05], [0.15, 0.3, 0.035], [0.25, 0.45, -0.02], [0.38, 0.55, -0.15], [0.5, 0.585, -0.32], [0.6, 0.57, -0.5], [0.69, 0.61, -0.66], [0.76, 0.73, -0.77]];
+function devilHornGeo(pts, r0, r1) {
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), TS = 64, RS = 10;
+  const g = new THREE.TubeGeometry(curve, TS, 1, RS, false), P = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < P.count; i++) {
+    const ring = Math.floor(i / (RS + 1)), k = i % (RS + 1), t = ring / TS, a = k / RS * TAU;
+    curve.getPointAt(t, c);
+    const ridge = 1 + 0.07 * Math.max(0, Math.sin(t * 70 + Math.sin(a + t * 6) * 0.9)) * (1 - t * 0.7);   // the rings of growth, skewed round the horn
+    const flat = 1 - 0.12 * Math.cos(2 * (a - t * 2.2));                                                       // a little flattened, the flat face twisting along it
+    v.fromBufferAttribute(P, i).sub(c).multiplyScalar(lerp(r0, r1, Math.pow(t, 0.8)) * ridge * flat).add(c); P.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals(); return g;
+}
 const HORN_MAT = new THREE.MeshStandardMaterial({ color: 0x2a221c, roughness: 0.55 });
 const CLOTH_MAT = new THREE.MeshStandardMaterial({ color: 0x0d0b0a, roughness: 0.95, side: THREE.DoubleSide });
 function robeGeo(top, bottom, len) {
@@ -533,7 +548,9 @@ function dressDevil(B, K, def, DU) {
   const neckTop = B.neck.position.y;                                    // neck base, in the chest's frame
   const L = chestY - 0.02;                                              // to the ground
   // the robe: gathered at the throat, broad over the shoulders, then falling in deep pleats to a hem that pools and drags
-  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.42, -0.2], [0.41, -0.5], [0.45, -0.8], [0.54, -1.25], [0.7, -1.85], [0.9, -L + 0.06], [0.98, -L]];
+  // (heights below the waist go by L, so the skirt only ever runs down: an older profile folded back on itself under
+  // the ground, and the ragged edge of the fold stood up out of the earth round his feet like scraps of cloth)
+  const prof = [[0.15, neckTop + 0.03], [0.38, neckTop - 0.07], [0.58, 0.17], [0.55, 0.03], [0.4, -0.2], [0.39, -0.5], [0.43, -0.59 * L], [0.52, -0.8 * L], [0.64, -0.93 * L], [0.84, -0.985 * L], [0.96, -L]];
   const pts = []; for (let i = 0; i < prof.length - 1; i++) for (let k = 0; k < 4; k++) { const t = k / 4; pts.push([lerp(prof[i][0], prof[i + 1][0], t), lerp(prof[i][1], prof[i + 1][1], t)]); } pts.push(prof[prof.length - 1]);
   const robeGeo = lathe(pts, 96, (v, a) => {
     const t = clamp(-v.y / L, 0, 1);
@@ -543,21 +560,40 @@ function dressDevil(B, K, def, DU) {
     const wr = (wn(a * 6, v.y * 9) - 0.5) * 0.03 * (Math.exp(-(((v.y - 0.12) / 0.12) ** 2)) + Math.exp(-(((v.y + 0.45) / 0.15) ** 2)));
     const r = Math.hypot(v.x, v.z) + pleat + wr;
     v.x = Math.sin(a) * r; v.z = Math.cos(a) * r * 0.82 + 0.07;
-    if (t > 0.96) v.y += Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.1 - 0.02;   // the hem, uneven, dragging
+    if (t > 0.96) v.y -= Math.abs(Math.sin(a * 7.3) * Math.sin(a * 3.1)) * 0.08 * (t - 0.96) / 0.04;   // the hem, uneven, dragging (never lifted off the ground)
   });
   const robe = new THREE.Mesh(robeGeo, robeMat(0.03, neckTop, DU)); robe.castShadow = true; B.chest.add(robe); B.robe = robe; if (def.robeW) { robe.scale.set(def.robeW, 1, def.robeW * 1.45); robe.position.z += 0.04; }
   robe.userData.base = robe.scale.clone(); robe.userData.pos0 = robe.position.clone(); robe.userData.top = neckTop + 0.03; robe.userData.L = L;
-  // sleeves: wide and long, falling in folds, the hands hang out of them
+  robe.userData.prof = pts; robe.userData.sway = 0.03; robe.userData.uTop = neckTop;   // (its shape, for keeping the hands out of it: guardArms)
+  // sleeves: wide and long, falling in folds, the hands hang out of them. Each is one tube from the shoulder to the
+  // cuff, skinned to the upper arm and the forearm and blended across the elbow, so the arm is always inside it however
+  // the elbow bends (two stiff halves used to part at a bent elbow and let the forearm out through the cloth).
+  const sw = def.sleeveW || 1;
   for (const k of ['R', 'L']) {
-    const ul = Math.abs(B['fArm' + k].position.y), fl = Math.abs(B['hand' + k].position.y);
-    const up = new THREE.Mesh(lathe([[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul - 0.02]], 24, (v, a) => { const r = Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * 0.012 + (wn(a * 4, v.y * 12) - 0.5) * 0.02; v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; }), robeMat(0.0, 0, DU)); B['uArm' + k].add(up);
-    const lo = new THREE.Mesh(lathe([[0.16, 0.02], [0.19, -fl * 0.4], [0.27, -fl * 0.75], [0.31, -fl * 0.88], [0.3, -fl * 0.92]], 28, (v, a) => {
-      const t = -v.y / fl; const r = Math.hypot(v.x, v.z) + Math.sin(a * 7 + v.y * 3) * 0.018 * t + (wn(a * 5, v.y * 10) - 0.5) * 0.02;
-      v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
-    }), robeMat(0.06, 0, DU));
-    B['fArm' + k].add(lo); up.castShadow = lo.castShadow = true;
-    (B.sleeves ||= []).push(up, lo);
-    if (def.sleeveW) { up.scale.set(def.sleeveW, 1, def.sleeveW); lo.scale.set(def.sleeveW, 1, def.sleeveW); }
+    const ua = B['uArm' + k], fa = B['fArm' + k], ul = Math.abs(fa.position.y), fl = Math.abs(B['hand' + k].position.y), L2 = ul + fl * 0.92;
+    let top = ua; while (top.parent) top = top.parent; top.updateMatrixWorld(true);
+    const sh = ua.getWorldPosition(new THREE.Vector3());   // at rest every bone frame is the model frame: the sleeve hangs straight down from here
+    const sp = [[0.15, 0.06], [0.16, -ul * 0.3], [0.155, -ul * 0.65], [0.165, -ul], [0.17, -ul - fl * 0.35], [0.22, -ul - fl * 0.6], [0.27, -ul - fl * 0.75], [0.31, -ul - fl * 0.88], [0.3, -L2]];
+    const spts = []; for (let i = 0; i < sp.length - 1; i++) for (let j = 0; j < 3; j++) { const t = j / 3; spts.push([lerp(sp[i][0], sp[i + 1][0], t), lerp(sp[i][1], sp[i + 1][1], t)]); } spts.push(sp[sp.length - 1]);
+    const g = lathe(spts, 28, (v, a) => {
+      const t = clamp((-v.y - ul) / fl, 0, 1);   // 0 down to the elbow, then out along the forearm
+      const r = (Math.hypot(v.x, v.z) + Math.sin(a * 6 + v.y * 4) * (0.012 + 0.006 * t) + (wn(a * 4.5, v.y * 11) - 0.5) * 0.02) * sw;
+      v.x = Math.sin(a) * r; v.z = Math.cos(a) * r;
+      if (t > 0.85) v.y += Math.abs(Math.sin(a * 5.1)) * 0.06 - Math.max(0, -Math.cos(a)) * 0.08;   // the cuff hangs lower behind
+    });
+    g.translate(sh.x, sh.y, sh.z);
+    const P = g.attributes.position, SI = [], SW = [];
+    for (let i = 0; i < P.count; i++) {   // the upper arm's down to just above the elbow, the forearm's from just below it
+      const d = sh.y - P.getY(i), f = clamp((d - ul + 0.09) / 0.18, 0, 1), w = f * f * (3 - 2 * f);
+      SI.push(0, 1, 0, 0); SW.push(1 - w, w, 0, 0);
+    }
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+    // (it stirs below the elbow only, as the old cuff did)
+    const m = new THREE.SkinnedMesh(g, robeMat(0.06, sh.y - ul, DU)); m.castShadow = true; m.frustumCulled = false; m.userData.side = k;
+    ua.add(m); m.position.copy(ua.worldToLocal(new THREE.Vector3(0, 0, 0)));   // (at rest: the mesh's frame is the model's)
+    top.updateMatrixWorld(true);
+    m.bind(new THREE.Skeleton([ua, fa], [ua.matrixWorld.clone().invert(), fa.matrixWorld.clone().invert()]), m.matrixWorld.clone());
+    (B.sleeves ||= []).push(m);
   }
   // the hood. It rests on the skull and comes down over the brow, so the face is a pale shape in its shadow:
   // a little of the eyes beneath the edge, the cheekbones, the mouth. Below the jaw the cowl falls onto the shoulders.
@@ -616,12 +652,27 @@ function dressDevil(B, K, def, DU) {
     const sk = new THREE.Skeleton(bones, bones.map((b) => b.matrixWorld.clone().invert()));
     hm.bind(sk, hm.matrixWorld.clone()); }
   HOODS.add({ head: B.head, lag, y: 0, x: 0, z: 0, vy: 0, vx: 0, vz: 0, t: -1, init: false });
-  // ram horns rooted inside the skull above the temples, breaking out through the hood and curling back
+  { // the hood as two ellipsoids for guardArms: the crown (with the head, in the hood's own space) and the cowl on the
+    // shoulders (with the chest, in the chest's space), each the box of the cloth that rides that bone
+    const bw = new THREE.Box3(), v = new THREE.Vector3(); hg.updateMatrixWorld(true); B.chest.updateMatrixWorld(true);
+    for (let k = 0; k < NP; k++) { v.fromArray(pos, k * 3); if (SW[k * 4 + 2] > 0.5) bw.expandByPoint(B.chest.worldToLocal(hg.localToWorld(v))); }
+    const ell = (b) => ({ c: b.getCenter(new THREE.Vector3()), r: b.getSize(new THREE.Vector3()).multiplyScalar(0.5) });
+    hg.userData.crown = { c: new THREE.Vector3(C[0], C[1], C[2]), r: new THREE.Vector3(RX + 0.01, RY + 0.03, RZ + 0.04) };   // (the skull's own shell, the peak and the brow on it)
+    hg.userData.cowl = bw.isEmpty() ? null : ell(bw);
+  }
+  // great horns rooted inside the skull above the temples: they break out through the crown of the hood and sweep up,
+  // out and back in a long arc, the tips turning up again. Each keeps to its own side and above the hood, so they
+  // never cross each other or pass back through the cloth, however the head turns or lolls (a ram's curl coming down
+  // round the ears ran into the shoulders when it lolled over).
+  hg.userData.horns = [];
   if (def.horns) for (const s of [-1, 1]) {
-    const h = new THREE.Mesh(hornGeo(def.horns[0], def.horns[1], def.horns[2]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true;
-    h.position.set(s * 0.11, 0.19, 0.05); h.rotation.set(-0.15, s * 0.75, -s * 1.15);   // out to the sides, then back and down round the hood, a ram's curl
-    if (def.headFit) h.scale.setScalar(1.45);
+    const pts = DEVIL_HORN.map(([x, y, z]) => new THREE.Vector3(s * x, y, z));
+    const h = new THREE.Mesh(devilHornGeo(pts, 0.082, 0.007), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true; h.userData.horn = true;
     hg.add(h);
+    // the centre line, for keeping his hands off them (guardArms): every other point, with the radius there
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), line = [];
+    for (let i = 0; i <= 8; i++) { const t = i / 8; line.push({ p: curve.getPoint(t), r: lerp(0.082, 0.007, Math.pow(t, 0.8)) }); }
+    hg.userData.horns.push(line);
   }
 }
 

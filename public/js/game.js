@@ -72,7 +72,8 @@ export class Game {
   leader() { return this.knightList.filter((k) => k.human && !k.downed).sort((a, b) => a.id - b.id)[0] || this.me; }
 
   // ================================================================ chapters
-  loadChapter(n, { skipIntro = false } = {}) {
+  // at: 'cave' (testing) puts the company at the cave's lower mouth on the Ascent, with the altars below it hallowed
+  loadChapter(n, { skipIntro = false, at = null } = {}) {
     this.chT0 = performance.now(); this.myDowns = 0; this.secondWindUsed = false; this.burns = [];
     this.ui.fade(true);
     this.chapterIdx = n; const ch = CHAPTERS[n];
@@ -104,6 +105,12 @@ export class Game {
       k.pos.y = this.world.heightAt(k.pos.x, k.pos.z); k.yaw = face; k.hp = k.maxHp; k.downed = false; k.stamina = k.maxStamina;
     });
     this.cam.yaw = face; this.cam.pitch = 0.2;
+    if (at === 'cave' && this.world.cave) {
+      const W = this.world, C = W.cave, P = W.path, t = C.t0 - C.e - 0.03, p = P.at(t), q = P.at(t + 0.01), f = Math.atan2(q.x - p.x, q.z - p.z);
+      this.knightList.forEach((k, i) => { const s = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 1.6; k.pos.set(p.x + Math.cos(f) * s - Math.sin(f) * (i ? 1.5 : 0), 0, p.z - Math.sin(f) * s - Math.cos(f) * (i ? 1.5 : 0)); k.pos.y = W.heightAt(k.pos.x, k.pos.z); k.yaw = f; });
+      W.altarT.forEach((A, i) => { if ((A.t ?? 1) < t) { W.cleanse(i, true); this.obj.s[i] = 'cleansed'; this.obj.p[i] = 1; this.obj.a = i + 1; this.obj.checkpoint = i; } });
+      this.cam.yaw = f; skipIntro = true;
+    }
     this.audio.setAmbience(ch.id === 'peak' || ch.id === 'ascent' ? 0.9 : 0.55, 0.05);
     this.setMood('dread', 0);
     // Behind the black: the chapter's bosses are built now and wait hidden (building one in the middle of the game
@@ -231,6 +238,7 @@ export class Game {
 
     // ---- local player
     const inCine = this.cinema.active || (this.obj && this.obj.ph === 'intro');
+    if (inCine) { this.spaceHold = this.time + 0.4; this.tapAt = null; }   // a Space that skipped a scene is not a dodge or a vault
     const me = this.me;
     const myInput = inCine || this.paused ? this.emptyInput() : this.readInput(dt);
     if (this.world) {
@@ -310,7 +318,17 @@ export class Game {
       document.getElementById('hud')?.classList.toggle('locked', !!this.shiftLock);
     }
     if ((attack || heavy) && !this.shiftLock) aim = this.softAim(aim);
-    return { mx, mz, aimYaw: aim, lock: !!this.shiftLock, sprint: runKeys.some((k) => I.held(k)), block: I.held('KeyQ') || I.held('Mouse3'), pray: I.held('KeyE'), attack, heavy, dodge: I.pressed('Space'), relic: I.pressed('KeyR') };
+    // Space dodges; a quick double tap facing a fence, a low wall or a grave vaults it. Only when there is
+    // something to vault ahead is the first tap held back (0.3 s) to see whether a second follows; elsewhere the
+    // dodge goes at once, as it always did.
+    let dodge = false, vault = false;
+    if (this.tapAt != null && this.time - this.tapAt > 0.3) { dodge = true; this.tapAt = null; }   // no second tap: the dodge after all
+    if (I.pressed('Space') && this.time >= (this.spaceHold || 0)) {
+      if (this.tapAt != null) { vault = true; dodge = false; this.tapAt = null; }
+      else if (this.world && this.me.vaultAhead?.(mx, mz, this.worldCtx())) this.tapAt = this.time;
+      else dodge = true;
+    }
+    return { mx, mz, aimYaw: aim, lock: !!this.shiftLock, sprint: runKeys.some((k) => I.held(k)), block: I.held('KeyQ') || I.held('Mouse3'), pray: I.held('KeyE'), attack, heavy, dodge, vault, relic: I.pressed('KeyR') };
   }
   // gentle aim assist toward the most threatening demon in front
   softAim(yaw) {
@@ -328,6 +346,7 @@ export class Game {
     const w = this.world, self = this;
     return {
       heightAt: (x, z) => w.standAt(x, z), collide: (e, r) => w.collide(e, r), wind: w.wind,
+      vaultCheck: (x, z, dx, dz, r, reach) => w.vaultCheck(x, z, dx, dz, r, reach),
       canPrayAt(k) { return self.altarFor(k) !== null || self.downedNear(k) !== null; },
     };
   }

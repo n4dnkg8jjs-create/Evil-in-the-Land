@@ -13,6 +13,7 @@ import { WX, WATER_U, WATER_GLSL } from './weather.js';
 import { makeFlame } from './flame.js';
 import { makeFrozen } from './people.js';
 import { buildFallen } from './battlefield.js';
+import { Solids, findPath } from './colliders.js';
 
 const HALF = 150, N = 257, CELL = (HALF * 2) / (N - 1);
 // the Peak: arêtes running out from the summit [angle, is it the knights' way up], and the true summit [x, z, height]
@@ -380,7 +381,7 @@ export class World {
     this.scene = engine.scene;
     this.group = new THREE.Group(); this.scene.add(this.group);
     this.r = rng(this.ch.seed); this.noise = makeNoise(this.ch.seed);
-    this.colliders = []; this.colGrid = new SpatialHash(6);
+    this.colliders = []; this.colGrid = new SpatialHash(6); this.solids = new Solids(4);
     this.time = 0; this.healAnims = []; this.wind = new THREE.Vector3(this.ch.wind[0], 0, this.ch.wind[1]);
     this.fires = []; this.waterLevel = -1000; this.fireSpots = []; this.charSpots = []; this.wells = [];
     this.healedFrac = 0;
@@ -751,13 +752,16 @@ export class World {
       for (let i = 0; i < total; i++) {
         const [x, z] = P2[i]; if (!ok[i] || gap[i]) continue; const y = this.heightAt(x, z);
         posts.push({ x, y: y - 0.32, z, ry: r() * 0.4, rx: r.range(-0.04, 0.04), rz: r.range(-0.04, 0.04) });
+        this.solids.circle(x, z, 0.09, { low: true, h: 1.08 });   // (a knight vaults the run; a post alone he walks round)
         if (i + 1 >= total || !ok[i + 1] || gap[i + 1]) continue;
         const [x2, z2] = P2[i + 1], y2 = this.heightAt(x2, z2), L = Math.hypot(x2 - x, z2 - z);
         if (i === gi) { gates.push({ hx: x, hz: z, y, ry: Math.atan2(-(z2 - z), x2 - x), L }); continue; }
+        const nRails = rails.length;
         // the ground between posts must not rise through the rails
         let bump = 0; for (const f of [0.25, 0.5, 0.75]) bump = Math.max(bump, this.heightAt(x + (x2 - x) * f, z + (z2 - z) * f) - (y + (y2 - y) * f));
         const pitch = Math.atan2(y2 - y, L), ry = Math.atan2(-(z2 - z), x2 - x);
         for (const hh of [0.42, 0.88]) { if (r() < 0.08) continue; rails.push({ x: (x + x2) / 2, y: (y + y2) / 2 + hh + bump, z: (z + z2) / 2, ry, rz: pitch, sx: L + 0.12 }); }
+        if (rails.length > nRails) this.solids.capsule(x, z, x2, z2, 0.07, { low: true, h: 0.93 + bump, tag: 'fence' });   // the run between two posts: a knight vaults it
       }
     }
     const post = new THREE.BoxGeometry(0.13, 1.4, 0.13); post.translate(0, 0.7, 0);
@@ -771,6 +775,7 @@ export class World {
       const open = 0.5, ry = G.ry + open, dx = Math.cos(ry), dz = -Math.sin(ry), len = G.L * 0.92, hx = G.hx + dx * 0.1, hz = G.hz + dz * 0.1;
       const gy0 = Math.max(G.y, this.heightAt(hx + dx * len, hz + dz * len)) + 0.08;   // the free end clears the ground
       for (let k = 0; k < 4; k++) gateList.push({ x: hx + dx * len / 2, y: gy0 + 0.12 + k * 0.22, z: hz + dz * len / 2, ry, sx: len });
+      this.solids.capsule(hx, hz, hx + dx * len, hz + dz * len, 0.05, { low: true, h: gy0 - G.y + 0.9, tag: 'gate' });   // the gate standing ajar
       for (const f of [0, 1]) stiles.push({ x: hx + dx * len * f, y: gy0 + 0.45, z: hz + dz * len * f, ry, sy: 0.86 });
       stiles.push({ x: hx + dx * len / 2, y: gy0 + 0.45, z: hz + dz * len / 2, ry, rz: Math.atan2(0.66, len * 0.94), sx: Math.hypot(0.66, len * 0.94), sy: 1 });
     }
@@ -1090,17 +1095,27 @@ export class World {
       const corr = new THREE.Group();
       const tubes = [];
       for (let k = 0; k < 7; k++) {
-        const pts = []; const a0 = r() * TAU, turns = r.range(0.8, 1.6), h = r.range(2.2, 4.0);
-        for (let s = 0; s <= 14; s++) { const t = s / 14; const ang = a0 + t * turns * TAU; const rr = 0.28 + (1 - t) * 0.1; pts.push(new THREE.Vector3(Math.cos(ang) * rr, 0.8 + t * h, Math.sin(ang) * rr)); }
+        // they rise from the top of the plinth and wind round the shaft clear of its corners, and stop below the arms
+        // of the cross (they used to start inside the plinth, scrape through the shaft's edges and pass through the arms)
+        const pts = []; const a0 = r() * TAU, turns = r.range(0.8, 1.6), h = 1.35 + (r.range(2.2, 4.0) - 2.2) * 0.38;
+        for (let s = 0; s <= 14; s++) { const t = s / 14; const ang = a0 + t * turns * TAU; const rr = 0.315 + (1 - t) * 0.05; pts.push(new THREE.Vector3(Math.cos(ang) * rr, 0.97 + t * h, Math.sin(ang) * rr)); }
         const tr = 0.05 * r.range(0.7, 1.2); tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, tr, 5));
         // thorns rooted in the vine, standing out from it
         for (let s = 0; s < 6; s++) { const p = pts[2 + s * 2]; const out = new THREE.Vector3(p.x, r.range(-0.3, 0.5), p.z).normalize(); const th = new THREE.ConeGeometry(0.025, 0.16, 4);
           th.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), out)); th.translate(p.x + out.x * (tr + 0.05), p.y + out.y * (tr + 0.05), p.z + out.z * (tr + 0.05)); tubes.push(th); }
       }
       for (let k = 0; k < 9; k++) { // roots crawling over the steps
-        const ang = r() * TAU; const pts = [];
-        for (let s = 0; s <= 8; s++) { const t = s / 8; pts.push(new THREE.Vector3(Math.cos(ang + t * 0.6) * (0.3 + t * 4.5), 0.82 - t * 0.7 + Math.sin(t * 9) * 0.05, Math.sin(ang + t * 0.6) * (0.3 + t * 4.5))); }
-        tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 0.07 * (1 - 0.0), 5));
+        // they lie on the steps and drape over each riser onto the next (they used to run straight down through them)
+        const ang = r() * TAU; const pts = [], RT = 0.07;
+        const stepTop = (x, z) => {   // the top of the octagonal steps at (x, z), or the ground beyond them
+          const d = Math.hypot(x, z), ph = Math.atan2(x, z), k = (((ph % (PI / 4)) + PI / 4) % (PI / 4)) - PI / 8, edge = Math.cos(PI / 8) / Math.cos(k);
+          for (let s2 = 2; s2 >= 0; s2--) if (d < (3.2 - s2 * 0.6) * edge) return 0.26 + s2 * 0.26;
+          return this.heightAt ? this.heightAt(a.x + x, a.z + z) - a.y : 0;
+        };
+        const lie = (x, z) => { let m = stepTop(x, z); for (const rq of [RT, RT * 2.2]) for (let q = 0; q < 12; q++) { const qa = q * PI / 6; m = Math.max(m, stepTop(x + Math.cos(qa) * rq, z + Math.sin(qa) * rq)); } return m + RT * 0.9; };
+        for (let s = 0; s <= 160; s++) { const t = s / 160, rr = 0.42 + t * 4.4, x = Math.cos(ang + t * 0.6) * rr, z = Math.sin(ang + t * 0.6) * rr; pts.push(new THREE.Vector3(x, lie(x, z) + Math.max(0, Math.sin(t * 9)) * 0.03, z)); }
+        if (pts[0].y < 0.97) pts[0].y = 0.97;   // out from the foot of the cross, on the plinth
+        tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 110, RT, 5));
       }
       const cm = new THREE.Mesh(merge(tubes), blight); cm.castShadow = true; corr.add(cm);
       g.add(corr);
@@ -1137,14 +1152,65 @@ export class World {
   }
 
   // ---------------------------------------------------------------- props
-  addCollider(x, z, r) { const c = { x, z, r }; this.colliders.push(c); this.colGrid.insert(c, x, z); return c; }
-  // keep an entity out of colliders and inside the world
-  collide(ent, radius) {
-    const p = ent.pos; const near = this.colGrid.query(p.x, p.z, radius + 3, this._q || (this._q = []));
-    for (const c of near) {
-      const dx = p.x - c.x, dz = p.z - c.z; const d = Math.hypot(dx, dz); const m = c.r + radius;
-      if (d < m && d > 1e-4) { p.x = c.x + dx / d * m; p.z = c.z + dz / d * m; }
+  // A round collider. It goes in the solids that stop bodies (colliders.js) and in the old list of circles that
+  // other placement reads (the wagon's road, the battlefield's dead, a charger's wall). Setting its r below 0 later
+  // takes it away (the wagon's, when it leaves).
+  addCollider(x, z, r) { const c = { t: 0, x, z, r, low: false, h: 2 }; this.colliders.push(c); this.colGrid.insert(c, x, z); this.solids.insert(c); return c; }
+  // only in that old list: where the true shape of the thing is a wall, a box or a fence run in the solids instead
+  legacyCollider(x, z, r) { const c = { x, z, r }; this.colliders.push(c); this.colGrid.insert(c, x, z); return c; }
+  // the true shapes (see colliders.js): o.low marks what a knight may vault (o.h: how high it stands)
+  solidCircle(x, z, r, o) { return this.solids.circle(x, z, r, o); }
+  solidCapsule(ax, az, bx, bz, r, o) { return this.solids.capsule(ax, az, bx, bz, r, o); }
+  solidBox(x, z, hx, hz, rot, o) { return this.solids.box(x, z, hx, hz, rot, o); }
+  // shapes given in a building's own frame ({ box: [x, z, hx, hz, rot] } or { seg: [ax, az, bx, bz, r] }, with low, h)
+  addSolids(list, toW, yaw) {
+    for (const o of list || []) {
+      const opt = { low: !!o.low, h: o.h ?? 3 };
+      if (o.box) { const [bx, bz, hx, hz, rot] = o.box, [wx, wz] = toW(bx, bz); this.solids.box(wx, wz, hx, hz, yaw + rot, opt); }
+      else if (o.seg) { const [ax, az, bx, bz, r] = o.seg, A = toW(ax, az), B = toW(bx, bz); this.solids.capsule(A[0], A[1], B[0], B[1], r, opt); }
+      else if (o.circle) { const [cx, cz, r] = o.circle, [wx, wz] = toW(cx, cz); this.solids.circle(wx, wz, r, opt); }
     }
+  }
+  // does a body of radius r at (x, z) overlap anything solid (low things too, unless low = false)?
+  solidAt(x, z, r, low = true) { return this.solids.solidAt(x, z, r, low); }
+  clearLine(ax, az, bx, bz, r, low = true) { return this.solids.clear(ax, az, bx, bz, r, low); }
+  // a way round what is solid for a body of radius r (companions), as a list of [x, z], or null
+  findPath(x0, z0, x1, z1, r = 0.45) {
+    return findPath(x0, z0, x1, z1, (x, z) => !!this.solids.solidAt(x, z, r, true), (ax, az, bx, bz) => this.solids.clear(ax, az, bx, bz, r, true, 0.3));
+  }
+  // A knight at (x, z) going along (dx, dz) would vault what? The low thing ahead within `reach` of his body,
+  // with clear ground to come down on beyond it and nothing tall in the way: { x, z (where he lands), cx, cz
+  // (where he crosses), h }, or null.
+  vaultCheck(x, z, dx, dz, rad = 0.42, reach = 1.2) {
+    const l = Math.hypot(dx, dz); if (l < 1e-6) return null; dx /= l; dz /= l;
+    const v = this.solids.vaultLine(x, z, dx, dz, rad, reach); if (!v || v.h > 1.3) return null;
+    let land = v.land, lx = 0, lz = 0, ok = false;
+    for (let k = 0; k < 3 && !ok; k++, land += 0.3) { lx = x + dx * land; lz = z + dz * land; ok = !this.solids.solidAt(lx, lz, rad + 0.02, true); }
+    if (!ok) return null;
+    if (!this.solids.clear(x, z, lx, lz, rad * 0.7, false, 0.25)) return null;   // a tree, a house, a rock in the way
+    const probe = { pos: { x: lx, z: lz }, blockLow: true }; this.collide(probe, rad);
+    if (Math.hypot(probe.pos.x - lx, probe.pos.z - lz) > 0.05) return null;       // off the world, out of the ravine, into the cave's rock
+    if (Math.abs(this.standAt(lx, lz) - this.standAt(x, z)) > 0.9) return null;   // a drop or a bank on the far side
+    return { x: lx, z: lz, cx: v.cx, cz: v.cz, h: v.h };
+  }
+  // out of the walls of whatever building (x, z) is inside, to the nearest side (a demon put down in a wreck)
+  outOfBuildings(p, pad) {
+    const L = this.inFootprint(p.x, p.z, pad); if (!L) return false;
+    const C = Math.cos(L.yaw), S = Math.sin(L.yaw), dx = p.x - L.x, dz = p.z - L.z; let lx = dx * C - dz * S, lz = dx * S + dz * C;
+    const hw = (L.kind === 'church' ? 6.2 : L.w / 2 + 0.45) + pad, z0 = (L.kind === 'church' ? -10.9 : -L.d / 2 - 0.7) - pad, z1 = (L.kind === 'church' ? 15.7 : L.d / 2 + 0.7) + pad;
+    const e = [hw - lx, hw + lx, z1 - lz, lz - z0], m = Math.min(...e);
+    if (m === e[0]) lx = hw + 0.05; else if (m === e[1]) lx = -hw - 0.05; else if (m === e[2]) lz = z1 + 0.05; else lz = z0 - 0.05;
+    p.x = L.x + lx * C + lz * S; p.z = L.z - lx * S + lz * C; return true;
+  }
+  // Keep an entity out of what is solid and inside the world. A knight (ent.blockLow) is stopped by low things
+  // too (he vaults them); demons and bosses clamber over those. Where it stood last time is kept on it, so a thin
+  // fence is never stepped through between two frames however fast it moves.
+  collide(ent, radius) {
+    const p = ent.pos, knight = ent.blockLow === true, prev = ent._cx !== undefined ? (this._pv || (this._pv = { x: 0, z: 0 })) : null;
+    if (prev) { prev.x = ent._cx; prev.z = ent._cz; }
+    else if (!knight && this.lots?.length) this.outOfBuildings(p, radius);   // a body put down, not walked here: never inside a building
+    this.solids.resolve(p, radius, knight, prev, ent.vel && ent.vel.isVector3 ? ent.vel : null, !knight && ent.vel ? (ent._slide || (ent._slide = { sign: 1 })) : null);
+    ent._cx = p.x; ent._cz = p.z;
     const lim = HALF - 8;
     if (this.ch.terrain.kind === 'peak') { const r = Math.hypot(p.x, p.z); if (r > 33) { p.x *= 33 / r; p.z *= 33 / r; } }
     else if (this.ch.terrain.kind === 'mountain') {
@@ -1352,6 +1418,7 @@ export class World {
       const cg = merge([xf(new THREE.BoxGeometry(0.1, 1.6, 0.1), [0, 0.7, 0]), xf(new THREE.BoxGeometry(0.7, 0.09, 0.09), [0, 1.1, 0])]);
       const list = []; this.scatter(P.crosses, (x, z) => this.okSpot(x, z, 3, 12) && this.normalAt(x, z).y > 0.86, (x, z, y) => list.push({ x, y: y - 0.1, z, ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.2, 0.2) }));
       this.instanced(cg, woodMat, list);
+      for (const c of list) this.solids.circle(c.x, c.z, 0.12, { h: 1.6 });
     }
     this.buildFences(woodMat.clone());
     // --- the farms and the village of Saint Aldric, on their planned lots
@@ -1391,7 +1458,8 @@ export class World {
     }
     if (P.logs) {
       const lg = new THREE.CylinderGeometry(0.35, 0.4, 6, 10, 1); lg.rotateZ(PI / 2);
-      const list = []; this.scatter(P.logs, (x, z) => this.okSpot(x, z, 6, 12) && this.normalAt(x, z).y > 0.93, (x, z, y) => { const ry = r() * TAU; list.push({ x, y: y + 0.25, z, ry }); for (let s = -2; s <= 2; s++) this.addCollider(x + Math.cos(ry) * s * 1.2, z - Math.sin(ry) * s * 1.2, 0.45); });
+      const list = []; this.scatter(P.logs, (x, z) => this.okSpot(x, z, 6, 12) && this.normalAt(x, z).y > 0.93, (x, z, y) => { const ry = r() * TAU; list.push({ x, y: y + 0.25, z, ry }); for (let s = -2; s <= 2; s++) this.legacyCollider(x + Math.cos(ry) * s * 1.2, z - Math.sin(ry) * s * 1.2, 0.45);
+        this.solids.capsule(x - Math.cos(ry) * 2.75, z + Math.sin(ry) * 2.75, x + Math.cos(ry) * 2.75, z - Math.sin(ry) * 2.75, 0.4, { low: true, h: 0.65 }); });   // a fallen trunk: a knight vaults it
       this.instanced(lg, barkMat, list);
     }
     if (P.boardwalk) {
@@ -1420,7 +1488,7 @@ export class World {
         const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, 2.4, 14), bronze); barrel.rotation.x = PI / 2 - 0.15; barrel.position.y = 0.75; g.add(barrel);
         for (const s of [-1, 1]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.07, 6, 14), woodMat); w.position.set(s * 0.45, 0.5, 0); w.rotation.y = PI / 2; g.add(w); }
         const carriage = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 2.0), charMat); carriage.position.set(0, 0.45, -0.5); carriage.rotation.x = 0.25; g.add(carriage);
-        g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.addCollider(x, z, 1.2);
+        g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.legacyCollider(x, z, 1.2); this.solids.box(x + Math.sin(g.rotation.y) * -0.2, z + Math.cos(g.rotation.y) * -0.2, 0.62, 1.3, g.rotation.y, { h: 1.1 });   // barrel, wheels and trail
       }
     }
     if (P.wagons) for (let k = 0; k < P.wagons; k++) {
@@ -1428,7 +1496,7 @@ export class World {
       const g = new THREE.Group(); g.position.set(x, this.heightAt(x, z) - 0.1, z); g.rotation.set(0, r() * TAU, r.range(-0.3, 0.3));
       const bed = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3.2), charMat); bed.position.y = 0.8; g.add(bed);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.06, 6, 12), woodMat); w.position.set(sx * 0.85, 0.45, sz * 1.1); w.rotation.y = PI / 2; g.add(w); }
-      g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.addCollider(x, z, 1.8);
+      g.traverse((o) => { o.castShadow = true; }); this.group.add(g); this.legacyCollider(x, z, 1.8); this.solids.box(x, z, 0.9, 1.65, g.rotation.y, { h: 1.1 });   // the wagon's bed on its wheels
     }
     if (kind === 'mountain') this.buildAscent(stoneMat, woodMat, charMat);
     // --- mountain crevices: dark clefts where eyes will watch
@@ -1484,6 +1552,7 @@ export class World {
       const lean = r() < 0.25, sunk = r() < 0.2;
       const g = { ...it, y: it.y + 0.15 - (sunk ? r.range(0.12, 0.3) : 0.02), rx: lean ? r.range(-0.3, 0.22) : it.rx * 0.5, rz: lean ? r.range(-0.18, 0.18) : it.rz * 0.5 };
       if (kind === 4) wooden.push({ ...g, s: r.range(0.9, 1.1) }); else buckets[kind].push(g);
+      this.solids.box(it.x, it.z, (kind === 4 ? 0.32 : 0.29) * (it.s || 1), kind === 2 ? 0.18 : 0.1, it.ry || 0, { low: true, h: [0.86, 0.86, 1.05, 0.62, 1.0][kind] * (it.s || 1) });   // the stone: a knight vaults it
       // the grave itself: a long low mound of earth in front of the stone, some of them sunk into a hollow
       const C = Math.cos(it.ry), S = Math.sin(it.ry), mx = it.x + S * 0.95, mz = it.z + C * 0.95;
       mounds.push({ x: mx, y: this.heightAt(mx, mz) - (sunk ? 0.1 : 0.02), z: mz, ry: it.ry, s: 1, sx: r.range(0.42, 0.5), sy: sunk ? 0.08 : r.range(0.12, 0.2), sz: r.range(0.72, 0.82) });
@@ -1682,7 +1751,7 @@ export class World {
           if (!ruin && sg % 2 === 1 && r() < 0.5) sp.head = true;
           if (!ruin && r() < 0.22) sp.fire = { s: r.range(0.45, 0.75) };   // a burning house burns at its wall tops too
         }
-        this.addCollider(...toW(wx, wz), 0.6);
+        this.legacyCollider(...toW(wx, wz), 0.6);   // (the walls themselves: info.solid, below)
       }
     };
     wall(w, 0, dpt / 2, 0, true); wall(w, 0, -dpt / 2, 0, false); wall(dpt, w / 2, 0, PI / 2, false); wall(dpt, -w / 2, 0, PI / 2, false);
@@ -1721,7 +1790,9 @@ export class World {
     for (let k = 0; k < 4; k++) plan.beams.push({ len: r.range(2, 4), lx: r.range(-w / 3, w / 3), lz: r.range(-dpt / 3, dpt / 3), rx: r.range(-0.08, 0.08), ry: r() * TAU, rz: r.range(-0.08, 0.08) });
     for (let k = 0; k < 14; k++) plan.stones14.push({ sz: r.range(0.2, 0.55), lx: r.range(-w / 2 - 1.2, w / 2 + 1.2), lz: r.range(-dpt / 2 - 1.2, dpt / 2 + 1.2), rx: r() * 0.4, ry: r() * 3, rz: r() * 0.4 });
     // the yard: barrels, crates, a woodpile against the wall, a cart, a fence
-    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind, toW, y });
+    const yardCols = [];
+    this.dressYard(r, w, dpt, walls, timber, intact, (lx, lz) => { const [px, pz] = toW(lx, lz); return this.heightAt(px, pz) - y; }, { iron, cloth, hay, water, roofKind, toW, y, cols: yardCols });
+    this.addSolids(yardCols, toW, yaw);
     // a burnt house still burning: a fire in the wreck on its floor; or its timbers heaped and smouldering
     if (!intact && !big) {
       const lx = r.range(-w / 4, w / 4), lz = r.range(-dpt / 4, dpt / 4), [px, pz] = toW(lx, lz);
@@ -1732,6 +1803,7 @@ export class World {
     const info = buildHouse(K, { w, d: dpt, big, plan, q: rng(lotSeed(lot)), gH, village: !!lot.village, footing });
     lot.intact = intact; lot.style = info.style;
     for (const [hx, hz, cr] of info.colliders) this.addCollider(...toW(hx, hz), cr);
+    this.addSolids(info.solid, toW, yaw);
     // and the burning houses burn along their wall tops, wherever those now are
     plan.walls.forEach((WP, li) => { for (const sp of WP.segs) if (sp.fire) { const [fx, fz] = toW(sp.wx, sp.wz); (this.wallFires || (this.wallFires = [])).push({ x: fx, y: y + info.tops[[0, 2, 1, 3][li]](li === 1 || li === 3 ? -sp.lx : sp.lx), z: fz, s: sp.fire.s, yaw: yaw + WP.rot, wall: true }); } });
     const B = this.buildingMats();
@@ -1750,6 +1822,7 @@ export class World {
   }
 
   dressYard(r, w, dpt, walls, timber, intact, gy, X = {}) {
+    const sol = (o) => { if (X.cols) X.cols.push(o); };   // what in the yard stops a body, in the house's frame
     // everything out in the yard stands on the yard's own ground (gy: local ground height), not the house floor
     // Each object is settled as a whole: all its parts move together, so its lowest point (over the feet it stands
     // on) just meets the yard's ground beneath that point. Nothing floats on a slope, and a stack or a winch keeps together.
@@ -1778,10 +1851,12 @@ export class World {
       const b = new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10); const hoop = new THREE.CylinderGeometry(0.335, 0.335, 0.62, 10, 1, true);
       const bg = merge([b, hoop]);
       T.push(xf(bg, [ox, over ? 0.3 : 0.43, oz], over ? [PI / 2, r() * TAU, 0] : [0, r() * TAU, 0]));
+      sol({ circle: [ox, oz, over ? 0.45 : 0.33], h: 0.85 });
     }
-    for (let k = 0; k < 2; k++) { const [ox, oz] = along(Math.floor(r() * 4)); const sz = r.range(0.5, 0.8); obj(() => { T.push(xf(new THREE.BoxGeometry(sz, sz * 0.8, sz), [ox, sz * 0.4, oz], [0, r() * TAU, 0])); if (r() < 0.5) T.push(xf(new THREE.BoxGeometry(sz * 0.8, sz * 0.6, sz * 0.8), [ox + 0.05, sz * 0.8 + sz * 0.3, oz], [0, r() * TAU, 0]), false); }); }
+    for (let k = 0; k < 2; k++) { const [ox, oz] = along(Math.floor(r() * 4)); const sz = r.range(0.5, 0.8); obj(() => { T.push(xf(new THREE.BoxGeometry(sz, sz * 0.8, sz), [ox, sz * 0.4, oz], [0, r() * TAU, 0])); if (r() < 0.5) T.push(xf(new THREE.BoxGeometry(sz * 0.8, sz * 0.6, sz * 0.8), [ox + 0.05, sz * 0.8 + sz * 0.3, oz], [0, r() * TAU, 0]), false); }); sol({ circle: [ox, oz, sz * 0.62], h: sz }); }
     // a woodpile under the eaves of one wall
-    obj(() => { const sx = r() < 0.5 ? -1 : 1; for (let row = 0; row < 3; row++) for (let k = 0; k < 6 - row; k++) T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), [sx * (w / 2 + 0.45), 0.09 + row * 0.16, -dpt / 4 + (k + row * 0.5) * 0.19], [PI / 2, 0, PI / 2]), row === 0); });
+    obj(() => { const sx = r() < 0.5 ? -1 : 1; for (let row = 0; row < 3; row++) for (let k = 0; k < 6 - row; k++) T.push(xf(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), [sx * (w / 2 + 0.45), 0.09 + row * 0.16, -dpt / 4 + (k + row * 0.5) * 0.19], [PI / 2, 0, PI / 2]), row === 0);
+      sol({ box: [sx * (w / 2 + 0.45), -dpt / 4 + 0.47, 0.45, 0.55, 0], low: true, h: 0.5 }); });
     // a cart, tipped, its wheel off
     if (r() < 0.45) {
       const cx = r.range(-w / 2, w / 2), cz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 2.6), yawC = r.range(0, TAU);
@@ -1803,6 +1878,7 @@ export class World {
         const M = new THREE.Matrix4().makeTranslation(cx, 0, cz).multiply(new THREE.Matrix4().makeRotationY(yawC)).multiply(new THREE.Matrix4().makeTranslation(0.85, 0.5, 0)).multiply(new THREE.Matrix4().makeRotationZ(th)).multiply(new THREE.Matrix4().makeTranslation(-0.85, -0.5, 0));
         parts.forEach((p2, k) => { p2.applyMatrix4(M); T.push(p2, feet.has(k)); });
       }, 0.02, 0, true);
+      sol({ box: [cx - Math.sin(yawC) * 0.85, cz - Math.cos(yawC) * 0.85, 0.9, 2.05, yawC], h: 1.2 });   // the cart and its shafts
       { const a = yawC + 2.2; obj(() => T.push(xf(new THREE.TorusGeometry(0.5, 0.06, 5, 14), [cx + Math.cos(a) * 1.9, 0.07, cz + Math.sin(a) * 1.9], [PI / 2, 0, 0])), 0.03); }   // the lost wheel, flat in the mud
     }
     const Y = (list) => ({ push: (g, foot) => add(g, list, foot) });
@@ -1822,11 +1898,12 @@ export class World {
       for (const sz2 of [-1, 1]) T.push(xf(new THREE.BoxGeometry(2.2, 0.06, 0.8), [wx, 2.37 - 0.4 * Math.sin(0.5) + 0.03, wz + sz2 * 0.4 * Math.cos(0.5)], [sz2 * 0.5, 0, 0]));
       });
       if (X.toW) { const [px, pz] = X.toW(wx, wz); (this.wells || (this.wells = [])).push({ x: px, z: pz, y: X.y + dyW, r: 0.76, top: 0.85 }); }
+      if (!this.ch.props.village) sol({ circle: [wx, wz, 1.0], h: 2.3 });   // (the village's wells get theirs in buildWells)
     }
     // a trough of standing water
-    if (r() < 0.45) { const [ox, oz] = along(Math.floor(r() * 4)); const tx2 = ox * 1.15, tz2 = oz * 1.15; obj(() => { for (const [a, b, c2, d] of [[1.6, 0.5, 0.06, [0, 0.25, 0.27]], [1.6, 0.5, 0.06, [0, 0.25, -0.27]], [0.06, 0.5, 0.6, [0.8, 0.25, 0]], [0.06, 0.5, 0.6, [-0.8, 0.25, 0]], [1.6, 0.06, 0.6, [0, 0.03, 0]]]) T.push(xf(new THREE.BoxGeometry(a, b, c2), [tx2 + d[0], d[1], tz2 + d[2]])); Wt.push(xf(new THREE.PlaneGeometry(1.5, 0.5), [tx2, 0.4, tz2], [-PI / 2, 0, 0])); }); }
+    if (r() < 0.45) { const [ox, oz] = along(Math.floor(r() * 4)); const tx2 = ox * 1.15, tz2 = oz * 1.15; obj(() => { for (const [a, b, c2, d] of [[1.6, 0.5, 0.06, [0, 0.25, 0.27]], [1.6, 0.5, 0.06, [0, 0.25, -0.27]], [0.06, 0.5, 0.6, [0.8, 0.25, 0]], [0.06, 0.5, 0.6, [-0.8, 0.25, 0]], [1.6, 0.06, 0.6, [0, 0.03, 0]]]) T.push(xf(new THREE.BoxGeometry(a, b, c2), [tx2 + d[0], d[1], tz2 + d[2]])); Wt.push(xf(new THREE.PlaneGeometry(1.5, 0.5), [tx2, 0.4, tz2], [-PI / 2, 0, 0])); }); sol({ box: [tx2, tz2, 0.83, 0.3, 0], low: true, h: 0.5 }); }
     // a hay heap, or a rick
-    if (r() < 0.4) { const [ox, oz] = along(Math.floor(r() * 4)); const hg = new THREE.SphereGeometry(1, 14, 10, 0, TAU, 0, PI / 2); hg.scale(1.1, 0.9, 0.9); obj(() => Hy.push(xf(hg, [ox * 1.3, -0.05, oz * 1.3], [0, r() * TAU, 0])), 0.06, 0.3); }
+    if (r() < 0.4) { const [ox, oz] = along(Math.floor(r() * 4)); const hg = new THREE.SphereGeometry(1, 14, 10, 0, TAU, 0, PI / 2); hg.scale(1.1, 0.9, 0.9); obj(() => Hy.push(xf(hg, [ox * 1.3, -0.05, oz * 1.3], [0, r() * TAU, 0])), 0.06, 0.3); sol({ circle: [ox * 1.3, oz * 1.3, 0.95], h: 0.9 }); }
     // tools left leaning on the wall: a pitchfork, a scythe
     if (r() < 0.6) {
       const sx = r() < 0.5 ? -1 : 1, lz = r.range(-dpt / 3, dpt / 3);
@@ -1850,12 +1927,13 @@ export class World {
     if (intact && r() < 0.45) {
       const lz = (r() < 0.5 ? -1 : 1) * (dpt / 2 + 2.2), x0 = -w / 2 + 0.5, x1 = w / 2 - 0.5;
       const dP = [x0, x1].map((xx) => obj(() => T.push(xf(new THREE.BoxGeometry(0.1, 2.1, 0.1), [xx, 1.05, lz])), 0.12));
+      for (const xx of [x0, x1]) sol({ circle: [xx, lz, 0.08], h: 2.1 });
       const yA = 1.95 + dP[0], yB = 1.95 + dP[1], lineY = (xx) => yA + (yB - yA) * (xx - x0) / (x1 - x0);
       { const d = new THREE.Vector3(x1 - x0, yB - yA, 0), L = d.length(), c = new THREE.CylinderGeometry(0.008, 0.008, L, 4); c.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize())); c.translate((x0 + x1) / 2, (yA + yB) / 2, lz); timber.push(c); }
       for (let k = 0; k < 3; k++) { const cx = x0 + 0.8 + k * 1.1; const sh = new THREE.PlaneGeometry(0.9, 1.1, 4, 4); const P3 = sh.attributes.position; for (let i = 0; i < P3.count; i++) P3.setZ(i, Math.sin(P3.getX(i) * 4 + k) * 0.05 + (P3.getY(i) < 0 ? -P3.getY(i) * 0.08 : 0)); sh.computeVertexNormals(); (X.cloth || timber).push(xf(sh, [cx, lineY(cx) - 0.55, lz], [0, 0, r.range(-0.05, 0.05)])); }
     }
     // a wattle fence round part of the yard
-    if (r() < 0.6) { const sz = -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; obj(() => { T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)]), false); }, 0.15); } }
+    if (r() < 0.6) { const sz = -1; for (let k = 0; k < 8; k++) { if (r() < 0.2) continue; const fx = -w / 2 - 1.5 + k * (w + 3) / 7; sol({ circle: [fx, sz * (dpt / 2 + 4), 0.07], low: true, h: 0.9 }); obj(() => { T.push(xf(new THREE.BoxGeometry(0.08, 1.0, 0.08), [fx, 0.45, sz * (dpt / 2 + 4)])); if (k < 7 && r() > 0.25) { T.push(xf(new THREE.BoxGeometry((w + 3) / 7, 0.55, 0.05), [fx + (w + 3) / 14, 0.5, sz * (dpt / 2 + 4)], [0, 0, r.range(-0.08, 0.08)]), false); sol({ seg: [fx, sz * (dpt / 2 + 4), fx + (w + 3) / 7, sz * (dpt / 2 + 4), 0.06], low: true, h: 0.8 }); } }, 0.15); } }
   }
 
   placeChurch(r, brickMat, charMat) {
@@ -1928,6 +2006,8 @@ export class World {
     const C = Math.cos(yaw), S = Math.sin(yaw);
     const toW = (lx, lz) => [x + lx * C + lz * S, z - lx * S + lz * C];
     for (const [lx, lz, cr] of info.colliders) this.addCollider(...toW(lx, lz), cr);
+    for (const [lx, lz, cr] of info.legacy) this.legacyCollider(...toW(lx, lz), cr);
+    this.addSolids(info.solid, toW, yaw);
     this.church = { x, y, z, yaw, toW };
     const bf = toW(0, L / 2 + 2.7);
     this.belfry = new THREE.Vector3(bf[0], y + 17.5, bf[1]);
@@ -2089,6 +2169,7 @@ export class World {
     const poles = [], cloths = colors.map(() => []);
     this.scatter(n, (x, z) => this.okSpot(x, z, 4, 10), (x, z, y) => { const it = { x, y: y - 0.3, z, ry: r() * TAU, rx: r.range(-0.25, 0.25), rz: r.range(-0.25, 0.25) }; poles.push(it); cloths[r.int(0, colors.length - 1)].push(it); });
     this.instanced(poleGeo, woodMat, poles);
+    for (const p of poles) this.solids.circle(p.x, p.z, 0.07, { h: 4 });
     cloths.forEach((l, i) => this.instanced(clothGeo, clothMats[i], l, { shadow: true }));
   }
 
@@ -2322,6 +2403,7 @@ export class World {
       if (this.ch.terrain.kind === 'mountain') { const n = this.path.nearest(x, z); if (n.d > 11 || this.inCaveZone(x, z, 3)) continue; }
       if (this.ch.terrain.kind === 'peak') { if (Math.hypot(x, z) > 32) continue; }
       if (!this.inBounds(x, z)) continue;
+      if (this.inFootprint(x, z, 2) || this.solids.solidAt(x, z, 1.2, false)) continue;   // not inside a house, a rock, a tree
       return { x, y: this.heightAt(x, z), z };
     }
     return { x: altar.x + 20, y: this.heightAt(altar.x + 20, altar.z), z: altar.z };

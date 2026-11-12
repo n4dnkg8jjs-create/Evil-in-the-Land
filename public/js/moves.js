@@ -19,6 +19,8 @@ const NEUTRAL_LEGS = { thighR: [4, 0, -4], shinR: [10, 0, 0], footR: [-8, 0, 0],
 const merge = (...o) => Object.assign({}, ...o);
 
 const P_R = [-0.7, -0.6, -0.4], P_L = [0.7, -0.6, -0.4], P_RH = [-0.9, 0.15, -0.5], P_LH = [0.9, 0.15, -0.5];
+// the vault: the weapon carried high and back in the right hand, out of the way of the legs and the rail
+const VAULT_W = { p: [-0.34, 1.22, 0.02], d: [-0.25, 0.86, -0.45], u: [0, 0.46, 0.89] };
 
 export const MOVESETS = {
   // ================================================================ LONGSWORD
@@ -302,4 +304,22 @@ export const COMMON = {
   salute: { dur: 2.4, keepWeapon: false, keys: [
     { t: 0.5, body: { spine: [-4, 0, 0], chest: [-10, 0, 0], head: [-24, 0, 0] }, w: { p: [-0.12, 1.8, 0.24], d: [0.02, 1, 0.08], u: [0, 0, 1] }, pr: P_RH, pl: P_LH },
     { t: 2.0, body: { spine: [-4, 0, 0], chest: [-10, 0, 0], head: [-28, 0, 0] }, w: { p: [-0.12, 1.84, 0.24], d: [0.02, 1, 0.08], u: [0, 0, 1] } } ] },
+  // Over a fence or a low wall in harness: a gathering step, the left hand down on the rail, the weight on it as
+  // the hips come up and the knees tuck and swing over, then down on the far side in a crouch and up. The weapon
+  // is carried high and back in the right hand, out of the way. The knight's root is carried by the world's vault
+  // (knight.vaultPos): he reaches the rail at 0.34 s, so the hand is keyed to meet it then and stay on it.
+  vault: { dur: 0.86, fullBody: true, freeLeft: true, cancel: 0.7, stamina: 8, sfx: [{ t: 0.1, k: 'roll' }, { t: 0.6, k: 'land' }],
+    keys: [
+      { t: 0.13, body: { spine: [26, 0, 0], chest: [10, 0, 0], head: [-18, 0, 0], thighR: [-48, 0, -6], shinR: [72, 0, 0], footR: [-24, 0, 0], thighL: [-30, 0, 6], shinL: [56, 0, 0], footL: [-26, 0, 0] },
+        hip: [0, -0.16, 0.06], w: VAULT_W, l: { p: [0.17, 1.02, 0.42], d: [1, 0, 0], u: [0, 0, 1] }, pl: [0.9, -0.2, -0.4] },
+      { t: 0.25, body: { hips: [18, 0, 0], spine: [28, 0, -6], chest: [14, 0, -4], head: [-26, 0, 0], thighR: [-118, 0, -22], shinR: [128, 0, 0], footR: [-14, 0, 0], thighL: [-92, 0, -4], shinL: [112, 0, 0], footL: [-20, 0, 0] },
+        hip: [-0.04, 0.24, 0.02], w: VAULT_W, l: { p: [0.16, 0.98, 0.2], d: [1, 0, 0], u: [0, 0, 1] }, pl: [0.9, -0.2, -0.4] },
+      { t: 0.36, body: { hips: [22, 0, 8], spine: [30, 0, -10], chest: [14, 0, -6], head: [-28, 0, 0], thighR: [-124, 0, -30], shinR: [132, 0, 0], footR: [-10, 0, 0], thighL: [-112, 0, -14], shinL: [128, 0, 0], footL: [-14, 0, 0] },
+        hip: [-0.1, 0.4, 0.0], w: VAULT_W, l: { p: [0.15, 0.97, -0.02], d: [1, 0, 0], u: [0, 0, 1] }, pl: [0.9, -0.2, -0.4] },
+      { t: 0.47, body: { hips: [10, 0, 4], spine: [18, 0, -4], chest: [8, 0, -2], head: [-16, 0, 0], thighR: [-62, 0, -12], shinR: [70, 0, 0], footR: [-20, 0, 0], thighL: [-78, 0, -4], shinL: [96, 0, 0], footL: [-24, 0, 0] },
+        hip: [-0.05, 0.26, 0.0], w: VAULT_W, l: { p: [0.24, 1.06, -0.26], d: [1, 0, 0], u: [0, 0, 1] } },
+      { t: 0.6, body: { spine: [24, 0, 0], chest: [8, 0, 0], head: [-12, 0, 0], thighR: [-52, 0, -6], shinR: [84, 0, 0], footR: [-30, 0, 0], thighL: [-38, 0, 6], shinL: [70, 0, 0], footL: [-30, 0, 0] },
+        hip: [0, -0.26, 0.04], w: VAULT_W, l: { p: [0.3, 0.98, 0.16], d: [0, 1, 0], u: [0, 0, 1] } },
+      { t: 0.74, body: merge({ spine: [10, 0, 0] }, CROUCH), hip: [0, -0.1, 0.02] },
+    ] },
 };
