@@ -1028,7 +1028,7 @@ function skinLayer(body, pick, off, mat, smooth = 0, key = null) {
     for (let i = 0; i < n; i++) { if (wid[i] < 0) continue; const w = wid[i]; pos[i * 3] = W[w * 3]; pos[i * 3 + 1] = W[w * 3 + 1]; pos[i * 3 + 2] = W[w * 3 + 2]; }
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(smooth ? nrm.slice() : nrm, 3)); geo.setAttribute('skinIndex', SI);   // (its own copy when smoothed: smoothing rewrites it, and the body's normals are shared by every garment) geo.setAttribute('skinWeight', SW);
   if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(idx); if (smooth) geo.computeVertexNormals();
   if (ck0) LC.set(ck0, { pos: geo.attributes.position, nrm: geo.attributes.normal, idx: geo.index, keep });
   const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.userData.keep = keep;
