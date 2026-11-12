@@ -495,7 +495,7 @@ export class Hound extends Boss {
     this.legs = HOUND_LEGS.map(() => ({ p: new THREE.Vector3(), from: new THREE.Vector3(), sw: false, q: 0, qd: 0.13, lift: 0, init: false, fly: false }));
     this.A = { lx: 0, lz: 0, vx: 0, vz: 0, lyaw: 0, yr: 0, gph: 0, gmix: 0, settled: true, breath: 0, ex: 0, ly: 0, lp: 0, hip: 0, chest: 0, shift: 0, sway: 0, neckP: 0, headP: 0, jaw: 0.1, roll: 0, pitch: 0, tail: 0, ears: 0, low: 0, first: true };
     const B = this.B;
-    this.spheres = [{ name: 'head', bone: B.head, off: [0, 0, 0.42], r: 0.62, mul: 1.4 }, { name: 'neck', bone: B.neck2, off: [0, 0, 0.1], r: 0.52, mul: 1.15 }, { name: 'chest', bone: B.chest, off: [0, -0.35, 0.05], r: 0.78, mul: 0.95 },
+    this.spheres = [{ name: 'head', bone: B.head, off: [0, -0.03, 0.3], r: 0.5, mul: 1.4 }, { name: 'neck', bone: B.neck2, off: [0, 0, 0.1], r: 0.52, mul: 1.15 }, { name: 'chest', bone: B.chest, off: [0, -0.35, 0.05], r: 0.78, mul: 0.95 },
       { name: 'ribs', bone: B.ribs, off: [0, -0.3, 0.05], r: 0.72, mul: 0.95 }, { name: 'loin', bone: B.loin, off: [0, -0.15, 0.1], r: 0.58, mul: 0.95 }, { name: 'hips', bone: B.hips, off: [0, -0.15, -0.1], r: 0.64, mul: 0.95 }].map((s) => ({ ...s, c: new THREE.Vector3() }));
   }
   setState(s) { super.setState(s); this.f = {}; }
@@ -794,7 +794,7 @@ export class Hound extends Boss {
     const spd = Math.hypot(A.vx, A.vz), run = clamp((spd - 6) / 5, 0, 1), near = Math.hypot(this.look.x - pos.x, this.look.z - pos.z);
     // ---- the pose the moment asks for
     const lowK = (1 - run) * smooth(clamp((17 - near) / 6, 0, 1));
-    let hip = -0.1 * lowK - 0.06 * run, chest = -0.3 * lowK - 0.12 * run, shift = 0, sway = 0, neckP = 0.5 * lowK + 0.38 * run, headP = 0, jaw = 0.1 + 0.14 * run, roll = 0, pitch = 0, lookW = 1, tail = run, ears = lowK, shake = 0, air = 0, airU = 0, spin = 0, hop = 0, snapJ = false, attack = 0;
+    let hip = -0.1 * lowK - 0.06 * run, chest = -0.3 * lowK - 0.12 * run, shift = 0, sway = 0, neckP = 0.62 * lowK + 0.38 * run, headP = 0, jaw = 0.1 + 0.14 * run, roll = 0, pitch = 0, lookW = 1, tail = run, ears = lowK, shake = 0, air = 0, airU = 0, spin = 0, hop = 0, snapJ = false, attack = 0;
     switch (st) {
       case 'intro': if (T > 1.6) { const w = smooth(clamp((T - 1.6) / 0.3, 0, 1)); chest = -0.36 * w - 0.2; hip = -0.1; neckP = 0.5; jaw = 0.1 + 0.4 * w; ears = 1; tail = 0.6; } break;
       case 'strike': case 'maul': {
@@ -829,6 +829,14 @@ export class Hound extends Boss {
     const k16 = 1 - Math.exp(-16 * dt);
     for (const [n, v] of [['hip', hip], ['chest', chest], ['shift', shift], ['sway', sway], ['neckP', neckP], ['headP', headP], ['roll', roll], ['pitch', pitch], ['tail', tail], ['ears', ears]]) A[n] += (v - A[n]) * k16;
     A.jaw = snapJ ? jaw : damp(A.jaw, jaw, 18, dt);
+    // the lips drawn back off the fangs when he means it (quivering), the hackles up along his back; the eyes go dull as he dies
+    const SN = { intro: T > 1.4 ? 1 : 0.3, strike: 1, maul: 1, worry: 1, recover: 0.5, sidestep: 0.9, backoff: 0.75, pounce: 1, leap: 0.85, whirl: 1, charge: 1, howl: 0, reel: 0.2, death: 0, vanish: 0.35, prowl: 0.7 }[st];
+    const snarl = SN ?? (0.3 + 0.7 * smooth(clamp((12 - near) / 6, 0, 1))) * (1 - 0.5 * run), hk = st === 'death' ? 0 : st === 'howl' || attack > 0.5 ? 1 : 0.35 + 0.65 * smooth(clamp((15 - near) / 7, 0, 1));
+    A.snarl = damp(A.snarl || 0, snarl, snarl > (A.snarl || 0) ? 9 : 3, dt); A.hack = damp(A.hack || 0, hk, hk > (A.hack || 0) ? 3 : 0.8, dt);
+    U.uSnarl.value = A.snarl; U.uHackle.value = A.hack; U.uShine.value = st === 'death' ? Math.max(0, 1 - this.deathT * 1.5) : 1;
+    const lift = (0.045 + 0.004 * Math.sin(time * 33) + 0.003 * Math.sin(time * 51.7)) * A.snarl;
+    for (const [b, sd] of [[B.lipL, 1], [B.lipR, -1]]) { const r = b.userData.rest; b.position.set(r.x + sd * 0.01 * A.snarl, r.y + lift * (sd > 0 ? 1 : 0.9), r.z - 0.01 * A.snarl); }
+    B.lipLo.position.y = B.lipLo.userData.rest.y - 0.014 * A.snarl;
     A.ex = damp(A.ex, clamp(spd / 9 + attack * 0.7, 0, 1), attack || spd > 3 ? 3 : 0.35, dt); A.breath += dt * (1.3 + 3.6 * A.ex) * TAU;
     // ---- the trunk
     const yawV = this.yaw + spin, sy = Math.sin(yawV), cy = Math.cos(yawV), gph = A.gph * TAU;
@@ -845,12 +853,12 @@ export class Hound extends Boss {
     const shk = A.shake = damp(A.shake || 0, shake, 14, dt), sh = shk * Math.sin(time * (st === 'reel' ? 9 : 44));
     B.loin.rotation.set(flex * 0.2, bend, 0); B.ribs.rotation.set(-flex * 0.1, bend * 0.8, 0); B.chest.rotation.set(-flex * 0.08, bend * 0.5 + A.ly * 0.1, 0);
     B.neck1.rotation.set(A.neckP * 0.55 + A.lp * 0.3, A.ly * 0.3, 0); B.neck2.rotation.set(A.neckP * 0.32 + A.lp * 0.3, A.ly * 0.3 + sh * 0.35, -A.ly * 0.1);
-    B.head.rotation.set(A.headP - A.neckP * 0.5 + A.lp * 0.4, A.ly * 0.3 + sh * 0.55, sh * 0.45 - A.ly * 0.12);
+    B.head.rotation.set(A.headP - A.neckP * 0.5 + A.lp * 0.4, A.ly * 0.3 + sh * 0.55, sh * 0.45 - A.ly * 0.12 + 0.07 * lowK * Math.sin(time * 0.6));   // (stalking, the head cocked a little, now one way, now the other)
     const pant = Math.max(0, Math.sin(A.breath * 2)) * A.ex;
     B.jaw.rotation.x = A.jaw * 0.95 + pant * 0.07 * (A.jaw < 0.4 ? 1 : 0); B.tongue.rotation.x = 0.04 + pant * 0.12 + (st === 'death' ? 0.3 : 0);
     const br = 0.014 * (0.6 + A.ex) * Math.sin(A.breath); B.ribL.position.x = B.ribL.userData.rest.x + br; B.ribR.position.x = B.ribR.userData.rest.x - br;
     const fl = Math.max(0, Math.sin(time * 0.9 + 1.3) - 0.93) * 6;
-    B.earL.rotation.set(-0.75 * A.ears + fl, 0, 0.1 * A.ears); B.earR.rotation.set(-0.75 * A.ears - fl * 0.5, 0, -0.1 * A.ears);
+    B.earL.rotation.set(-0.9 * A.ears + fl, 0, -0.3 * A.ears); B.earR.rotation.set(-0.9 * A.ears - fl * 0.5, 0, 0.3 * A.ears);   // pinned flat back
     const wag = (1 - A.tail) * 0.14;
     B.tail1.rotation.set(0.1 + A.tail * 0.75, -bend * 1.2 + Math.sin(time * 1.7) * wag, 0); B.tail2.rotation.set(A.tail * 0.3, -bend * 1.5 + Math.sin(time * 1.7 - 0.7) * wag * 1.4, 0);
     B.tail3.rotation.set(A.tail * 0.25 + flex * 0.15, -bend * 1.5 + Math.sin(time * 1.7 - 1.4) * wag * 1.6, 0); B.tail4.rotation.set(A.tail * 0.2, Math.sin(time * 1.7 - 2.1) * wag * 1.8, 0);
@@ -908,8 +916,12 @@ export class Hound extends Boss {
       }
       U.uDissolve.value = clamp((this.deathT - 2.6) / 2.2, 0, 1);
     }
-    // his breath smokes when he has been running, and when he howls
-    if (fx && st !== 'death' && (A.ex > 0.5 || st === 'howl')) { A.steam = (A.steam || 0) - dt; if (A.steam <= 0 && Math.sin(A.breath) > 0.6) { A.steam = 0.22; B.head.updateWorldMatrix(true, false); fx.wisp(_hv.set(0, -0.12, 0.85).applyMatrix4(B.head.matrixWorld), 0.22, [0.2, 0.2, 0.21]); } }
+    // his breath smokes in the cold, every breath out of him; thicker when he has been running, and when he howls
+    if (fx && st !== 'death') {
+      A.steam = (A.steam || 0) - dt; const bs = Math.sin(A.breath);
+      if (A.steam <= 0 && bs > 0.5 && (A.lastB ?? 1) <= 0.5) { A.steam = A.ex > 0.5 || st === 'howl' ? 0.15 : 1.1; B.head.updateWorldMatrix(true, false); const big = clamp(A.ex, 0, 1) + (st === 'howl' ? 0.6 : 0); fx.wisp(_hv.set(0, -0.03, 0.66).applyMatrix4(B.head.matrixWorld), 0.07 + 0.09 * big, [0.12, 0.12, 0.13]); if (big > 0.6 && A.jaw > 0.3) fx.wisp(_hv.set(0, -0.15, 0.5).applyMatrix4(B.head.matrixWorld), 0.07 + 0.07 * big, [0.11, 0.11, 0.12]); }
+      A.lastB = bs;
+    }
     this.spheres[0].mul = st === 'reel' ? 2 : 1.4;
     this.updateSpheres();
   }
