@@ -1,9 +1,11 @@
 // Human bones for the Emperor's field. The skull, jaw, pelvis, vertebrae and long bones are modelled as signed
-// distance fields (cranium, brow ridge, deep orbits, the nasal opening, cheekbones and their arches, the upper jaw
-// and its teeth; the jaw as its own bone; the hip bones with their sockets; femur, humerus and tibia with their
-// heads, condyles and shafts) and turned into meshes once with surface nets. Ribs are curved tubes hung off a
-// column of vertebrae. Every vertex carries a weathered-bone colour: dirty ivory, darkened in the hollows
-// (sampled from the field itself) and stained by the earth.
+// distance fields (cranium, brow ridge, deep orbits, the nasal opening, cheekbones and their arches, the upper jaw;
+// the jaw as its own bone; the hip bones with their sockets; femur, humerus and tibia with their heads, condyles
+// and shafts; the forearm's two bones, the shin with its fibula, collar bone and shoulder blade) and turned into
+// meshes once with surface nets. Teeth are set into the jaws one by one. Ribs are curved tubes hung off a column of
+// vertebrae; the hands are their nineteen bones each, curled. Every vertex carries a weathered-bone colour: dirty
+// ivory, stained by the earth, darkened in the hollows, and near black inside the eye sockets, the nose and the
+// temples (measured as the depth below the skull's own uncut hull).
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { rng, makeNoise } from './util.js';
@@ -16,13 +18,18 @@ function cap(x, y, z, ax, ay, az, bx, by, bz, r) {
   const h = mx(0, mn(1, (px * dx + py * dy + pz * dz) / (dx * dx + dy * dy + dz * dz)));
   const qx = px - dx * h, qy = py - dy * h, qz = pz - dz * h; return sq(qx * qx + qy * qy + qz * qz) - r;
 }
+function tcap(x, y, z, ax, ay, az, bx, by, bz, ra, rb) {   // a capsule whose radius runs from ra to rb
+  const px = x - ax, py = y - ay, pz = z - az, dx = bx - ax, dy = by - ay, dz = bz - az;
+  const h = mx(0, mn(1, (px * dx + py * dy + pz * dz) / (dx * dx + dy * dy + dz * dz)));
+  const qx = px - dx * h, qy = py - dy * h, qz = pz - dz * h; return sq(qx * qx + qy * qy + qz * qz) - (ra + (rb - ra) * h);
+}
 function rbox(x, y, z, bx, by, bz, r) { const qx = ab(x) - bx + r, qy = ab(y) - by + r, qz = ab(z) - bz + r; return sq(mx(qx, 0) ** 2 + mx(qy, 0) ** 2 + mx(qz, 0) ** 2) + mn(mx(qx, mx(qy, qz)), 0) - r; }
 function smin(a, b, k) { const h = mx(k - ab(a - b), 0) / k; return mn(a, b) - h * h * k * 0.25; }
 const smax = (a, b, k) => -smin(-a, -b, k);
 
 // Surface nets over a box: one vertex per cell the surface passes through, a quad per crossing edge.
 // Returns an indexed geometry with gradient normals and a bone colour with cavities darkened.
-function mesh(sdf, [x0, y0, z0], [x1, y1, z1], h, seed = 1, stain = 1) {
+function mesh(sdf, [x0, y0, z0], [x1, y1, z1], h, seed = 1, stain = 1, hull = null) {
   const nx = Math.ceil((x1 - x0) / h) + 1, ny = Math.ceil((y1 - y0) / h) + 1, nz = Math.ceil((z1 - z0) / h) + 1;
   const V = new Float32Array(nx * ny * nz);
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) V[i + nx * (j + ny * k)] = sdf(x0 + i * h, y0 + j * h, z0 + k * h);
@@ -67,7 +74,7 @@ function mesh(sdf, [x0, y0, z0], [x1, y1, z1], h, seed = 1, stain = 1) {
     pos[v] = x; pos[v + 1] = y; pos[v + 2] = z;
     // cavities: how hemmed in the point is, looking out along its normal
     let ao = 1; for (const s of [0.004, 0.009, 0.016]) ao *= Math.min(1, Math.max(0, sdf(x + nrm[v] * s, y + nrm[v + 1] * s, z + nrm[v + 2] * s) / s) * 0.55 + 0.45);
-    paint(col, v, x, y, z, ao, noise, stain);
+    paint(col, v, x, y, z, ao, noise, stain, hull ? mx(0, -hull(x, y, z)) : 0);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -84,12 +91,14 @@ function mesh(sdf, [x0, y0, z0], [x1, y1, z1], h, seed = 1, stain = 1) {
   return g;
 }
 // weathered bone: ivory going grey-brown, blotched with lichen and earth, dark in every hollow
-function paint(col, v, x, y, z, ao, noise, stain) {
+function paint(col, v, x, y, z, ao, noise, stain, depth = 0) {
   const n1 = noise.fbm(x * 38 + 3, y * 38 + z * 31, 3), n2 = noise.fbm(x * 140, y * 140 + z * 120, 2);
   let r = 0.6, g = 0.53, b = 0.4;                                   // linear: dirty ivory
   const grey = Math.max(0, n1) * 0.5; r -= grey * 0.18; g -= grey * 0.15; b -= grey * 0.1;
   const dirt = Math.max(0, n2 - 0.15) * 1.2 * stain; r *= 1 - dirt * 0.35; g *= 1 - dirt * 0.42; b *= 1 - dirt * 0.55;
-  const k = 0.18 + 0.82 * ao * ao; col[v] = r * k; col[v + 1] = g * k * 0.97; col[v + 2] = b * k * 0.92;
+  let k = 0.18 + 0.82 * ao * ao;
+  if (depth > 0.0025) { const t = mn(1, (depth - 0.0025) / 0.011); k *= 1 - 0.94 * t * t * (3 - 2 * t); }   // the dark of a socket
+  col[v] = r * k; col[v + 1] = g * k * 0.97; col[v + 2] = b * k * 0.92;
 }
 function solid(g, seed = 1) {   // a plain geometry (tube, box) in bone colour
   g = g.index ? g : g; const P = g.attributes.position; const col = new Float32Array(P.count * 3); const noise = makeNoise(seed);
@@ -100,14 +109,8 @@ const keep = (g) => { for (const n in g.attributes) if (!['position', 'normal', 
 const mergeAll = (list) => mergeGeometries(list.map(keep));
 
 // ---------------------------------------------------------------- the skull (origin at the cranial base, +z = face)
-function skullSDF(v) {
-  const missing = v ? [2, 9, 13] : [5, 11];
-  const teeth = [];
-  for (const s of [-1, 1]) for (let i = 0; i < 8; i++) {
-    if (missing.includes(i + (s > 0 ? 8 : 0))) continue;
-    const t = i / 7, x = s * (0.005 + 0.025 * t ** 0.75), z = 0.077 - 0.05 * t ** 1.5, r = 0.0042 + t * 0.0016;
-    teeth.push([x, z, r, -0.052 + t * 0.002]);
-  }
+// hull: the bone before anything is cut out of it (what the depth of a socket is measured from)
+function skullSDF(hull = false) {
   return (x, y, z) => {
     const X = ab(x);
     let d = ell(x, y - 0.045, z + 0.015, 0.071, 0.074, 0.095);                           // the vault of the skull
@@ -115,22 +118,20 @@ function skullSDF(v) {
     d = smin(d, ell(x, y - 0.018, z + 0.094, 0.044, 0.03, 0.018), 0.02);               // the occipital bulge
     d = smin(d, ell(X - 0.047, y + 0.02, z + 0.012, 0.007, 0.012, 0.008), 0.01);        // mastoids
     d = smin(d, rbox(x, y + 0.012, z - 0.058, 0.031, 0.026, 0.024, 0.012), 0.02);      // the upper jaw
-    d = smin(d, ell(X - 0.043, y - 0.002, z - 0.052, 0.013, 0.013, 0.015), 0.02);       // cheekbones
-    d = smin(d, cap(X, y, z, 0.05, 0.001, 0.04, 0.062, 0.003, -0.012, 0.0055), 0.008); // and their arches
-    d = smin(d, cap(x, y, z, -0.04, 0.034, 0.068, 0.04, 0.034, 0.068, 0.0075), 0.022);  // the brow ridge
+    d = smin(d, ell(X - 0.046, y - 0.003, z - 0.05, 0.014, 0.014, 0.015), 0.018);       // cheekbones
+    d = smin(d, cap(X, y, z, 0.052, 0.0, 0.04, 0.064, 0.003, -0.012, 0.0055), 0.008);  // and their arches
+    d = smin(d, cap(x, y, z, -0.044, 0.035, 0.066, 0.044, 0.035, 0.066, 0.0078), 0.02); // the brow ridge
     d = smin(d, ell(x, y + 0.036, z - 0.054, 0.028, 0.011, 0.028), 0.01);              // the ridge of the teeth
-    d = smax(d, -ell(X - 0.069, y - 0.004, z - 0.012, 0.011, 0.024, 0.03), 0.006);     // the temple hollows behind the arches
-    d = smax(d, -ell(X - 0.021, y - 0.012, z - 0.072, 0.0165, 0.015, 0.031), 0.004);  // the eye sockets, deep
-    d = smax(d, -smin(ell(x, y + 0.012, z - 0.088, 0.0105, 0.016, 0.03), ell(x, y - 0.004, z - 0.085, 0.004, 0.008, 0.02), 0.006), 0.003);   // the nasal opening
+    if (hull) return d;
+    d = smax(d, -ell(X - 0.071, y - 0.004, z - 0.012, 0.011, 0.024, 0.03), 0.006);     // the temple hollows behind the arches
+    d = smax(d, -ell(X - 0.026, y - 0.012, z - 0.074, 0.0185, 0.0165, 0.034), 0.0035); // the eye sockets, deep, wide apart
+    d = smax(d, -smin(ell(x, y + 0.012, z - 0.088, 0.0115, 0.017, 0.03), ell(x, y - 0.006, z - 0.085, 0.0045, 0.009, 0.02), 0.006), 0.003);   // the nasal opening, pear-shaped
     d = smax(d, -ell(x, y + 0.03, z - 0.035, 0.018, 0.01, 0.03), 0.004);               // the palate, from below
-    if (ab(y + 0.047) > 0.016 || z < 0.0 || X > 0.04) return d;   // the teeth are only near the mouth
-    let t = 1e9; for (const [tx, tz, r, ty] of teeth) t = mn(t, cap(x, y, z, tx, -0.04, tz, tx, ty, tz, r));
-    return smin(d, t, 0.0018);
+    return d;
   };
 }
 function mandibleSDF() {
   const pts = (s) => [[0, -0.064, 0.073], [s * 0.022, -0.065, 0.064], [s * 0.037, -0.064, 0.043], [s * 0.045, -0.063, 0.014], [s * 0.048, -0.062, -0.006]];
-  const teeth = []; for (const s of [-1, 1]) for (let i = 0; i < 8; i++) { const t = i / 7; teeth.push([s * (0.004 + 0.022 * t ** 0.75), 0.073 - 0.05 * t ** 1.5, 0.0038 + t * 0.0014]); }
   return (x, y, z) => {
     let d = 1e9;
     for (const s of [-1, 1]) {
@@ -141,10 +142,26 @@ function mandibleSDF() {
       d = smin(d, ell(x - s * 0.053, y + 0.02, z + 0.006, 0.009, 0.005, 0.006), 0.004);                 // condyle
     }
     d = smin(d, ell(x, y + 0.071, z - 0.075, 0.012, 0.009, 0.006), 0.006);   // chin
-    if (ab(y + 0.049) > 0.014 || z < 0.0) return d;
-    let t = 1e9; for (const [tx, tz, r] of teeth) t = mn(t, cap(x, y, z, tx, -0.054, tz, tx, -0.044, tz, r));
-    return smin(d, t, 0.0015);
+    return d;
   };
+}
+// The teeth, set one by one round the arch (incisors, canine, premolars, molars), some lost. upper: hanging from
+// the skull's tooth ridge; else standing in the jaw.
+function teethGeo(upper, missing, seed) {
+  const parts = [], r = rng(seed);
+  for (const s of [-1, 1]) for (let i = 0; i < 8; i++) {
+    if (missing.includes(i + (s > 0 ? 8 : 0))) continue;
+    const t = i / 7, k = upper ? 1 : 0.92, x = s * (0.0045 + 0.0245 * t ** 0.75) * k, z = 0.0765 - 0.05 * t ** 1.5 - (upper ? 0 : 0.003);
+    const wide = i < 2 ? 0.0041 : i === 2 ? 0.0038 : i < 5 ? 0.0036 : 0.005, deep = i < 2 ? 0.0024 : i === 2 ? 0.0036 : i < 5 ? 0.004 : 0.005, len = (i === 2 ? 0.0125 : i < 2 ? 0.011 : 0.0085) + r() * 0.0015;
+    const g = new THREE.CylinderGeometry(0.72, 1, 1, 6, 1); g.translate(0, 0.5, 0); g.scale(wide, len, deep);   // tapering to the root
+    if (upper) g.rotateX(Math.PI);
+    g.rotateY(Math.atan2(x, 0.03 + (z - 0.03) * 2.2) + (r() - 0.5) * 0.25); g.rotateZ((r() - 0.5) * 0.12);
+    g.translate(x, upper ? -0.0405 : -0.0585, z);
+    const P = g.attributes.position, col = new Float32Array(P.count * 3), y0 = upper ? -0.0405 : -0.0585;
+    for (let v = 0; v < P.count; v++) { const e = mn(1, ab(P.getY(v) - y0) / len), w = 0.5 + 0.5 * e, st = 0.86 + r() * 0.14; col[v * 3] = 0.7 * w * st; col[v * 3 + 1] = 0.62 * w * st; col[v * 3 + 2] = 0.43 * w * st * 0.95; }   // ivory, brown at the gum
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.deleteAttribute('uv'); parts.push(g);
+  }
+  return parts;
 }
 // the pelvis: origin between the hip sockets, +y up, +z forward
 function pelvisSDF() {
@@ -202,6 +219,47 @@ function tibiaSDF() {
     return d;
   };
 }
+function shinSDF() {   // the tibia with the fibula beside it (lateral, +x)
+  const tib = tibiaSDF();
+  return (x, y, z) => {
+    let d = tib(x, y, z);
+    let f = cap(x, y, z, 0.027, 0.012, -0.006, 0.031, 0.325, -0.013, 0.0046);
+    f = smin(f, ell(x - 0.027, y - 0.002, z + 0.004, 0.0085, 0.015, 0.0095), 0.006);       // the outer ankle
+    f = smin(f, ell(x - 0.032, y - 0.332, z + 0.014, 0.0085, 0.012, 0.0085), 0.006);       // its head, below the knee
+    return smin(d, f, 0.004);
+  };
+}
+function forearmSDF() {   // ulna and radius side by side, along +y: wrist at 0, elbow at 0.25
+  return (x, y, z) => {
+    let u = tcap(x, y, z, 0.011, 0.004, 0, 0.009, 0.242, -0.004, 0.0048, 0.0085);
+    u = smin(u, ell(x - 0.009, y - 0.258, z + 0.008, 0.0105, 0.017, 0.012), 0.008);       // the point of the elbow
+    u = smax(u, -ell(x - 0.009, y - 0.252, z - 0.008, 0.012, 0.009, 0.008), 0.003);       // the notch the humerus turns in
+    u = smin(u, ell(x - 0.011, y - 0.004, z, 0.0065, 0.008, 0.0065), 0.004);
+    let r = tcap(x, y, z, -0.012, 0.006, 0.002, -0.008, 0.232, 0.004, 0.0082, 0.0055);
+    r = smin(r, ell(x + 0.012, y - 0.008, z - 0.002, 0.0145, 0.012, 0.0095), 0.008);      // broad at the wrist
+    r = smin(r, ell(x + 0.008, y - 0.236, z - 0.004, 0.0105, 0.0055, 0.0105), 0.004);     // the button of its head
+    return mn(u, r);
+  };
+}
+function clavicleSDF() {   // from the breastbone (origin) out along +x to the shoulder, in its S-curve
+  return (x, y, z) => {
+    let d = cap(x, y, z, 0, 0, 0, 0.05, 0.004, 0.013, 0.0066);
+    d = smin(d, cap(x, y, z, 0.05, 0.004, 0.013, 0.105, 0.008, 0.0, 0.0056), 0.006);
+    d = smin(d, ell(x - 0.132, y - 0.01, z + 0.014, 0.022, 0.0052, 0.01), 0.008);
+    return smin(d, ell(x - 0.002, y, z, 0.009, 0.0095, 0.009), 0.005);
+  };
+}
+function scapulaSDF() {   // origin at the shoulder socket; the blade runs in (-x) and down, its spine across the back (-z)
+  return (x, y, z) => {
+    let d = ell(x + 0.05, y + 0.045, z + 0.022 + (x + 0.05) * 0.12, 0.05, 0.088, 0.0048);            // the blade
+    d = smax(d, (x * 0.94 + y * 0.34) - 0.004, 0.006);                                             // its outer border, cut straight
+    d = smax(d, (-x * 0.72 - y * 0.69) - 0.118, 0.006);                                            // and the inner one, down to the point
+    d = smin(d, cap(x, y, z, -0.088, 0.012, -0.022, -0.012, 0.03, -0.034, 0.0052), 0.008);          // the spine of it
+    d = smin(d, ell(x - 0.012, y - 0.034, z + 0.03, 0.02, 0.0055, 0.012), 0.008);                  // the acromion
+    d = smin(d, ell(x + 0.004, y + 0.002, z + 0.012, 0.0095, 0.017, 0.011), 0.008);                // the socket
+    return d;
+  };
+}
 function vertebraSDF() {   // +y up the spine, +z forward (the body), the spine of it pointing back and down
   return (x, y, z) => {
     let d = ell(x, y, z - 0.004, 0.016, 0.0105, 0.014);
@@ -215,41 +273,84 @@ function vertebraSDF() {   // +y up the spine, +z forward (the body), the spine 
 }
 
 // ---------------------------------------------------------------- ribs, the cage, small bones
-function ribGeo(i, s, cut = 1, lo = false) {   // the i-th rib (0 = top) on side s, in torso coords (+y up, +z forward); spine at origin
+function ribGeo(i, s, cut = 1, lo = false, far = false, mid = false) {   // the i-th rib (0 = top) on side s, in torso coords (+y up, +z forward); spine at origin
   const y = -i * 0.023, w = i < 7 ? 0.065 + i * 0.011 : 0.142 - (i - 7) * 0.012, reach = i < 7 ? 1 : i < 10 ? 0.75 : 0.45;
   const P = [[s * 0.012, y, -0.012], [s * 0.05, y - 0.004, -0.04], [s * w * 0.95, y - 0.02, -0.012], [s * w, y - 0.045, 0.04], [s * w * 0.72, y - 0.075, 0.095], [s * 0.035, y - 0.092, 0.118]]
     .slice(0, Math.max(3, Math.round(6 * reach * cut))).map((p) => new THREE.Vector3(...p));
-  const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(P), lo ? 6 : 12, 0.0045, lo ? 3 : 4, false);
+  const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(P), far ? 3 : lo ? 6 : mid ? 8 : 12, far ? 0.007 : 0.0045, lo ? 3 : 4, false);
   tg.scale(1, 1.25, 1); return solid(tg, 50 + i);
 }
-// Two levels of detail: 'hi' for bones close by, 'lo' (the same fields, meshed far coarser) for the rest of the field.
-// Keys: skull0 skull1 mandible pelvis femur humerus tibia vertebra rib cage0 cage1 small.
+// A plain rod through points, n-sided, its radius given at each point (shafts, finger bones). Indexed, smooth round.
+export function loft(pts, radii, n = 6, caps = true) {
+  const pos = [], idx = [], N = pts.length, T = new THREE.Vector3(), A = new THREE.Vector3(), B = new THREE.Vector3(), up = new THREE.Vector3();
+  for (let i = 0; i < N; i++) {
+    T.copy(pts[Math.min(N - 1, i + 1)]).sub(pts[Math.max(0, i - 1)]).normalize();
+    if (i === 0) { up.set(0, 1, 0); if (ab(T.y) > 0.9) up.set(1, 0, 0); A.crossVectors(up, T).normalize(); } else A.sub(T.clone().multiplyScalar(A.dot(T))).normalize();
+    B.crossVectors(T, A);
+    for (let k = 0; k < n; k++) { const a = (k / n) * Math.PI * 2, c = Math.cos(a) * radii[i], s2 = Math.sin(a) * radii[i]; pos.push(pts[i].x + A.x * c + B.x * s2, pts[i].y + A.y * c + B.y * s2, pts[i].z + A.z * c + B.z * s2); }
+  }
+  for (let i = 0; i < N - 1; i++) for (let k = 0; k < n; k++) { const a = i * n + k, b = i * n + (k + 1) % n; idx.push(a, b, a + n, b, b + n, a + n); }
+  if (caps) { for (const [i0, p, flip] of [[0, pts[0], true], [(N - 1) * n, pts[N - 1], false]]) { const c = pos.length / 3; pos.push(p.x, p.y, p.z); for (let k = 0; k < n; k++) { const a = i0 + k, b = i0 + (k + 1) % n; if (flip) idx.push(c, b, a); else idx.push(c, a, b); } } }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals(); return g;
+}
+// A hand's bones: wrist at the origin, fingers along +y, the palm facing +z, the thumb on the -x side; curl closes
+// the fingers toward the palm (a dead hand is half closed). lo: five plain rays.
+function handGeo(curl = 0.6, lo = false, seed = 3) {
+  const r = rng(seed), parts = [], V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const F = [[-0.026, 0.02, [0.036, 0.028, 0.022], 0.0052, -0.55], [-0.019, 0.03, [0.062, 0.04, 0.024, 0.018], 0.0046, -0.12], [-0.006, 0.032, [0.06, 0.044, 0.028, 0.019], 0.0048, -0.02], [0.007, 0.03, [0.054, 0.04, 0.026, 0.018], 0.0044, 0.08], [0.019, 0.027, [0.05, 0.031, 0.019, 0.016], 0.004, 0.2]];
+  if (!lo) { const c = new THREE.SphereGeometry(1, 7, 5); c.scale(0.026, 0.014, 0.0095); c.translate(-0.003, 0.016, 0); c.deleteAttribute('uv'); parts.push(c); }
+  for (const [x0, y0, lens, rad, splay] of F) {
+    let p = V(x0, y0, 0), bend = 0; const c1 = curl * (0.75 + r() * 0.5);
+    lens.forEach((L, j) => {
+      if (j > 0) bend += c1 * (j === 1 ? 0.7 : 0.95);
+      const d = V(Math.sin(splay) * Math.cos(bend), Math.cos(splay) * Math.cos(bend), Math.sin(bend)), q = p.clone().addScaledVector(d, L);
+      if (lo) { if (j % 2 === 0) parts.push(loft([p, q.clone().addScaledVector(d, lens[j + 1] || 0)], [rad, rad * 0.8], 3, false)); }
+      else parts.push(loft([p, p.clone().lerp(q, 0.14), p.clone().lerp(q, 0.86), q], [rad * 1.2, rad * 0.82, rad * 0.78, rad * 1.12], 5, true));
+      p = q.addScaledVector(d, 0.002);
+    });
+  }
+  return mergeGeometries(parts.map((g, i) => solid(g, 70 + i)));
+}
+// Levels of detail: 'hi' (the same fields meshed finest), 'mid' for bones underfoot, 'lo' and 'far' for the rest of
+// the field. Keys: skull0 skull1 mandible pelvis femur humerus tibia shin forearm clavicle scapula vertebra rib
+// cage0 cage1 small hand; and jaw0 jaw1 (a mandible with its teeth, to go with each skull).
 const CACHE = {};
 export function boneLibrary(level = 'hi') {
   if (CACHE[level]) return CACHE[level];
-  const lo = level === 'lo', k = lo ? 2.1 : 1, L = {};
-  for (const v of [0, 1]) L['skull' + v] = mesh(skullSDF(v), [-0.084, -0.068, -0.122], [0.084, 0.125, 0.112], 0.0068 * k, 11 + v);
-  L.mandible = mesh(mandibleSDF(), [-0.066, -0.084, -0.022], [0.066, -0.012, 0.09], 0.005 * k, 13);
+  const k = { hi: 1, mid: 1.42, lo: 2.1, far: 3.4 }[level] || 1, lo = k > 2, far = k > 3, L = {};
+  const withTeeth = (g, teeth) => (lo ? g : mergeGeometries([g, ...teeth]));
+  const jaw = mesh(mandibleSDF(), [-0.066, -0.084, -0.022], [0.066, -0.012, 0.09], 0.005 * Math.min(k, 2.4), 13);
+  for (const v of [0, 1]) {
+    const gone = v ? [2, 9, 13] : [5, 11];
+    L['skull' + v] = withTeeth(mesh(skullSDF(), [-0.084, -0.068, -0.122], [0.084, 0.125, 0.112], 0.0068 * k, 11 + v, 1, skullSDF(true)), teethGeo(true, gone, 40 + v));
+    L['jaw' + v] = withTeeth(jaw, teethGeo(false, v ? [0, 6, 12] : [3, 15], 44 + v));
+  }
+  L.mandible = L.jaw0;
   L.pelvis = mesh(pelvisSDF(), [-0.175, -0.125, -0.085], [0.175, 0.14, 0.11], 0.009 * k, 17, 1.3);
   L.femur = mesh(femurSDF(), [-0.075, -0.008, -0.035], [0.04, 0.468, 0.035], 0.007 * k, 19);
   L.humerus = mesh(humerusSDF(), [-0.045, -0.006, -0.035], [0.045, 0.33, 0.035], 0.0068 * k, 23);
   L.tibia = mesh(tibiaSDF(), [-0.045, -0.014, -0.036], [0.045, 0.372, 0.036], 0.007 * k, 29);
-  L.vertebra = mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0045 * k, 31);
-  const vCage = lo ? null : mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0072, 32);
+  L.shin = mesh(shinSDF(), [-0.045, -0.02, -0.036], [0.05, 0.372, 0.036], 0.0066 * Math.min(k, 2.2), 29);
+  L.forearm = mesh(forearmSDF(), [-0.032, -0.012, -0.028], [0.028, 0.285, 0.024], 0.0056 * Math.min(k, 1.9), 37);
+  L.clavicle = mesh(clavicleSDF(), [-0.016, -0.016, -0.034], [0.165, 0.026, 0.03], 0.0058 * Math.min(k, 1.7), 41);
+  L.scapula = mesh(scapulaSDF(), [-0.115, -0.145, -0.05], [0.04, 0.05, 0.012], 0.0056 * Math.min(k, 1.5), 43, 1.2);
+  L.vertebra = mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0045 * Math.min(k, 2.1), 31);
+  const vCage = lo ? null : mesh(vertebraSDF(), [-0.038, -0.022, -0.064], [0.038, 0.02, 0.022], 0.0072 * (k > 1 ? 1.25 : 1), 32);
   L.rib = ribGeo(5, 1, 1, lo);
   // a ribcage: the thoracic column with its twelve pairs, some broken short, a few gone, the sternum fallen in
   for (const v of [0, 1]) {
     const r = rng(90 + v), parts = [];
     for (let i = 0; i < 12; i++) {
       if (vCage) { const vg = vCage.clone(); vg.translate(0, -i * 0.023, 0); parts.push(vg); }
-      else { const vg = solid(new THREE.BoxGeometry(0.03, 0.018, 0.05), 32); vg.translate(0, -i * 0.023, -0.015); parts.push(vg); }
-      for (const s of [-1, 1]) { const q = r(); if (q < 0.12) continue; parts.push(ribGeo(i, s, q < 0.35 ? 0.55 + r() * 0.3 : 1, lo)); }
+      else if (!far || i % 2 === 0) { const vg = solid(new THREE.BoxGeometry(0.03, far ? 0.04 : 0.018, 0.05), 32); vg.translate(0, -i * 0.023, -0.015); parts.push(vg); }
+      for (const s of [-1, 1]) { const q = r(); if (q < 0.12 || (far && i % 2)) continue; parts.push(ribGeo(i, s, q < 0.35 ? 0.55 + r() * 0.3 : 1, lo, far, k > 1 && !lo)); }
     }
     const st = solid(new THREE.BoxGeometry(0.03, 0.14, 0.008, 2, lo ? 1 : 6, 1), 77); st.rotateX(0.25); st.translate(0.01, -0.11, 0.1); parts.push(st);
     L['cage' + v] = mergeAll(parts);
   }
   // a hand or foot's worth of small bones, scattered flat
   { const r = rng(5), parts = []; for (let i = 0; i < 12; i++) { const len = 0.018 + r() * 0.035; const g = solid(new THREE.CapsuleGeometry(0.0045 + r() * 0.002, len, lo ? 1 : 3, lo ? 4 : 6), 60 + i); g.rotateZ(Math.PI / 2); g.rotateY(r() * Math.PI); g.translate((r() - 0.5) * 0.14, 0.005, (r() - 0.5) * 0.14); parts.push(g); } L.small = mergeAll(parts); }
+  L.hand = handGeo(0.6, lo, 3); L.hand1 = handGeo(1.0, lo, 4);
   // vertex samples for resting each bone on the ground
   for (const key in L) { const g = L[key]; const P = g.attributes.position; const step = Math.max(1, Math.floor(P.count / 500)); const pts = []; for (let i = 0; i < P.count; i += step) pts.push(new THREE.Vector3().fromBufferAttribute(P, i)); g.userData.pts = pts; }
   CACHE[level] = L; return L;
