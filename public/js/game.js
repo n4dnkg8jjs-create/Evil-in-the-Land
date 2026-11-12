@@ -441,7 +441,9 @@ export class Game {
         const n = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - ward.x, k.pos.z - ward.z) < ALTAR_R + 0.5).length; o.n = n;
         if (ward.state === 'blighted') { ward.state = 'active'; o.s[i] = 'active'; }
         o.p[i] = Math.min(1, o.p[i] + rt * (n ? 1 + (n - 1) * 0.55 : 0) / (ch.prayer * this.diff.prayer)); ward.progress = o.p[i];
-        o.waveT -= rt; if (o.waveT <= 0) { o.waveT = 9; this.spawnWave(ward, 0.6); }
+        // fewer of them the more wards are done: with the dragon himself on the field, full waves at every ward wiped the company
+        const done = o.s.filter((x) => x === 'cleansed').length;
+        o.waveT -= rt; if (o.waveT <= 0) { o.waveT = 9 + done * 3; this.spawnWave(ward, Math.max(0.3, 0.6 - done * 0.1)); }
         if (o.p[i] >= 1) { o.s[i] = 'cleansed'; this.bcast('ward', { i }); if (this.boss && this.boss.wardStrike) this.boss.wardStrike(this.hostCtx()); }
       }
     }
@@ -546,7 +548,7 @@ export class Game {
     const sp = cp ? { x: cp.x + 3, z: cp.z + 3 } : this.world.startPos;
     for (const d of this.horde.list) d.die(null);
     if (o.ph === 'wipe') {
-      if (this.boss) { o.ph = 'boss'; this.boss.hp = Math.min(this.boss.maxHp, this.boss.hp + this.boss.maxHp * 0.25); }
+      if (this.boss) { o.ph = 'boss'; if ((this.boss.phase || 1) < 3) this.boss.hp = Math.min(this.boss.maxHp, this.boss.hp + this.boss.maxHp * 0.25); }   // a boss in its last stand does not heal on a wipe: that undid the whole final phase
       else { const a = this.world.altars[o.a]; if (a && a.state === 'active') { a.state = 'blighted'; o.s[o.a] = 'blighted'; o.p[o.a] = 0; a.progress = 0; } o.ph = 'travel'; }
     }
     this.bcast('respawn', { x: sp.x, z: sp.z });
