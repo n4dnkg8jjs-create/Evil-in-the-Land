@@ -480,12 +480,12 @@ export function buildHoundModel() {
   // ---- ears: cupped, thick at the root, ragged; his right one torn short and notched
   const headN = (L) => { const yc = (stAt(HST, L[2], 1) + stAt(HST, L[2], 12)) / 2; const l = Math.hypot(L[0], L[1] - yc) || 1; return [L[0] / l, (L[1] - yc) / l, 0]; };
   for (const [s, k] of [[1, 'L'], [-1, 'R']]) {
-    const hgt = s > 0 ? 0.175 : 0.13, base = [s * 0.098, 0.13, 0.035], n0 = headN(base), U = new V3(s * 0.32, 1, -0.22).normalize(), F0 = new V3(s * 0.62, 0, 0.78);
+    const hgt = s > 0 ? 0.235 : 0.185, base = [s * 0.098, 0.13, 0.035], n0 = headN(base), U = new V3(s * 0.32, 1, -0.22).normalize(), F0 = new V3(s * 0.62, 0, 0.78);
     F0.addScaledVector(U, -F0.dot(U)).normalize(); const A = new V3().crossVectors(U, F0).normalize(), C0 = new V3(base[0] - n0[0] * 0.018, base[1] - n0[1] * 0.018, base[2]);
     const NR = 7, NS = 12;
     part({ kind: 'ear', root: F(C0.x, C0.y, C0.z) }, () => rings(M, NR, NS, (i, j) => {
       const t = i / (NR - 1), ph = j / NS * TAU, a = Math.cos(ph), b = Math.sin(ph);
-      let wd = 0.056 * Math.pow(1 - t, 0.8) + 0.003; if (s > 0 && a > 0) wd *= 1 - 0.45 * gauss(t, 0.5, 0.07); if (s < 0) wd *= 1 - 0.3 * gauss(t, 0.85, 0.12) * (a < 0 ? 1 : 0.2);
+      let wd = 0.064 * Math.pow(1 - t, 0.85) + 0.003; if (s > 0 && a > 0) wd *= 1 - 0.45 * gauss(t, 0.5, 0.07); if (s < 0) wd *= 1 - 0.3 * gauss(t, 0.85, 0.12) * (a < 0 ? 1 : 0.2);
       const th = 0.011 * (1 - t) + 0.0025, cup = 0.026 * Math.sin(Math.PI * Math.min(1, t * 1.25 + 0.1));
       const c = C0.clone().addScaledVector(U, hgt * t * (1 + 0.15 * t * t * a * (s > 0 ? 1 : -1) * 0)).addScaledVector(F0, -0.015 * t);
       const p = c.addScaledVector(A, a * wd).addScaledVector(F0, b * th - cup * (1 - a * a) * (b > 0 ? 1 : 0.85));
@@ -673,7 +673,7 @@ function coatMaterial(u) {
       if (uDissolve > 0.0 && dnz < uDissolve + 0.05) discard;`)
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize(vNormal); nonPerturbedNormal = normal;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * 0.6 * pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 4.0);
+      totalEmissiveRadiance += vec3(0.55, 0.62, 0.75) * uRim * 0.18 * vTip * pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 4.0);
       totalEmissiveRadiance += vec3(1.0, 0.9, 0.8) * uHit;`);
   };
   mat.customProgramCacheKey = () => 'hound-coat-v1';
