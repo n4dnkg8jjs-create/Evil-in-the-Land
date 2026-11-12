@@ -937,21 +937,21 @@ float n1 = vn(vFP * 7.0) * 0.6 + vn(vFP * 23.0) * 0.4;
 if (vFx.y > 0.5) { float qa = abs(fract((vFP.x + vFP.z) * 16.0) - 0.5), qb = abs(fract((vFP.x - vFP.z) * 16.0 + vFP.y * 10.0) - 0.5); diffuseColor.rgb *= 0.5 + 0.5 * smoothstep(0.02, 0.1, min(qa, qb)) + 0.12 * (1.0 - 2.0 * max(qa, qb)); }   // quilted
 if (vFx.z > 0.5) { float tw = sin((vFP.x + vFP.y * 0.7 + vFP.z) * 900.0) * 0.5 + 0.5; diffuseColor.rgb *= 0.86 + 0.14 * tw + (vn(vFP * vec3(60.0, 400.0, 60.0)) - 0.5) * 0.12; }   // woven
 // dirt worked into the cloth, and old blood frozen near black in a few places
-diffuseColor.rgb *= mix(1.0, 0.5 + n1 * 0.4, vFx.w);
+diffuseColor.rgb *= mix(1.0, 0.72 + n1 * 0.28, vFx.w);   // (gentle: strong mottling read as camouflage)
 float bl = smoothstep(0.76, 0.84, vn(vFP * 3.1 + 7.3)) * vFx.w * (1.0 - smoothstep(0.2, 0.4, vFx.x));
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.014, 0.012), bl * 0.75);
 // frozen through: the dye dull, a bloom of hoarfrost on all of it, and snow lying on what faces the sky
-float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.85) * 0.92;
+float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.92);
 float ny = normalize(vFN).y;
-float hoar = (0.14 + 0.16 * vn(vFP * 41.0) * vn(vFP * 11.0 + 2.0) * 2.0) * mix(0.35, 1.0, uSnow) * (1.0 - vFx.x * 0.3);
-float rime = smoothstep(0.55, 0.95, ny + (vn(vFP * 19.0) - 0.5) * 0.3) * mix(0.12, mix(0.3, 0.55, vFx.x), uSnow) * (0.6 + 0.4 * vn(vFP * 5.0));
+float hoar = (0.03 + 0.09 * smoothstep(0.45, 0.8, vn(vFP * 41.0) * 0.5 + vn(vFP * 11.0 + 2.0) * 0.5)) * mix(0.35, 1.0, uSnow);
+float rime = smoothstep(0.55, 0.9, ny + (vn(vFP * 19.0) - 0.5) * 0.25) * mix(0.12, mix(0.42, 0.55, vFx.x), uSnow) * (0.6 + 0.4 * vn(vFP * 5.0));
 rime = max(rime, (1.0 - step(0.5, vFx.w + vFx.y + vFx.z + vFx.x)) * step(0.0, ny - 2.0));   // (drifts are snow already)
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), hoar);
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.2;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(vRough, 0.9, max(rime, hoar * 1.5));')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFx.x * 0.75 * (1.0 - rime) * (1.0 - hoar);');
   };
-  m.customProgramCacheKey = () => 'frostBaked6';
+  m.customProgramCacheKey = () => 'frostBaked8';
   return m;
 }
 const HOSE = [0x3e3a32, 0x4a2a22, 0x2e3236, 0x564634, 0x3a3328];
@@ -1028,7 +1028,7 @@ function skinLayer(body, pick, off, mat, smooth = 0, key = null) {
     for (let i = 0; i < n; i++) { if (wid[i] < 0) continue; const w = wid[i]; pos[i * 3] = W[w * 3]; pos[i * 3 + 1] = W[w * 3 + 1]; pos[i * 3 + 2] = W[w * 3 + 2]; }
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(smooth ? nrm.slice() : nrm, 3)); geo.setAttribute('skinIndex', SI);   // (its own copy when smoothed: smoothing rewrites it, and the body's normals are shared by every garment) geo.setAttribute('skinWeight', SW);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(smooth ? nrm.slice() : nrm, 3)); geo.setAttribute('skinIndex', SI); geo.setAttribute('skinWeight', SW);   // (the normals its own copy when smoothed: smoothing rewrites them, and the body's are shared by every garment)
   if (g.attributes.uv) geo.setAttribute('uv', g.attributes.uv); geo.setIndex(idx); if (smooth) geo.computeVertexNormals();
   if (ck0) LC.set(ck0, { pos: geo.attributes.position, nrm: geo.attributes.normal, idx: geo.index, keep });
   const m = new THREE.SkinnedMesh(geo, mat); m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true; m.userData.keep = keep;
@@ -1088,14 +1088,14 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     const dbl = skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24, 'doublet|' + hipsY + '|' + headY);
     // the sleeves, full and slashed down their length: fitted to the arm, so they bend with it at the elbow
     const slv = skinLayer(body, (b) => ARMS.has(b), 0.02, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 14, 'sleeves');
-    slv.userData.slash = { lin: new THREE.Color(cI), panels: 7 };
+    slv.userData.slash = { lin: new THREE.Color(cI) };
     shirtL.userData.under = orK(dbl.userData.keep, slv.userData.keep);
   }
   // the upper hose: full, slashed, to the knee (the Landsknecht's pluderhose), fitted to the thighs
   const upper = skinLayer(body, (b, v) => b === 'thighR' || b === 'thighL' || (b === 'hips' && v.y < hipsY - 0.03), 0.026, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 16, 'upperhose|' + hipsY);
-  upper.userData.slash = { lin: new THREE.Color(pick([0x8a2a20, 0xa89878, 0x5a5a62, 0x8a6a32])), panels: 6 };
+  upper.userData.slash = { lin: new THREE.Color(pick([0x8a2a20, 0xa89878, 0x8a6a32, 0x34404a])) };
   // shoes: leather fitted over the stockinged foot, broad at the toe
-  const shoes = skinLayer(body, (b) => b === 'footR' || b === 'footL', 0.011, leather, 6, 'shoes');
+  const shoes = skinLayer(body, (b) => b === 'footR' || b === 'footL', 0.016, leather, 40, 'shoes');   // (smoothed hard: a closed shoe, not the toes)
   hoseL.userData.under = orK(upper.userData.keep, shoes.userData.keep);
   // a belt
   J.hips.add(new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.016, 6, 24).rotateX(Math.PI / 2).scale(1, 1, 0.82).translate(0, 0.06, 0.012), frostMat(0x2a2018, 0.7)));
@@ -1133,7 +1133,8 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const lean = opts.lean || 0;
   if (pose === 'sit') {   // hunched on the ground, knees drawn up, arms round them, head down on them (or on the next man's shoulder)
     e('spine', 30, 0, -lean * 10 + jit(6)); e('chest', 20, 0, -lean * 6); e('neck', 26, 0, -lean * 22 + jit(8)); e('head', 20, jit(15), -lean * 16 + jit(8));
-    lr((k, s) => { e('thigh' + k, -112, 0, s * 10); e('shin' + k, 130, 0, 0); e('foot' + k, -15, 0, s * 8); e('uArm' + k, -40, 0, s * 12); e('fArm' + k, k === 'R' ? -100 : -108, -s * (k === 'R' ? 62 : 56), 0); e('hand' + k, 0, 0, s * 20); });   // his hands drawn in to his chest
+    lr((k, s) => { e('thigh' + k, -112, 0, s * 10); e('shin' + k, 130, 0, 0); e('foot' + k, -15, 0, s * 8); e('uArm' + k, -58, 0, s * 20); e('fArm' + k, -82, -s * 48, 0); e('hand' + k, 15, 0, s * 10); });
+    if (opts.cross) { lr((k, s) => { e('uArm' + k, -40, 0, s * 12); e('fArm' + k, -100, -s * 62, 0); e('hand' + k, 0, 0, s * 20); }); }
   } else if (pose === 'slump') {   // sat where he stopped, legs out unevenly, head fallen onto his shoulder, hands down at his sides
     const ln = jit(1) > 0 ? 1 : -1;
     e('spine', -4, 0, ln * 4); e('chest', 6, 0, ln * 3); e('neck', 22, 0, ln * 26); e('head', 18, ln * 10, ln * 22);
@@ -1175,7 +1176,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     gear.push({ obj: a, at: [jit(0.5) - 0.9, jit(1.0)], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
     gear.push({ obj: new THREE.Mesh(sh(L2), wood), at: [jit(0.6) + 0.5, jit(1.2) + 0.6], lift: 0.018, tilt: [0, jit(Math.PI), 0] });
   }
-  if (seed % 5 === 2 && snow) {   // on a few, blood that ran out of him before it froze: small, dark
+  if (false) {   // (no blood pool: on the snow in this light it read as a hole)
     const pg = new THREE.CircleGeometry(0.26, 32), pp = pg.attributes.position, ph = [rnd() * 6, rnd() * 6, rnd() * 6]; for (let i = 1; i < pp.count; i++) { const a = Math.atan2(pp.getY(i), pp.getX(i)), f = 0.8 + 0.18 * Math.sin(a * 2 + ph[0]) + 0.1 * Math.sin(a * 3 + ph[1]) + 0.05 * Math.sin(a * 7 + ph[2]); pp.setXY(i, pp.getX(i) * f * 1.25, pp.getY(i) * f); }
     const pool = new THREE.Mesh(pg.rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3a100d, roughness: 0.6, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, depthWrite: false, transparent: true, opacity: 0.55 }));
     pool.receiveShadow = true; gear.push({ obj: pool, at: [jit(0.15), 0.1], lift: 0.012, tilt: [0, jit(Math.PI), 0], flat: true });
@@ -1208,35 +1209,24 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   // to where they are (their normals with them); gear, ice and drifts are taken as they stand.
   const baked = new THREE.Group(); wrap.add(baked);
   const bake = () => {
-    for (const c of [...baked.children]) { baked.remove(c); c.geometry.dispose(); }
+    for (const c of [...baked.children]) { baked.remove(c); c.geometry.dispose(); } baked.userData.parts = [];
     wrap.updateMatrixWorld(true);
     const inv = wrap.matrixWorld.clone().invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3(), v = new THREE.Vector3(), w = new THREE.Vector3(), nn = new THREE.Vector3(), sk = new THREE.Vector3();
-    // his skin and his garments share one skeleton and bind: skin a vertex of either by the blend of its bones
-    body.skeleton.update(); const BMs = body.skeleton.boneMatrices, SIa = body.geometry.attributes.skinIndex.array, SWa = body.geometry.attributes.skinWeight.array;
-    const pre = new THREE.Matrix4().multiplyMatrices(inv, body.matrixWorld).multiply(body.bindMatrixInverse).elements, bnd = body.bindMatrix.elements, Bl = new Float32Array(16), BPa = body.geometry.attributes.position.array;
-    const skin = (i, src, out) => {   // vertex i of src (a position array) into out, in his own frame
-      Bl.fill(0); for (let k = 0; k < 4; k++) { const wgt = SWa[i * 4 + k]; if (!wgt) continue; const o = SIa[i * 4 + k] * 16; for (let e = 0; e < 16; e++) Bl[e] += BMs[o + e] * wgt; }
-      const x = src[i * 3], y = src[i * 3 + 1], z = src[i * 3 + 2];
-      const qx = bnd[0] * x + bnd[4] * y + bnd[8] * z + bnd[12], qy = bnd[1] * x + bnd[5] * y + bnd[9] * z + bnd[13], qz = bnd[2] * x + bnd[6] * y + bnd[10] * z + bnd[14];
-      const rx = Bl[0] * qx + Bl[4] * qy + Bl[8] * qz + Bl[12], ry = Bl[1] * qx + Bl[5] * qy + Bl[9] * qz + Bl[13], rz = Bl[2] * qx + Bl[6] * qy + Bl[10] * qz + Bl[14];
-      out.set(pre[0] * rx + pre[4] * ry + pre[8] * rz + pre[12], pre[1] * rx + pre[5] * ry + pre[9] * rz + pre[13], pre[2] * rx + pre[6] * ry + pre[10] * rz + pre[14]);
-    };
+    const SIa = body.geometry.attributes.skinIndex.array, SWa = body.geometry.attributes.skinWeight.array, _cc = new THREE.Color();
     const pos = [], nrm = [], col = [], fxs = [], rgh = [], idx = [], list = [], outw = [], soft = [];   // outw: which way is out of him (garments); soft: faces whose normals are rebuilt
     wrap.traverse((o) => { if (o.isMesh && o !== body && o.parent !== baked && o.material.userData.fx) list.push(o); });
     for (const o of list) {
-      const g = o.geometry, P = g.attributes.position, N = g.attributes.normal, ix = g.index ? g.index.array : null, fx = o.material.userData.fx, c = o.material.color, base = pos.length / 3;
+      const g = o.geometry, P = g.attributes.position, N = g.attributes.normal, ix = g.index ? g.index.array : null, fx = o.material.userData.fx, c = o.material.color, base = pos.length / 3, i0 = idx.length;
       M.multiplyMatrices(inv, o.matrixWorld); NM.getNormalMatrix(M);
       const put = (i) => {
         if (o.isSkinnedMesh) {   // a garment vertex is his own vertex pushed out from the skin: outward is away from that
-          skin(i, P.array, v); skin(i, BPa, sk); sk.subVectors(v, sk); nn.set(0, 0, 0);
+          o.getVertexPosition(i, v); body.getVertexPosition(i, sk); sk.subVectors(v, sk).transformDirection(M); v.applyMatrix4(M); nn.set(0, 0, 0);
         } else { v.fromBufferAttribute(P, i).applyMatrix4(M); nn.fromBufferAttribute(N, i).applyMatrix3(NM).normalize(); }
         if (o.isSkinnedMesh) { const q = pos.length; outw[q] = sk.x; outw[q + 1] = sk.y; outw[q + 2] = sk.z; }
         let cc = c;
-        if (o.userData.slash) {   // slashed: round the limb, bands of the lining pulled through the cuts, the cuts tied across at intervals
-          const S = o.userData.slash; let bi = SIa[i * 4], bw = SWa[i * 4]; for (let k = 1; k < 4; k++) if (SWa[i * 4 + k] > bw) { bw = SWa[i * 4 + k]; bi = SIa[i * 4 + k]; }
-          w.fromArray(BPa, i * 3).applyMatrix4(body.skeleton.boneInverses[bi]);
-          const f = (Math.atan2(w.x, w.z) / (Math.PI * 2) + 0.5) * S.panels + Math.sin(w.y * 40) * 0.08, tie = Math.abs(((w.y / 0.11) % 1 + 1) % 1 - 0.5) > 0.42;
-          if (f % 1 > 0.58 && f % 1 < 0.92 && !tie) cc = S.lin;
+        if (o.userData.slash) {   // parti-coloured: the left limb in a second dye (blended across where the two sides meet)
+          const S = o.userData.slash; let l = 0, t = 0; for (let k = 0; k < 4; k++) { const wgt = SWa[i * 4 + k]; if (!wgt) continue; t += wgt; if (JOINTS[SIa[i * 4 + k]].endsWith('L')) l += wgt; }
+          const f = t ? l / t : 0; if (f > 0) cc = _cc.copy(c).lerp(S.lin, f);
         }
         pos.push(v.x, v.y, v.z); nrm.push(nn.x, nn.y, nn.z); col.push(cc.r, cc.g, cc.b); fxs.push(fx.metal, fx.quilt, fx.weave, fx.snow ? 0 : fx.grime); rgh.push(fx.rough);
       };
@@ -1247,7 +1237,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
           soft.push(idx.length); for (const q of [a, b, d]) { if (map[q] < 0) { map[q] = nv++; put(q); } idx.push(base + map[q]); }
         }
       } else { for (let i = 0; i < P.count; i++) put(i); if (ix) for (let t = 0; t < ix.length; t++) idx.push(base + ix[t]); else for (let t = 0; t < P.count; t++) idx.push(base + t); }
-      o.visible = false;
+      o.visible = false; (baked.userData.parts ||= []).push((o.isSkinnedMesh ? 'S' : 'M') + '#' + o.material.color.getHexString() + ':' + (idx.length - i0) / 3);
     }
     // the garments' normals: each face turned to face out of him, then smooth normals from the faces (welded where
     // the cloth was welded), so no stored normal is trusted
