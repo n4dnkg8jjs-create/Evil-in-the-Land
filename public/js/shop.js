@@ -112,8 +112,12 @@ function wagonModel(quality) {
     wpn.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     g.add(wpn); g.userData.rack.push(wpn);
   });
-  for (let i = 0; i < 2; i++) add(new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10), wood, [1.4, 0.43, -1.2 + i * 0.7]);
-  add(new THREE.BoxGeometry(0.7, 0.55, 0.6), wood, [-1.4, 0.28, -1.5]);
+  // the barrels and the chest stand on the ground beside the wagon: they are their own group, set down where the
+  // wagon stops and left there when it drives away (as part of the wagon they slid off down the road with it)
+  { const camp = new THREE.Group(); g.userData.camp = camp;
+    const put = (geo, p) => { const o = new THREE.Mesh(geo, wood); o.position.set(...p); o.castShadow = o.receiveShadow = true; camp.add(o); return o; };
+    for (let i = 0; i < 2; i++) { const b = put(new THREE.CylinderGeometry(0.3, 0.3, 0.85, 10), [1.4, 0.43, -1.2 + i * 0.7]); b.userData.half = 0.425; b.userData.r = 0.34; }
+    const c = put(new THREE.BoxGeometry(0.7, 0.55, 0.6), [-1.4, 0.28, -1.5]); c.userData.half = 0.275; c.userData.r = 0.45; }
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.35).multiplyScalar(4), toneMapped: false }));
   lamp.position.set(0.75, 2.15, -2.22); g.add(lamp);
   const light = new THREE.PointLight(0xffb060, 6, 9, 2); light.position.copy(lamp.position); g.add(light);
@@ -135,22 +139,23 @@ function wheelGround(W, w) {
   const front = (h.fl + h.fr) / 2, rear = (h.rl + h.rr) / 2, left = (h.fl + h.rl) / 2, right = (h.fr + h.rr) / 2;
   return { y: (front + rear) / 2, pitch: Math.atan2(rear - front, 2.3), roll: Math.atan2(left - right, 2.04) };
 }
-// The way out: on along the road, down the valley it runs through. A line is found along it (a little to the right
+// The way out: along the road (home = back the way the company came, away from the blight; the sutler does not drive
+// toward the demons), down the valley it runs through. A line is found along it (a little to the right
 // of the crown where it can) that keeps the wagon clear of everything standing near the road: the standing stones
 // and cross of an altar's circle (it threads between them, or swings out round them), trees and rocks; off steep
 // banks; and never turning more sharply than the pole lets it.
-function roadRoute(W, from, far = 230) {
+function roadRoute(W, from, far = 230, home = false) {
   const N = 800, S = [0]; let a = W.path.at(0);
   for (let i = 1; i <= N; i++) { const b = W.path.at(i / N); S.push(S[i - 1] + Math.hypot(b.x - a.x, b.z - a.z)); a = b; }
   const tAt = (d) => { let lo = 0, hi = N; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (S[m] < d) lo = m; else hi = m; } return (lo + (d - S[lo]) / Math.max(1e-6, S[hi] - S[lo])) / N; };
   const t0 = W.path.nearest(from.x, from.z).t, s0 = S[Math.round(t0 * N)];
   let tEnd = 0.97; if (W.cave) tEnd = Math.min(tEnd, W.cave.t0 - W.cave.e - 0.04);
   const sEnd = Math.min(S[Math.round(tEnd * N)], s0 + far);
-  const frame = (t) => { const p = W.path.at(t), q = W.path.at(Math.min(1, t + 0.002)), o = W.path.at(Math.max(0, t - 0.002)); let tx = q.x - o.x, tz = q.z - o.z; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l; return { p, tx, tz, rx: -tz, rz: tx }; };
+  const frame = (t) => { const p = W.path.at(t), q = W.path.at(Math.min(1, t + 0.002)), o = W.path.at(Math.max(0, t - 0.002)); let tx = q.x - o.x, tz = q.z - o.z; const l = (Math.hypot(tx, tz) || 1) * (home ? -1 : 1); tx /= l; tz /= l; return { p, tx, tz, rx: -tz, rz: tx }; };
   const cols = (W.colliders || []).filter((c) => c.r > 0 && c.r < 20);
   const OFF = []; for (let o = -11; o <= 11.001; o += 0.5) OFF.push(o);
   const pts = [], cost = [];
-  for (let d = s0 + 5; d < sEnd; d += 2.5) {
+  for (let d = home ? s0 - 5 : s0 + 5; home ? d > 0.5 : d < sEnd; d += home ? -2.5 : 2.5) {
     const f = frame(tAt(d)); pts.push(f);
     const near = cols.filter((c) => (c.x - f.p.x) ** 2 + (c.z - f.p.z) ** 2 < 16 * 16);
     cost.push(OFF.map((o) => {
@@ -161,7 +166,14 @@ function roadRoute(W, from, far = 230) {
       return 0.08 * Math.abs(o - 0.4) + 40 * (1 - ny) + 0.5 * Math.max(0, Math.abs(W.groundAt(x, z) - W.groundAt(f.p.x, f.p.z)) - 0.25);
     }));
   }
-  if (!pts.length) return [];
+  // going back, the road ends at the edge of the land the company rode in from: on, straight, to that edge
+  const beyond = (out) => {
+    if (!home) return out;
+    const f = frame(0); let q = out.length ? out[out.length - 1] : { x: from.x, z: from.z }, past = 0;
+    for (let k = 0; k < 40 && past < 4; k++) { q = { x: q.x + f.tx * 2.5, z: q.z + f.tz * 2.5 }; out.push(q); if (!W.inBounds(q.x, q.z)) past++; }
+    return out;
+  };
+  if (!pts.length) return beyond([]);
   // the cheapest line through them (dynamic programming over the offsets, easing across from one to the next)
   const n = pts.length, M = OFF.length, best = [cost[0].slice()], back = [];
   for (let i = 1; i < n; i++) {
@@ -173,7 +185,7 @@ function roadRoute(W, from, far = 230) {
   let j = best[n - 1].indexOf(Math.min(...best[n - 1])); const offs = new Array(n);
   for (let i = n - 1; i >= 0; i--) { offs[i] = OFF[j]; if (i > 0) j = back[i - 1][j]; }
   const sm = offs.slice(); for (let i = 1; i < n - 1; i++) sm[i] = (offs[i - 1] + offs[i] * 2 + offs[i + 1]) / 4;
-  return pts.map((f, i) => ({ x: f.p.x + f.rx * sm[i], z: f.p.z + f.rz * sm[i] }));
+  return beyond(pts.map((f, i) => ({ x: f.p.x + f.rx * sm[i], z: f.p.z + f.rz * sm[i] })));
 }
 const _frustum = new THREE.Frustum(), _pm = new THREE.Matrix4();
 
@@ -208,7 +220,7 @@ export class Shop {
   }
 
   build(world) {
-    this.dispose();
+    this.dispose(); this.clearCamp();
     if (!world || world.ch.terrain.kind === 'peak') return;
     // beside the road, just ahead of where the company starts
     const sp = world.startPos, p = world.path.at(0.04), q = world.path.at(0.05);
@@ -219,13 +231,17 @@ export class Shop {
       const cx = p.x + nx * off * sd, cz = p.z + nz * off * sd; if (!world.inBounds(cx, cz)) continue;
       let ok = Math.abs(world.heightAt(cx, cz) - py) < 0.8;
       const fl = Math.hypot(q.x - p.x, q.z - p.z) || 1, fx = (q.x - p.x) / fl, fz = (q.z - p.z) / fl;
-      for (const [a, b] of [[2, 0], [-2, 0], [0, 2.5], [0, -2.5], [0, 5]]) { const qx = cx + nx * a + fx * b, qz = cz + nz * a + fz * b; if (Math.abs(world.heightAt(qx, qz) - py) > 0.9) ok = false; }
+      for (const [a, b] of [[2, 0], [-2, 0], [0, 2.5], [0, -2.5], [0, -5]]) { const qx = cx + nx * a + fx * b, qz = cz + nz * a + fz * b; if (Math.abs(world.heightAt(qx, qz) - py) > 0.9) ok = false; }
       if (ok) { x = cx; z = cz; break search; }
     }
-    const w = this.wagon = wagonModel(this.g.engine.q); w.rotation.order = 'YXZ'; w.position.set(x, world.heightAt(x, z), z); w.rotation.y = Math.atan2(q.x - p.x, q.z - p.z) + 0.3;
+    const w = this.wagon = wagonModel(this.g.engine.q); w.rotation.order = 'YXZ'; w.position.set(x, world.heightAt(x, z), z); w.rotation.y = Math.atan2(p.x - q.x, p.z - q.z) - 0.3;   // drawn up facing back down the road, the way out
     { const s = wheelGround(world, w); w.position.y = s.y; w.rotation.x = s.pitch; w.rotation.z = s.roll; }
     this.g.scene.add(w); this.cols = [world.addCollider(x, z, 2.0), world.addCollider(x + Math.sin(w.rotation.y) * 4.2, z + Math.cos(w.rotation.y) * 4.2, 1.1)];
     this.spot = { x, z };
+    // his barrels and chest, set down on the ground beside the wagon; they stay when he goes
+    { const camp = this.camp = w.userData.camp; camp.position.set(x, 0, z); camp.rotation.y = w.rotation.y; camp.updateMatrixWorld(true);
+      for (const o of camp.children) { const P = o.getWorldPosition(new THREE.Vector3()); o.position.y = world.heightAt(P.x, P.z) + o.userData.half - 0.02; world.addCollider(P.x, P.z, o.userData.r); }
+      this.g.scene.add(camp); }
     // the sutler on his box seat, and Father Bertram standing by the wagon, a sanctuary round the wagon
     if (bodyReady()) {
       const su = makePerson('sutler', this.g.engine.q); su.root.position.set(0, 1.47 - su.hipsY + 0.06, 2.08); w.add(su.root);
@@ -300,14 +316,17 @@ export class Shop {
     _pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse); _frustum.setFromProjectionMatrix(_pm);
     const seen = _frustum.intersectsSphere(new THREE.Sphere(w.position.clone().setY(w.position.y + 1.5), 4.5));
     L.unseen = seen ? 0 : (L.unseen || 0) + dt;
-    if (L.i >= R.length - 2 || dc > 110 || (dc > 40 && L.unseen > 1.5) || L.t > 90) this.dispose();
+    // at the edge of the land, if someone is still watching, it thins away into the dark instead of vanishing
+    if (L.i >= R.length - 4 && !L.fade) { L.fade = 0.001; L.mats = new Set(); const take = (o) => { for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) L.mats.add(m); }; w.traverse(take); for (const pp of this.people || []) { pp.root.traverse(take); for (const c of pp.cloths || []) take(c.mesh); } for (const m of L.mats) { m.userData.op0 = m.opacity; m.transparent = true; } }
+    if (L.fade) { L.fade = Math.min(1, L.fade + dt / 1.4); for (const m of L.mats) m.opacity = (m.userData.op0 ?? 1) * (1 - L.fade); }
+    if (L.fade >= 1 || dc > 110 || (dc > 40 && L.unseen > 1.5) || L.t > 90) this.dispose();
   }
   depart() {
     const g = this.g, w = this.wagon, W = this.world;
     for (const c of this.cols || []) c.r = -100;   // the colliders go with them
     this.sanctuary = null; if (this.open) this.close();
-    // on along the road ahead, down the valley it runs through, and out of sight round its bends
-    const route = roadRoute(W, w.position);
+    // back down the road, the way the company came, away from the blight, and off the edge of the land
+    const route = roadRoute(W, w.position, 230, true);
     this.leave = { stage: 'board', t: 0, v: 0, i: 0, route, hoof: 0 };
     g.ui.toast('The sutler whips up his horses. Father Bertram climbs up beside him. You are on your own now.', 5);
     const pr = this.priest, drive = () => { if (this.leave) { this.leave.stage = 'drive'; g.audio.whinny?.(w.position); } };
@@ -448,5 +467,6 @@ export class Shop {
     g.app.loadout.weapon = key; account.set('evil.loadout', { ...g.app.loadout });
     if (!g.opts.solo) g.net.send('gear', { id: g.meId, weapon: key, maxHp: g.me.maxHp });
   }
+  clearCamp() { if (this.camp) { this.camp.removeFromParent(); this.camp.traverse((o) => o.geometry?.dispose?.()); this.camp = null; } }
   dispose() { if (this.people) { for (const pp of this.people) pp.dispose?.(); this.people = null; } if (this.ring) { this.ring.removeFromParent(); this.ring = null; } if (this.priest) { this.priest.root.removeFromParent(); this.priest = null; } this.sanctuary = null; if (this.wagon) { this.wagon.removeFromParent(); this.wagon.traverse((o) => o.geometry?.dispose?.()); this.wagon = null; } this.spot = null; if (this.open) this.close(); }
 }

@@ -1017,6 +1017,7 @@ export class Knight {
       Math.round(this.hp), Math.round(this.stamina),
       (this.blocking ? 1 : 0) | (this.praying ? 2 : 0) | (this.downed ? 4 : 0) | (this.sprintW > 0.5 ? 8 : 0) | (this.fury > 0 ? 16 : 0),
       +this.prayT.toFixed(2), Math.round(this.reviveProgress * 100),
+      this.prayMul || 1,   // the vigils kept at the wagon: the host counts this knight's prayer at its true pace
     ];
   }
   clipByIdx(i) {
@@ -1027,7 +1028,7 @@ export class Knight {
   puppet(dt, s, world) {
     this.time += dt;
     if (!s) return;
-    const [x, y, z, yaw, vx, vz, aIdx, actT, hp, st, f, prayT, rev] = s;
+    const [x, y, z, yaw, vx, vz, aIdx, actT, hp, st, f, prayT, rev, pm] = s; if (pm) this.prayMul = pm;
     // smooth correction toward the reported position, extrapolated by velocity
     const k = 1 - Math.exp(-12 * dt);
     this.pos.x += (x - this.pos.x) * k + vx * dt * 0.5; this.pos.z += (z - this.pos.z) * k + vz * dt * 0.5;
