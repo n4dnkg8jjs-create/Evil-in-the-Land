@@ -164,6 +164,10 @@ export function buildDragonModel() {
     const sec = [[-0.75, 0.44, 0.50, -0.44], [-0.3, 0.66, 0.68, -0.42], [0.2, 0.8, 0.76, -0.38], [0.7, 0.82, 0.74, -0.31], [1.05, 0.72, 0.6, -0.27], [1.5, 0.58, 0.43, -0.23],
       [2.0, 0.49, 0.38, -0.2], [2.45, 0.45, 0.37, -0.18], [2.8, 0.38, 0.32, -0.15], [3.02, 0.2, 0.16, -0.1], [3.1, 0.03, 0.03, -0.05]];
     const secAt = (z) => { let i = 0; while (i < sec.length - 2 && z > sec[i + 1][0]) i++; const a = sec[i], b = sec[i + 1], t = smooth(clamp((z - a[0]) / (b[0] - a[0]), 0, 1)); return [lerp(a[1], b[1], t), lerp(a[2], b[2], t), lerp(a[3], b[3], t)]; };
+    // where the skull's surface is (near enough: the section's superellipse, before the brows and cheeks are added):
+    // its height over (x, z) on top (up = 1) or below, and its half-width at height y
+    const skullY = (x, z, up) => { const [w, top, bot] = secAt(z), sa = Math.min(1, Math.pow(Math.abs(x) / w, 2.5 / 2)), c = Math.sqrt(1 - sa * sa); return up > 0 ? top * Math.pow(c, 2 / 2.2) : bot * Math.pow(c, 2 / 4.5); };
+    const skullX = (y, z) => { const [w, top, bot] = secAt(z), c = y >= 0 ? Math.pow(Math.min(1, y / top), 2.2 / 2) : Math.pow(Math.min(1, y / bot), 4.5 / 2), sa = Math.sqrt(Math.max(0, 1 - c * c)); return Math.pow(sa, 2 / 2.5) * w; };
     const L = loft(sec.map((s) => V(0, 0, s[0])), 66, 36, (u, C) => {
       const z = C.z, [w, top, bot] = secAt(z);
       return { rx: 1, ry: 1, shape: (th) => {
@@ -204,8 +208,9 @@ export function buildDragonModel() {
       H(tube([V(s * 0.6, 0.84, 0.8), V(s * 0.7, 1.08, 0.48), V(s * 0.76, 1.2, 0.05)], 0.09, 0.008, 7, 10, 0.04));
       H(tube([V(s * 0.13, 0.36, 2.52), V(s * 0.15, 0.6, 2.42), V(s * 0.16, 0.76, 2.2)], 0.075, 0.008, 6, 8, 0.04));
       // lesser spikes: along the back of the skull and the cheek
-      for (let i = 0; i < 3; i++) H(tube([V(s * (0.2 + i * 0.14), 0.62 - i * 0.07, -0.5 - i * 0.05), V(s * (0.26 + i * 0.2), 0.86 - i * 0.1, -1.05 - i * 0.08)], 0.06, 0.005, 5, 5));
-      for (let i = 0; i < 4; i++) H(tube([V(s * 0.72, -0.16 - i * 0.03, -0.1 - i * 0.2), V(s * (0.94 + i * 0.03), -0.24 - i * 0.05, -0.5 - i * 0.22)], 0.05, 0.004, 5, 4));
+      // (each rooted a little way into the skull where it really is there: placed by eye they stood off the bone in the air)
+      for (let i = 0; i < 3; i++) { const x = s * (0.2 + i * 0.14), z = -0.5 - i * 0.05, y = Math.min(0.62 - i * 0.07, skullY(x, z, 1) - 0.05); H(tube([V(x, y, z), V(s * (0.26 + i * 0.2), y + 0.24 - i * 0.03, -1.05 - i * 0.08)], 0.06, 0.005, 5, 5)); }
+      for (let i = 0; i < 4; i++) { const z = -0.1 - i * 0.2, y = -0.16 - i * 0.03, x = s * (skullX(y, z) - 0.05); H(tube([V(x, y, z), V(x + s * (0.22 + i * 0.03), y - 0.08 - i * 0.02, z - 0.4 - i * 0.02)], 0.05, 0.004, 5, 4)); }
       // teeth along the upper jaw: uneven, with long fangs toward the front
       for (let i = 0; i < 14; i++) {
         const z = 0.85 + i * 0.158 + (r() - 0.5) * 0.04, [w, , bot] = secAt(z), fang = i === 9 || i === 12 ? 2.3 : i === 11 ? 1.6 : 1;

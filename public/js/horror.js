@@ -276,14 +276,14 @@ function hornGeo(len, r, curl, seg = 12) {
 }
 // His horns: a tapering tube along a curve, ringed with growth ridges, with a slow twist in the ridging
 // (hg units: the hood's own space, +x his left, +z forward). One horn; the other is its mirror.
-const DEVIL_HORN = [[0.095, 0.16, 0.05], [0.15, 0.3, 0.035], [0.25, 0.45, -0.02], [0.38, 0.55, -0.15], [0.5, 0.585, -0.32], [0.6, 0.57, -0.5], [0.69, 0.61, -0.66], [0.76, 0.73, -0.77]];
+const DEVIL_HORN = [[0.1, 0.17, 0.06], [0.17, 0.31, 0.06], [0.29, 0.44, 0.0], [0.42, 0.5, -0.13], [0.53, 0.46, -0.28], [0.6, 0.33, -0.35], [0.65, 0.2, -0.3], [0.68, 0.12, -0.17], [0.7, 0.12, -0.04]], HORN_R = [0.1, 0.008];
 function devilHornGeo(pts, r0, r1) {
   const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), TS = 64, RS = 10;
   const g = new THREE.TubeGeometry(curve, TS, 1, RS, false), P = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
   for (let i = 0; i < P.count; i++) {
     const ring = Math.floor(i / (RS + 1)), k = i % (RS + 1), t = ring / TS, a = k / RS * TAU;
     curve.getPointAt(t, c);
-    const ridge = 1 + 0.07 * Math.max(0, Math.sin(t * 70 + Math.sin(a + t * 6) * 0.9)) * (1 - t * 0.7);   // the rings of growth, skewed round the horn
+    const ridge = 1 + 0.1 * Math.max(0, Math.sin(t * 62 + Math.sin(a + t * 6) * 0.9)) * (1 - t * 0.6);   // the rings of growth, skewed round the horn
     const flat = 1 - 0.12 * Math.cos(2 * (a - t * 2.2));                                                       // a little flattened, the flat face twisting along it
     v.fromBufferAttribute(P, i).sub(c).multiplyScalar(lerp(r0, r1, Math.pow(t, 0.8)) * ridge * flat).add(c); P.setXYZ(i, v.x, v.y, v.z);
   }
@@ -429,6 +429,7 @@ export function buildHumanDevil(def) {
   const fit = { ...def, headFit: { s: sc, off: new THREE.Vector3(hc.x, hc.y - 0.065 * sc + 0.01, hc.z - 0.11 * sc) }, robeW: 0.56, sleeveW: 0.62 };
   dressDevil.horn = null; dressDevil(B, null, fit, DU);
   for (const b of Object.values(rig.j)) b.userData.rest = b.position.clone();
+  B.guard = armSamples(B, mesh);
   root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
   return { mesh: root, B, mat, wings: null, height: 2.0 };
 }
@@ -630,7 +631,7 @@ function dressDevil(B, K, def, DU) {
   const hood = new THREE.BufferGeometry(); hood.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   const uv = []; for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) uv.push(i / NU * 3, j / NV * 2); hood.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   hood.setIndex(idx); hood.computeVertexNormals();
-  const hg = new THREE.Group(); B.head.add(hg);
+  const hg = new THREE.Group(); B.head.add(hg); B.hoodGroup = hg;
   if (def.headFit) { hg.scale.setScalar(def.headFit.s); hg.position.copy(def.headFit.off); }
   // One garment with the robe: the crown and the face opening go with the head, the cowl below the jaw belongs to
   // the shoulders (the robe's collar), and between them the cloth follows a slow, springy copy of the head, so when
@@ -660,22 +661,133 @@ function dressDevil(B, K, def, DU) {
     hg.userData.crown = { c: new THREE.Vector3(C[0], C[1], C[2]), r: new THREE.Vector3(RX + 0.01, RY + 0.03, RZ + 0.04) };   // (the skull's own shell, the peak and the brow on it)
     hg.userData.cowl = bw.isEmpty() ? null : ell(bw);
   }
-  // great horns rooted inside the skull above the temples: they break out through the crown of the hood and sweep up,
-  // out and back in a long arc, the tips turning up again. Each keeps to its own side and above the hood, so they
-  // never cross each other or pass back through the cloth, however the head turns or lolls (a ram's curl coming down
-  // round the ears ran into the shoulders when it lolled over).
+  // ram horns rooted inside the skull above the temples: they break out through the crown of the hood, sweep up, out
+  // and back, and curl down behind and forward again beside the head, the points out past the cheeks. Each keeps to its
+  // own side, wide of the hood and above the jaw, so they never cross each other or pass back through the cloth (the
+  // old curl was turned inward, and the two crossed over the crown).
   hg.userData.horns = [];
   if (def.horns) for (const s of [-1, 1]) {
     const pts = DEVIL_HORN.map(([x, y, z]) => new THREE.Vector3(s * x, y, z));
-    const h = new THREE.Mesh(devilHornGeo(pts, 0.082, 0.007), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true; h.userData.horn = true;
+    const h = new THREE.Mesh(devilHornGeo(pts, HORN_R[0], HORN_R[1]), DU ? (dressDevil.horn ||= dissolvable(HORN_MAT.clone(), DU)) : HORN_MAT); h.castShadow = true; h.userData.horn = true;
     hg.add(h);
     // the centre line, for keeping his hands off them (guardArms): every other point, with the radius there
     const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'), line = [];
-    for (let i = 0; i <= 8; i++) { const t = i / 8; line.push({ p: curve.getPoint(t), r: lerp(0.082, 0.007, Math.pow(t, 0.8)) }); }
+    for (let i = 0; i <= 8; i++) { const t = i / 8; line.push({ p: curve.getPointAt(t), r: lerp(HORN_R[0], HORN_R[1], Math.pow(t, 0.8)) }); }
     hg.userData.horns.push(line);
   }
 }
 
+// ---------------------------------------------------------------- keeping His hands out of His clothes
+// The forearms and hands as a few spheres each, measured from the skin at rest: along the forearm by its share of the
+// way from elbow to wrist (so it holds when the forearm is drawn out later), the hand in the hand's own frame.
+function armSamples(B, mesh) {
+  const out = {}, g = mesh.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, bones = mesh.skeleton.bones, v = new THREE.Vector3();
+  mesh.updateMatrixWorld(true); mesh.skeleton.update();
+  for (const k of ['R', 'L']) {
+    const fa = B['fArm' + k], hd = B['hand' + k], fi = bones.indexOf(fa), hi = bones.indexOf(hd); if (fi < 0 || hi < 0) return null;
+    const el = fa.getWorldPosition(new THREE.Vector3()), wr = hd.getWorldPosition(new THREE.Vector3()), fl = el.distanceTo(wr);
+    const fore = [0.2, 0.45, 0.7, 0.92].map((f) => ({ f, n: 0, c: new THREE.Vector3(), r: 0, pts: [] })), hand = [0, 1, 2, 3].map(() => ({ n: 0, p: new THREE.Vector3(), r: 0, pts: [] }));
+    const hpts = [];
+    for (let i = 0; i < P.count; i++) {
+      let bw = -1, bj = -1; for (let q = 0; q < 4; q++) { const w = SW.getComponent(i, q); if (w > bw) { bw = w; bj = SI.getComponent(i, q); } }
+      if (bj !== fi && bj !== hi) continue;
+      mesh.getVertexPosition(i, v); v.applyMatrix4(mesh.matrixWorld);
+      if (bj === fi) { const f = (el.y - v.y) / fl; let b = 0, bd = 9; fore.forEach((s, j) => { const d = Math.abs(s.f - f); if (d < bd) { bd = d; b = j; } }); if (bd < 0.14) fore[b].pts.push(v.clone()); }
+      else hpts.push(v.clone());
+    }
+    // the hand: four slices from the wrist to the fingertips
+    let y0 = 1e9, y1 = -1e9; for (const p of hpts) { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+    for (const p of hpts) hand[Math.min(3, Math.floor((y1 - p.y) / (y1 - y0 + 1e-6) * 4))].pts.push(p);
+    for (const s of [...fore, ...hand]) {
+      if (!s.pts.length) continue; const c = new THREE.Vector3(); for (const p of s.pts) c.add(p); c.divideScalar(s.pts.length);
+      for (const p of s.pts) s.r = Math.max(s.r, p.distanceTo(c));
+      if (s.f !== undefined) { const ax = el.clone().lerp(wr, s.f); s.off = c.clone().sub(ax); s.off.y = 0; }   // (off the bone's line, in the model's frame = the forearm's at rest)
+      else s.p = hd.worldToLocal(c.clone());
+      s.r *= 0.92; delete s.pts;   // (the slice's corners: a sphere round the whole slice is a little fat)
+    }
+    out[k] = { ua: B['uArm' + k], fa, hd, fore: fore.filter((s) => s.r > 0), hand: hand.filter((s) => s.r > 0) };
+  }
+  return out;
+}
+const _gv = Array.from({ length: 10 }, () => new THREE.Vector3()), _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gm = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
+const _gHorn = [], _gS = new THREE.Vector3();
+// how far a sphere (world centre p, world radius r) is into His robe; sets out to where it must go to clear it
+function intoRobe(robe, p, r, out) {
+  const u = robe.userData, pr = u.prof, g = _gv[6].copy(p).applyMatrix4(_gm), y = g.y;
+  if (y > pr[0][1] || y < pr[pr.length - 1][1]) return 0;
+  let i = 1; while (i < pr.length - 1 && pr[i][1] > y) i++;
+  const a = pr[i - 1], b = pr[i], rad = lerp(a[0], b[0], (a[1] - y) / (a[1] - b[1] || 1)), t = clamp(-y / u.L, 0, 1);
+  // the cloth's own stir in the wind (the robe shader's formula, at this height and side), so the hand is kept out of
+  // where the cloth is now, not where it hangs in still air
+  const hang = Math.max(0, u.uTop - y), wx = ROBE_U.uWind.value.x, wz = ROBE_U.uWind.value.y, T = ROBE_U.uTime.value;
+  let dx = 0, dz = 0;
+  if (wx || wz) {
+    const gust = 0.75 + 0.25 * Math.sin(T * 1.7) + 0.15 * Math.sin(T * 4.3 + 1), ang = Math.atan2(g.x, g.z), flap = Math.sin(T * 7 - hang * 9 + ang * 2) * 0.18 + Math.sin(T * 11 - hang * 14) * 0.08;
+    const gl = Math.hypot(g.x, g.z) || 1, wl = Math.hypot(wx, wz) || 1, lee = 0.6 + 0.4 * (g.x * wx + g.z * wz) / (gl * wl), k = hang * (0.6 + hang * 0.5) * gust * lee;
+    dx = wx * k + flap * wz * hang; dz = wz * k + flap * wx * hang;
+  }
+  const nx = g.x - dx, nz = (g.z - dz - 0.07) / 0.82, rho = Math.hypot(nx, nz) || 1e-4;
+  const rmax = rad + 0.027 + 0.095 * t + u.sway * hang * hang * 0.85;   // the deepest pleat and wrinkle there, and its sway
+  // the sphere's radius in the robe's units, in the direction it would go out
+  const sx = _gS.x, sz = _gS.z, m = r / Math.hypot(nx / rho * sx, nz / rho * 0.82 * sz);
+  const d = rmax + m - rho; if (d <= 0) return 0;
+  const k = (rmax + m) / rho; out.set(nx * k + dx, y, nz * k * 0.82 + 0.07 + dz).applyMatrix4(robe.matrixWorld).sub(p);
+  return d * Math.min(sx, sz);
+}
+// ... into an ellipsoid (centre c, radii e) in the frame of matrix M (inverse Mi); s: that frame's scale in the world
+function intoEll(M, Mi, s, c, e, p, r, out) {
+  const q = _gv[7].copy(p).applyMatrix4(Mi).sub(c), m = r / s, ex = e.x + m, ey = e.y + m, ez = e.z + m;
+  const k = Math.hypot(q.x / ex, q.y / ey, q.z / ez); if (k >= 1) return 0;
+  if (k < 1e-4) q.set(0, 0, ez); else q.divideScalar(k);   // (out along the line from the centre)
+  out.copy(q).add(c).applyMatrix4(M).sub(p); return (1 - k) * Math.min(ex, ey, ez) * s;
+}
+// After the pose is set, each arm is swung at the shoulder (as little as will do) until no part of the forearm or the
+// hand is inside the robe, the hood or the horns: so whatever a pose asks, His hands never pass through His clothes.
+// It works from the bones and a few spheres: no geometry is read and nothing is allocated. Call after plantRobe.
+export function guardArms(B) {
+  const G = B.guard; if (!G) return;
+  const robe = B.robe && B.robe.visible ? B.robe : null, hg = B.hoodGroup, ud = hg?.userData;
+  if (robe) { robe.updateMatrixWorld(); _gm.copy(robe.matrixWorld).invert(); _gS.setFromMatrixScale(robe.matrixWorld); }
+  let hs = 1, cs = 1, nh = 0;
+  if (hg) {
+    _gm2.copy(hg.matrixWorld).invert(); hs = Math.cbrt(Math.abs(hg.matrixWorld.determinant()));
+    _gm3.copy(B.chest.matrixWorld).invert(); cs = Math.cbrt(Math.abs(B.chest.matrixWorld.determinant()));
+    for (const line of ud.horns || []) for (const n of line) { const w = _gHorn[nh] || (_gHorn[nh] = { p: new THREE.Vector3(), r: 0, end: false }); w.p.copy(n.p).applyMatrix4(hg.matrixWorld); w.r = n.r * hs; w.end = n === line[line.length - 1]; nh++; }
+  }
+  const ws = Math.cbrt(Math.abs(B.chest.matrixWorld.determinant()));   // (the model's scale in the world: the samples were measured at 1)
+  const push = _gv[8], best = _gv[9], tmp = _gv[5];
+  for (const k of ['R', 'L']) {
+    const A = G[k]; if (!A) continue;
+    for (let it = 0; it < 5; it++) {
+      let bd = 0;
+      const el = _gv[0].setFromMatrixPosition(A.fa.matrixWorld), wr = _gv[1].setFromMatrixPosition(A.hd.matrixWorld);
+      const ns = A.fore.length + A.hand.length;
+      for (let si = 0; si < ns; si++) {
+        const S = si < A.fore.length ? A.fore[si] : A.hand[si - A.fore.length], p = _gv[2], r = S.r * ws;
+        if (S.f !== undefined) p.copy(el).lerp(wr, S.f).add(tmp.copy(S.off).transformDirection(A.fa.matrixWorld).multiplyScalar(S.off.length() * ws));
+        else p.copy(S.p).applyMatrix4(A.hd.matrixWorld);
+        let d;
+        if (robe && (d = intoRobe(robe, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
+        if (ud && (d = intoEll(hg.matrixWorld, _gm2, hs, ud.crown.c, ud.crown.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
+        if (ud?.cowl && (d = intoEll(B.chest.matrixWorld, _gm3, cs, ud.cowl.c, ud.cowl.r, p, r, push)) > bd) { bd = d; best.copy(push); _gv[3].copy(p); }
+        for (let h = 0; h + 1 < nh; h++) {   // the horns, segment by segment
+          const a = _gHorn[h], b = _gHorn[h + 1]; if (a.end) continue;
+          const ab = tmp.subVectors(b.p, a.p), t = clamp(_gv[4].subVectors(p, a.p).dot(ab) / (ab.lengthSq() || 1), 0, 1), c = _gv[4].copy(a.p).addScaledVector(ab, t);
+          const rr = lerp(a.r, b.r, t) + r, dd = p.distanceTo(c);
+          if (dd < rr && rr - dd > bd) { bd = rr - dd; best.subVectors(p, c).multiplyScalar(bd / (dd || 1e-4)); _gv[3].copy(p); }
+        }
+      }
+      if (bd < 0.002 * ws) break;
+      // swing the upper arm at the shoulder, about the axis that carries that point most directly out
+      const sh = _gv[0].setFromMatrixPosition(A.ua.matrixWorld), arm = _gv[1].subVectors(_gv[3], sh), L = arm.length(); if (L < 1e-3) break;
+      const ax = _gv[2].crossVectors(arm, best); const al = ax.length(); if (al < 1e-8) break;
+      const ang = Math.min(0.5, Math.atan2(best.length() * 1.1 + 0.004 * ws, L));
+      // into the frame of the shoulder's parent
+      A.ua.parent.getWorldQuaternion(_gq); ax.divideScalar(al).applyQuaternion(_gq.invert());
+      _gq2.setFromAxisAngle(ax, ang); A.ua.quaternion.premultiply(_gq2); A.ua.updateMatrixWorld(true);
+    }
+  }
+}
 // ---------------------------------------------------------------- motion
 const e = (b, x, y, z) => b.rotation.set(x * D2R, y * D2R, z * D2R);
 const add = (b, x, y, z) => { b.rotation.x += x * D2R; b.rotation.y += y * D2R; b.rotation.z += z * D2R; };

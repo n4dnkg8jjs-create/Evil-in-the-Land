@@ -277,7 +277,7 @@ function ribGeo(i, s, cut = 1, lo = false, far = false, mid = false) {   // the 
   const y = -i * 0.023, w = i < 7 ? 0.065 + i * 0.011 : 0.142 - (i - 7) * 0.012, reach = i < 7 ? 1 : i < 10 ? 0.75 : 0.45;
   const P = [[s * 0.012, y, -0.012], [s * 0.05, y - 0.004, -0.04], [s * w * 0.95, y - 0.02, -0.012], [s * w, y - 0.045, 0.04], [s * w * 0.72, y - 0.075, 0.095], [s * 0.035, y - 0.092, 0.118]]
     .slice(0, Math.max(3, Math.round(6 * reach * cut))).map((p) => new THREE.Vector3(...p));
-  const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(P), far ? 3 : lo ? 6 : mid ? 8 : 12, far ? 0.007 : 0.0045, lo ? 3 : 4, false);
+  const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(P), far ? 3 : lo ? 6 : mid ? 8 : 12, far ? 0.007 : 0.0045, lo ? 3 : 6, false);   // (round in section: four sides read as a square bar)
   tg.scale(1, 1.25, 1); return solid(tg, 50 + i);
 }
 // A plain rod through points, n-sided, its radius given at each point (shafts, finger bones). Indexed, smooth round.
@@ -351,7 +351,10 @@ export function boneLibrary(level = 'hi') {
       else if (!far || i % 2 === 0) { const vg = solid(new THREE.BoxGeometry(0.03, far ? 0.04 : 0.018, 0.05), 32); vg.translate(0, -i * 0.023, -0.015); parts.push(vg); }
       for (const s of [-1, 1]) { const q = r(); if (q < 0.12 || (far && i % 2)) continue; parts.push(ribGeo(i, s, q < 0.35 ? 0.55 + r() * 0.3 : 1, lo, far, k > 1 && !lo)); }
     }
-    const st = solid(new THREE.BoxGeometry(0.03, 0.14, 0.008, 2, lo ? 1 : 6, 1), 77); st.rotateX(0.25); st.translate(0.01, -0.11, 0.1); parts.push(st);
+    // the breastbone: the broad manubrium, the long body narrowing and swelling again, the small point below; flat
+    const sy = [0.07, 0.058, 0.04, 0.02, -0.01, -0.035, -0.055, -0.07], sr = [0.011, 0.02, 0.016, 0.012, 0.014, 0.015, 0.01, 0.004];
+    const sg = loft(sy.map((y) => new THREE.Vector3(0, y, 0)), sr, lo ? 4 : 8, true); sg.scale(1, 1, 0.32); sg.computeVertexNormals();
+    const st = solid(sg, 77); st.rotateX(0.25); st.translate(0.01, -0.11, 0.1); parts.push(st);
     return mergeAll(parts);
   });
   // a hand or foot's worth of small bones, scattered flat

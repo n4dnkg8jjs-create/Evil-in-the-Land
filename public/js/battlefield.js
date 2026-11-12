@@ -91,7 +91,7 @@ class Soup {
   // (lining and pane co-ordinates), o.tear (torn cloth: how far inside the cloth, in any units, < 0 in a hole; the
   // tear itself is cut by the shader, finely, so the holes and the ragged edges are not the squares of this grid).
   // wrap joins the last column to the first. Normals are made to face out of a tube ('out') or upward ('up').
-  sheet(nu, nv, fn, { wrap = false, face = 'out', M = null, name = null, seam = false } = {}) {
+  sheet(nu, nv, fn, { wrap = false, face = 'out', M = null, name = null, seam = false, earth = false } = {}) {
     const o = {}, base = this.n, cnt = nu * nv, st = new Uint8Array(cnt); this.need(cnt, cnt * 6);
     const P = this.P, N = this.N, C = this.C, L = this.L, Q = this.Q; let ly = 1e9, lx = 0, lz = 0, raw = null;
     for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
@@ -103,7 +103,7 @@ class Soup {
       if (!o.skip && o.y < ly) { ly = o.y; lx = o.x; lz = o.z; }
       P[q] = o.x; P[q + 1] = o.y; P[q + 2] = o.z; N[q] = N[q + 1] = N[q + 2] = 0; C[q] = o.r; C[q + 1] = o.g; C[q + 2] = o.b; this.A[base + k] = o.m; L[q] = o.lr; L[q + 1] = o.lg; L[q + 2] = o.lb; Q[q] = o.px; Q[q + 1] = o.py; Q[q + 2] = o.pane;
     }
-    const dt = raw ? this.tearField(base, nu, nv, raw, wrap) : null;
+    const dt = raw ? this.tearField(base, nu, nv, raw, wrap, earth) : null;
     const I = this.I, I0 = this.ni, ni = wrap ? nu : nu - 1; let k = I0;
     for (let j = 0; j < nv - 1; j++) for (let i = 0; i < ni; i++) {
       const a = j * nu + i, b = j * nu + (i + 1) % nu, c = a + nu, d = b + nu;
@@ -133,7 +133,8 @@ class Soup {
   // A sheet's tear as a distance in metres (its value over how steeply it changes across the grid, so the shader's
   // fraying is the same width on a narrow sleeve as on a broad flag), the sheet's own co-ordinates in metres (its
   // threads), and which way the edge runs across them; into T. Not for a wrapped sheet (its co-ordinates would jump).
-  tearField(base, nu, nv, raw, wrap) {
+  // earth: not cloth but the edge of a patch of earth (no threads, no rot: marked by a 2 for the edge's run).
+  tearField(base, nu, nv, raw, wrap, earth = false) {
     const P = this.P, T = this.T, cnt = nu * nv, um = new Float32Array(cnt), vm = new Float32Array(cnt), d = new Float32Array(cnt);
     const dist = (a, b) => { const p = (base + a) * 3, q = (base + b) * 3; return Math.hypot(P[p] - P[q], P[p + 1] - P[q + 1], P[p + 2] - P[q + 2]); };
     for (let j = 0; j < nv; j++) for (let i = 1; i < nu; i++) { const k = j * nu + i; um[k] = um[k - 1] + dist(k, k - 1); }
@@ -141,8 +142,8 @@ class Soup {
     for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
       const k = j * nu + i, il = i > 0 ? k - 1 : wrap ? k + nu - 1 : k, ir = i < nu - 1 ? k + 1 : wrap ? k - nu + 1 : k, jd = j > 0 ? k - nu : k, ju = j < nv - 1 ? k + nu : k;
       const du = dist(il, ir), dv = dist(jd, ju), gu = du > 1e-5 ? (raw[ir] - raw[il]) / du : 0, gv = dv > 1e-5 ? (raw[ju] - raw[jd]) / dv : 0;
-      const dd = clamp(raw[k] / Math.max(Math.hypot(gu, gv), 2) - TEAR_EAT, -0.2, 0.2), q = (base + k) * 4; d[k] = dd;
-      T[q] = -2 - dd; T[q + 1] = um[k]; T[q + 2] = vm[k]; T[q + 3] = Math.abs(gu) / (Math.abs(gu) + Math.abs(gv) + 1e-6);
+      const dd = clamp(raw[k] / Math.max(Math.hypot(gu, gv), 2) - (earth ? 0 : TEAR_EAT), -0.2, 0.2), q = (base + k) * 4; d[k] = dd;
+      T[q] = -2 - dd; T[q + 1] = earth ? 0 : um[k]; T[q + 2] = earth ? 0 : vm[k]; T[q + 3] = earth ? 2 : Math.abs(gu) / (Math.abs(gu) + Math.abs(gv) + 1e-6);
     }
     return d;
   }
@@ -232,8 +233,11 @@ ${RAG_GLSL}`)
 float fg1 = fvn(vOP * 70.0), fg2 = fvn(vOP * 330.0), ragPx = max(fwidth(vTear.y) + fwidth(vTear.z), 1e-5) * 0.7, rot = 0.0;
 if (vTear.x < -1.0) {
   float f = ragIn(vTear, vOP);
-  if (f < 0.0 && ragThreads(vTear, f, ragPx) < 0.5) discard;
-  rot = 1.0 - smoothstep(0.0, 0.022, f);
+  if (vTear.w > 1.5) { if (f < 0.0) discard; }   // the edge of the earth risen round him
+  else {
+    if (f < 0.0 && ragThreads(vTear, f, ragPx) < 0.5) discard;
+    rot = 1.0 - smoothstep(0.0, 0.022, f);
+  }
   if (vMetal > 0.3) {   // mail: rows of rings, each row set half a ring over; a dull grey where they are too small to see
     vec2 mc = vTear.yz / 0.0075; mc.x += 0.5 * floor(mc.y); float rr = length(fract(mc) - 0.5);
     float ring = smoothstep(0.2, 0.27, rr) * (1.0 - smoothstep(0.4, 0.5, rr)), see = clamp(0.0075 / ragPx - 2.0, 0.0, 1.0);
@@ -316,18 +320,20 @@ function drape(S, pts, o) {
     if (o.rings) w += 0.9 * Math.sin(t * o.rings * PI + n1 * 2.5);
     if (o.folds) w += 0.8 * Math.sin(a * o.folds + n1 * 3 + t * 3);
     const hv = o.hole ? o.hole(t, a, n1, n2) : 1, sag = (o.sag || 0) * (1 - sstep(0, 0.32, hv));
-    const rw = o.rw(t, a), rv = sa > 0 ? o.rf(t, a) : (o.rb ? o.rb(t, a) : o.rf(t, a)), k = (1 + (w * wr) / Math.max(0.025, Math.min(rw, rv))) * (1 - 0.3 * sag);
+    const rw = o.rw(t, a), rv = sa > 0 ? o.rf(t, a) : (o.rb ? o.rb(t, a) : o.rf(t, a)), k = (1 + (w * wr) / Math.max(0.025, Math.hypot(ca * rw, sa * rv))) * (1 - 0.3 * sag);   // (a wrinkle stands as far out from a flat side as from a round one)
     q.x = c.x + (lat.x * ca * rw + up.x * sa * rv) * k; q.y = c.y + (lat.y * ca * rw + up.y * sa * rv) * k - 0.014 * sag; q.z = c.z + (lat.z * ca * rw + up.z * sa * rv) * k;
-    if (q.y < floor + 0.004) { q.y = floor - 0.008; q.down = true; }
-    if (o.px) q.tear = hv; else q.skip = hv < 0;
+    const above = q.y - floor; if (q.y < floor + 0.004) { q.y = floor - 0.008; q.down = true; }
+    if (o.px) q.tear = Math.min(hv, (above - 0.005) * 22); else q.skip = hv < 0;   // (close by, what lay on the wet earth has rotted off it: the edge there is a torn one, not where the cloth meets the ground)
     col.lin = null; col.panes = 0; o.color(t, a, col, n1, n2);
     const big = NZ.n2(seed * 0.3 + q.x * 2.2, q.z * 2.2), d = (0.74 + 0.2 * n2 + 0.16 * big) * (1 + clamp(w * 0.55, -1, 1) * 0.3);
     q.r = col[0] * d; q.g = col[1] * d; q.b = col[2] * d; q.m = col.m || 0; col.m = 0;
     if (col.lin && col.panes) { q.lr = col.lin[0] * d * 0.8; q.lg = col.lin[1] * d * 0.8; q.lb = col.lin[2] * d * 0.8; q.px = u * col.panes; q.py = t * (col.ties || 3); q.pane = 1; }
   }, { wrap: false, seam: true, face: 'out', name: o.name });
 }
-// the earth risen round what lies on it, and dark under it. segs: [a, b, radius] of whatever lies there
-function mound(S, segs, cell, grow = 1) {
+// the earth risen round what lies on it, and dark under it. segs: [a, b, radius] of whatever lies there. Close by
+// (px) it is a low dark rise lying just on the ground, its edge cut finely by the shader, ragged like trodden earth;
+// far off a coarser one going down under the ground at its edge.
+function mound(S, segs, cell, grow = 1, px = false) {
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (const [a, b, r] of segs) for (const p of [a, b]) { x0 = Math.min(x0, p.x - r - 0.3); x1 = Math.max(x1, p.x + r + 0.3); z0 = Math.min(z0, p.z - r - 0.3); z1 = Math.max(z1, p.z + r + 0.3); }
   const nu = Math.max(3, Math.ceil((x1 - x0) / cell) + 1), nv = Math.max(3, Math.ceil((z1 - z0) / cell) + 1);
@@ -335,10 +341,12 @@ function mound(S, segs, cell, grow = 1) {
   S.sheet(nu, nv, (u, v, q) => {
     const x = lerp(x0, x1, u), z = lerp(z0, z1, v), n = NZ.n2(x * 3.1 + 7, z * 3.1), n2 = NZ.n2(x * 11, z * 11 + 3), d = dist(x, z) + n * 0.05;
     const k = 1 - sstep(-0.02, 0.2 * grow, d);
-    q.x = x; q.z = z; q.y = -0.04 + (0.048 + 0.014 * n2) * k; q.skip = k < 0.2;   // it goes under the ground at its edge, and no further
+    q.x = x; q.z = z;
+    if (px) { q.y = 0.004 + (0.011 + 0.006 * n2) * sstep(0.05, -0.06, d); q.tear = 0.035 - d; }
+    else { q.y = -0.04 + (0.048 + 0.014 * n2) * k; q.skip = k < 0.2; }   // it goes under the ground at its edge, and no further
     const g = (0.78 + 0.3 * n2) * (1 - 0.3 * sstep(0.12, -0.05, d));   // darker close under him, where it stays damp
-    q.r = EARTH[0] * g; q.g = EARTH[1] * g; q.b = EARTH[2] * g; if (globalThis.__BFDBG) { q.r = 1; q.g = q.b = 0; }
-  }, { face: 'up' });
+    q.r = EARTH[0] * g; q.g = EARTH[1] * g; q.b = EARTH[2] * g;
+  }, { face: 'up', earth: px });
 }
 // drop a thing placed by m until its lowest point is `sink` into the ground
 function rest(thing, m, sink = 0.006) {
@@ -619,7 +627,7 @@ function buildMan(spec, lod) {
     const prof = [[0, shirt ? 0.17 : 0.1, 0.04, 0.06], [0.16, 0.165, 0.076, 0.085], [0.36, 0.13, 0.012, 0.07], [0.52, 0.155, 0.08, 0.078], [0.7, 0.16, 0.1, 0.085], [0.88, 0.185, 0.06, 0.075], [1, 0.07, 0.045, 0.05]];
     const tab = (t, q) => { for (let i = 1; i < prof.length; i++) if (t <= prof[i][0]) { const a = prof[i - 1], b = prof[i], u = sstep(a[0], b[0], t); return lerp(a[q], b[q], u); } return prof[prof.length - 1][q]; };
     const shrink = mummy ? 0.86 : 1, tW = 0.34;
-    drape(S, pts, { ns: N(24, 8), ring: N(22, 8), seed: sd + 77, wr: mummy ? 0.003 : 0.012, fT: 5, folds: mummy ? 0 : 3, name: 'trunk', axes: (t) => blend(sstep(0.2, 0.62, t)), px: !lo, sag: mummy ? 0.4 : 1,
+    drape(S, pts, { ns: lod ? N(24, 8) : 32, ring: lod ? N(22, 8) : 28, seed: sd + 77, wr: mummy ? 0.003 : 0.012, fT: 5, folds: mummy ? 0 : 3, name: 'trunk', axes: (t) => blend(sstep(0.2, 0.62, t)), px: !lo, sag: mummy ? 0.4 : 1,
       rw: (t) => tab(t, 1) * shrink, rf: (t, a) => tab(t, 2) * shrink * (mummy ? 1 + 0.05 * Math.sin(t * 62) * sstep(0.45, 0.55, t) * (1 - sstep(0.85, 0.9, t)) : 1) + (t > 0.08 && t < 0.26 ? 0.022 * Math.exp(-(((Math.abs(Math.cos(a)) - 0.72) / 0.16) ** 2)) : 0), rb: (t) => tab(t, 3) * shrink,
       hole: (t, a, n1, n2) => {   // (smooth throughout: a step in it would be a straight edge across the cloth)
         const sa = Math.sin(a), ca = Math.cos(a), hem = Math.max((t - 0.965) * 10, shirt ? -1 : (0.03 - t) * 10);   // the collar holds, and the waistband
@@ -647,7 +655,7 @@ function buildMan(spec, lod) {
   // ---- what killed him, and what he held
   if (O.bolt && !lo) { const p = cc.clone().addScaledVector(FC.l, (r() - 0.5) * 0.14).addScaledVector(FC.s, (r() - 0.5) * 0.16), d = V((r() - 0.5) * 0.8, 1, (r() - 0.5) * 0.8).normalize(); rod(S, p.clone().addScaledVector(d, -0.03), p.clone().addScaledVector(d, 0.3), 0.006, 0.0055, ID, wood, 4); }
   if (O.sword) { const L = limbs[1], az = L.a2 + 0.5 + r() * 0.8, m = new THREE.Matrix4().makeRotationY(az).multiply(new THREE.Matrix4().makeRotationX(0.035)).setPosition(L.W.x + Math.sin(az) * 0.12, 0, L.W.z + Math.cos(az) * 0.12); const K = new Soup(); katzbalger(K, ID, lo); S.join(K, rest(K, m, 0.006), 'sword'); segs.push([L.W, L.W.clone().add(dirAz(az).multiplyScalar(0.7)), 0.03]); }
-  mound(S, segs, lo ? 0.2 : mid ? 0.13 : 0.075);
+  mound(S, segs, lo ? 0.2 : mid ? 0.13 : 0.075, 1, !lo);
   S.stain(0.075, 0.8);
   return S;
 }
