@@ -944,27 +944,15 @@ diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.014, 0.012), bl * 0.75);
 float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.85) * 0.92;
 float ny = normalize(vFN).y;
 float hoar = (0.14 + 0.16 * vn(vFP * 41.0) * vn(vFP * 11.0 + 2.0) * 2.0) * mix(0.35, 1.0, uSnow) * (1.0 - vFx.x * 0.3);
-float rime = smoothstep(0.55, 0.95, ny + (vn(vFP * 19.0) - 0.5) * 0.3) * mix(0.15, mix(0.5, 0.62, vFx.x), uSnow) * (0.6 + 0.4 * vn(vFP * 5.0));
+float rime = smoothstep(0.55, 0.95, ny + (vn(vFP * 19.0) - 0.5) * 0.3) * mix(0.12, mix(0.3, 0.55, vFx.x), uSnow) * (0.6 + 0.4 * vn(vFP * 5.0));
 rime = max(rime, (1.0 - step(0.5, vFx.w + vFx.y + vFx.z + vFx.x)) * step(0.0, ny - 2.0));   // (drifts are snow already)
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), hoar);
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.2;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(vRough, 0.9, max(rime, hoar * 1.5));')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFx.x * 0.75 * (1.0 - rime) * (1.0 - hoar);');
   };
-  m.customProgramCacheKey = () => 'frostBaked5';
+  m.customProgramCacheKey = () => 'frostBaked6';
   return m;
-}
-// a garment round a bone, cut into panels with gaps (the slashes); the lining puffs out between them
-function slashed(J, bone, profile, outer, inner, panels, shape = () => {}) {
-  const g = new THREE.Group(), seg = Math.max(2, Math.round(28 / panels));
-  for (let k = 0; k < panels; k++) {
-    const ph = (k / panels) * Math.PI * 2, geo = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r * 1.04, y)), seg, ph, (Math.PI * 2 / panels) * 0.62);
-    const p = geo.attributes.position, v = new THREE.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); shape(v); p.setXYZ(i, v.x, v.y, v.z); } geo.computeVertexNormals();
-    g.add(new THREE.Mesh(geo, outer));
-  }
-  // the lining: puffed fuller between the slashes
-  g.add(new THREE.Mesh(lathe(profile.map(([r, y], i) => [r * (i && i < profile.length - 1 ? 0.99 : 0.9), y]), 24, (v, a) => { const r = Math.hypot(v.x, v.z) * (1 + Math.max(0, Math.sin(a * panels)) * 0.05); v.x = Math.sin(a) * r; v.z = Math.cos(a) * r; shape(v); }), inner));
-  J[bone].add(g); return g;
 }
 const HOSE = [0x3e3a32, 0x4a2a22, 0x2e3236, 0x564634, 0x3a3328];
 const DOUBLET = [[0x6a2a20, 0xb8a888], [0x8a6a32, 0x5a1a14], [0x34404a, 0x9a8a70], [0x5a4a38, 0x6a2a20], [0x7a7462, 0x3a2a20]];
@@ -1092,26 +1080,23 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const shirtL = skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y >= hipsY - 0.01) || (b === 'neck' && v.y < headY - 0.012), 0.006, shirt, 2, 'shirt|' + hipsY + '|' + headY);   // over the top of the hose at the waist, no gap between
   const gambeson = seed % 3 === 1, plate = seed % 3 === 0 || seed % 5 === 0;
   const [cO, cI] = pick(DOUBLET);
+  const orK = (...K) => { const o = new Uint8Array(K[0].length); for (const k of K) for (let i = 0; i < o.length; i++) o[i] |= k[i]; return o; };
   if (gambeson) {   // quilted linen over him, body and sleeves, down over the hips
     const q = frostMat(pick([0x7a6440, 0x5a6068, 0x7a4a32, 0x6a6250]), 0.95, 0, 1, { quilt: 1 });
     shirtL.userData.under = skinLayer(body, (b, v) => TORSO.has(b) || ARMS.has(b) || (b === 'hips' && v.y > hipsY - 0.1) || (b === 'neck' && v.y < headY - 0.06), 0.024, q, 30, 'gambeson|' + hipsY + '|' + headY).userData.keep;
   } else {          // a doublet fitted to him; the sleeves puffed and slashed to show the shirt and lining
-    const o = frostMat(cO, 0.9), i = frostMat(cI, 0.9);
-    shirtL.userData.under = skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24, 'doublet|' + hipsY + '|' + headY).userData.keep;
-    for (const k of ['R', 'L']) { slashed(J, 'uArm' + k, [[0.088, 0.03], [0.108, -0.06], [0.11, -0.16], [0.09, -0.3]], o, i, 7); slashed(J, 'fArm' + k, [[0.07, 0.02], [0.074, -0.08], [0.058, -0.2]], o, i, 6); }
+    const dbl = skinLayer(body, (b, v) => TORSO.has(b) || (b === 'hips' && v.y > hipsY - 0.06) || (b === 'neck' && v.y < headY - 0.07), 0.013, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 24, 'doublet|' + hipsY + '|' + headY);
+    // the sleeves, full and slashed down their length: fitted to the arm, so they bend with it at the elbow
+    const slv = skinLayer(body, (b) => ARMS.has(b), 0.02, frostMat(cO, 0.9, 0, 1, { weave: 1 }), 14, 'sleeves');
+    slv.userData.slash = { lin: new THREE.Color(cI), panels: 7 };
+    shirtL.userData.under = orK(dbl.userData.keep, slv.userData.keep);
   }
-  // the upper hose: puffed and slashed to above the knee (the Landsknecht's pluderhose)
-  { const o = frostMat(hose, 0.92), i = frostMat(pick([0x8a2a20, 0xa89878, 0x5a5a62]), 0.9);
-    for (const k of ['R', 'L']) slashed(J, 'thigh' + k, [[0.112, 0.06], [0.132, -0.08], [0.126, -0.26], [0.09, -0.42]], o, i, 6); }
-  // shoes: plain leather, broad at the toe
-  // (the 'cow's mouth': a flat sole, low sides, the toe as broad as the ball of the foot and cut off square)
-  { const RN = 9, SN = 14, pos = [], idx = [];
-    for (let j = 0; j <= RN; j++) { const t = j / RN, z = -0.08 + 0.315 * t, wd = (0.044 + 0.024 * Math.sin(Math.min(1, t * 1.25) * Math.PI * 0.5)) * (j === 0 || j === RN ? 0.72 : 1) * (t > 0.88 ? 0.97 : 1), ht = t < 0.3 ? 0.095 : 0.095 - 0.03 * Math.min(1, (t - 0.3) / 0.45);
-      for (let a = 0; a < SN; a++) { const an = (a / SN) * Math.PI * 2, c = Math.cos(an), sn = Math.sin(an), sq = Math.sign(c) * Math.abs(c) ** 0.6; pos.push(sq * wd, -0.102 + (sn > 0 ? sn ** 0.7 * ht * (j === 0 || j === RN ? 0.7 : 1) : sn * 0.012), z); } }
-    for (let j = 0; j < RN; j++) for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; idx.push(i0, i0 + SN, i1, i1, i0 + SN, i1 + SN); }
-    for (const [j, f] of [[0, 1], [RN, 0]]) { const c = pos.length / 3; pos.push(0, -0.07, j ? 0.235 : -0.08); for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; if (f) idx.push(c, i0, i1); else idx.push(c, i1, i0); } }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-    for (const k of ['R', 'L']) J['foot' + k].add(new THREE.Mesh(g, leather)); }
+  // the upper hose: full, slashed, to the knee (the Landsknecht's pluderhose), fitted to the thighs
+  const upper = skinLayer(body, (b, v) => b === 'thighR' || b === 'thighL' || (b === 'hips' && v.y < hipsY - 0.03), 0.026, frostMat(hose, 0.92, 0, 1, { weave: 1 }), 16, 'upperhose|' + hipsY);
+  upper.userData.slash = { lin: new THREE.Color(pick([0x8a2a20, 0xa89878, 0x5a5a62, 0x8a6a32])), panels: 6 };
+  // shoes: leather fitted over the stockinged foot, broad at the toe
+  const shoes = skinLayer(body, (b) => b === 'footR' || b === 'footL', 0.011, leather, 6, 'shoes');
+  hoseL.userData.under = orK(upper.userData.keep, shoes.userData.keep);
   // a belt
   J.hips.add(new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.016, 6, 24).rotateX(Math.PI / 2).scale(1, 1, 0.82).translate(0, 0.06, 0.012), frostMat(0x2a2018, 0.7)));
   // a breastplate over the doublet on some: a rounded peascod front, strapped at the back
@@ -1212,12 +1197,6 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const SUB = { spine: ['spine', 'chest'], thighR: ['thighR', 'shinR', 'footR'], thighL: ['thighL', 'shinL', 'footL'], clavR: ['uArmR', 'fArmR', 'handR'], clavL: ['uArmL', 'fArmL', 'handL'], neck: ['neck', 'head'] };
   const SUBPEN = { spine: ['spine', 'chest', 'clavR', 'clavL', 'neck'], thighR: SUB.thighR, thighL: SUB.thighL, clavR: SUB.clavR, clavL: SUB.clavL, neck: SUB.neck };
   const thin = (ids, k) => (ids || []).filter((_, i) => i % k === 0);
-  // What lies hidden under the slashed garments (their linings are closed): the hose all down the thigh, and with a
-  // doublet the shirt along each arm (but not at the joints, nor the cuff at the wrist). Not drawn.
-  { const BP = body.geometry.attributes.position, BI = body.geometry.attributes.skinIndex, BW = body.geometry.attributes.skinWeight, v = new THREE.Vector3();
-    const span = (bones) => { const out = new Uint8Array(BP.count); for (let i = 0; i < BP.count; i++) { let bi = BI.getX(i), bw = BW.getX(i); for (const [ii, ww] of [[BI.getY(i), BW.getY(i)], [BI.getZ(i), BW.getZ(i)], [BI.getW(i), BW.getW(i)]]) if (ww > bw) { bw = ww; bi = ii; } const r = bones[JOINTS[bi]]; if (!r || bw < 0.8) continue; v.fromBufferAttribute(BP, i).applyMatrix4(body.skeleton.boneInverses[bi]); if (v.y > r[0] && v.y < r[1]) out[i] = 1; } return out; };
-    hoseL.userData.hide = span({ thighR: [-0.4, 0.03], thighL: [-0.4, 0.03] });
-    if (!gambeson) shirtL.userData.hide = span({ uArmR: [-0.28, 0.0], uArmL: [-0.28, 0.0], fArmR: [-0.18, 0.0], fArmL: [-0.18, 0.0] }); }
   // Of his body, only what no garment covers is drawn (head, neck, hands); the hands thinned (vertices closer than
   // 4 mm made one), the face left as it is.
   if (body.geometry.index) { const cov = [hoseL, shirtL].map((m) => m.userData.keep), ix = body.geometry.index.array, keepI = [];
@@ -1252,7 +1231,14 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
           skin(i, P.array, v); skin(i, BPa, sk); sk.subVectors(v, sk); nn.set(0, 0, 0);
         } else { v.fromBufferAttribute(P, i).applyMatrix4(M); nn.fromBufferAttribute(N, i).applyMatrix3(NM).normalize(); }
         if (o.isSkinnedMesh) { const q = pos.length; outw[q] = sk.x; outw[q + 1] = sk.y; outw[q + 2] = sk.z; }
-        pos.push(v.x, v.y, v.z); nrm.push(nn.x, nn.y, nn.z); col.push(c.r, c.g, c.b); fxs.push(fx.metal, fx.quilt, fx.weave, fx.snow ? 0 : fx.grime); rgh.push(fx.rough);
+        let cc = c;
+        if (o.userData.slash) {   // slashed: round the limb, bands of the lining pulled through the cuts, the cuts tied across at intervals
+          const S = o.userData.slash; let bi = SIa[i * 4], bw = SWa[i * 4]; for (let k = 1; k < 4; k++) if (SWa[i * 4 + k] > bw) { bw = SWa[i * 4 + k]; bi = SIa[i * 4 + k]; }
+          w.fromArray(BPa, i * 3).applyMatrix4(body.skeleton.boneInverses[bi]);
+          const f = (Math.atan2(w.x, w.z) / (Math.PI * 2) + 0.5) * S.panels + Math.sin(w.y * 40) * 0.08, tie = Math.abs(((w.y / 0.11) % 1 + 1) % 1 - 0.5) > 0.42;
+          if (f % 1 > 0.58 && f % 1 < 0.92 && !tie) cc = S.lin;
+        }
+        pos.push(v.x, v.y, v.z); nrm.push(nn.x, nn.y, nn.z); col.push(cc.r, cc.g, cc.b); fxs.push(fx.metal, fx.quilt, fx.weave, fx.snow ? 0 : fx.grime); rgh.push(fx.rough);
       };
       if (o.isSkinnedMesh) {   // only the vertices its faces use; and no face that lies wholly under the garment over it
         const map = new Int32Array(P.count).fill(-1), under = o.userData.under, hide = o.userData.hide; let nv = 0;
