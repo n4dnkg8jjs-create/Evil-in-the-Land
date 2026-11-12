@@ -38,7 +38,7 @@ function taper(pts, r0, r1, radial = 8, pw = 0.8) {
 const place = (g, p, r = [0, 0, 0], s = [1, 1, 1]) => { g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(...p), new THREE.Quaternion().setFromEuler(new THREE.Euler(...r)), new THREE.Vector3(...s))); return g; };
 const white = (g) => { g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3)); return g; };
 // the flesh of the mouth: pale at the lips, darker and redder inward, black down the throat
-const flesh = (L, deep = 0) => { const back = 1 - smooth(clamp((L - 0.08) / 0.5, 0, 1)), k = (1 - 0.93 * back) * (1 - 0.5 * deep); return [0.56 * k + 0.02, 0.36 * k * (1 - 0.35 * back) + 0.006, 0.34 * k * (1 - 0.3 * back) + 0.008]; };
+const flesh = (L, deep = 0) => { const back = 1 - smooth(clamp((L - 0.1) / 0.55, 0, 1)), k = (1 - 0.95 * back) * (1 - 0.55 * deep); return [0.3 * k + 0.012, 0.15 * k * (1 - 0.4 * back) + 0.005, 0.15 * k * (1 - 0.35 * back) + 0.007]; };   // grey-violet, bruised, going black
 
 function eyeTex() {   // amber, slit-pupilled (the pupil on the +x pole of a sphere)
   const c = document.createElement('canvas'); c.width = 256; c.height = 128; const g = c.getContext('2d');
@@ -78,7 +78,7 @@ export function buildSerpentHead(hide) {
       return [x, y, z, th / TAU, L * 2.6, k, k, k];
     }
     const c = Math.cos(th), s = -Math.sin(th), f = flesh(L, s * 0.5), ridge = 0.9 + 0.1 * Math.cos(L * 60);
-    return [w * 0.96 * c, lip + (0.2 * e * s * Math.sin(Math.PI * clamp(L * 1.1, 0, 1)) - 0.02), z, th / TAU, L * 2.4, f[0] * ridge, f[1] * ridge, f[2] * ridge];   // the palate, vaulted up into the head
+    return [w * 0.9 * c, lip + 0.012 + 0.22 * e * s * Math.sin(Math.PI * clamp(L * 1.1, 0, 1)), z, th / TAU, L * 2.4, f[0] * ridge, f[1] * ridge, f[2] * ridge];   // the palate, vaulted up into the head
   });
   upper.add(new THREE.Mesh(U(skull), [hide, mouth]));
   // teeth along the palate, raked back
@@ -89,7 +89,7 @@ export function buildSerpentHead(hide) {
   for (const sx of [-1, 1]) {
     const L = 0.85, f = new THREE.Group(); f.position.set(sx * (W(L) * 0.6) - HINGE[0], serpentLip(L) - 0.02 - HINGE[1], zOf(L) - HINGE[2]);
     f.add(new THREE.Mesh(taper([[0, 0, 0], [0, -0.26, -0.02], [0, -0.5, -0.11], [0, -0.68, -0.28]], 0.07, 0.004, 8, 1.2), bone));
-    const sh = taper([[0, 0.04, 0.02], [0, -0.14, 0.0], [0, -0.3, -0.04]], 0.12, 0.074, 10, 1), sc = []; for (let i = 0; i < sh.attributes.position.count; i++) { const t = clamp(-sh.attributes.position.getY(i) / 0.3, 0, 1); sc.push(0.5 - 0.15 * t, 0.26 - 0.1 * t, 0.26 - 0.1 * t); }
+    const sh = taper([[0, 0.04, 0.02], [0, -0.08, 0.0], [0, -0.17, -0.03]], 0.1, 0.07, 10, 1), sc = []; for (let i = 0; i < sh.attributes.position.count; i++) { const t = clamp(-sh.attributes.position.getY(i) / 0.17, 0, 1); sc.push(0.2 - 0.08 * t, 0.09 - 0.04 * t, 0.09 - 0.04 * t); }
     sh.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3)); f.add(new THREE.Mesh(sh, mouth));
     upper.add(f); parts.fangs.push(f);
   }
@@ -114,16 +114,16 @@ export function buildSerpentHead(hide) {
     const e = END(L * 0.96) * (L > 0.94 ? 1 - smooth((L - 0.94) / 0.06) * 0.5 : 1), w = jw(L) * e, z = jz(L), top = jlip(L), c = Math.cos(th);
     if (th <= Math.PI + 1e-6) {   // inside: the lip, then down into the trough; the windpipe standing in it, the sheath of the tongue ahead
       const s = Math.max(0, Math.sin(th)), ac = Math.abs(c), inn = smooth(clamp((1 - ac) / 0.22, 0, 1));
-      let y = top - 0.2 * e * inn * (0.55 + 0.45 * Math.sin(Math.PI * clamp(L * 1.05, 0, 1)));
+      let y = top - 0.3 * e * inn * (0.55 + 0.45 * Math.sin(Math.PI * clamp(L * 1.05, 0, 1)));
       const gl = gauss(c, 0, 0.16) * (smooth(clamp((L - 0.3) / 0.08, 0, 1)) * (1 - smooth(clamp((L - 0.5) / 0.05, 0, 1)))); y += 0.11 * gl;
       y += 0.05 * gauss(c, 0, 0.2) * gauss(L, 0.74, 0.1);
       const f = flesh(L, inn * 0.6), hole = gauss(c, 0, 0.08) * gauss(L, 0.5, 0.025), fold = 0.92 + 0.08 * Math.cos(c * 26);
-      const k = (1 - 0.92 * hole) * fold * lerp(0.35, 1, smooth(clamp(inn * 2.5, 0, 1)));   // the lip itself dark
+      const k = (1 - 0.92 * hole) * fold * lerp(0.18, 1, smooth(clamp(inn * 2.5, 0, 1)));   // the lip itself dark
       return [w * c, y, z, th / TAU, L * 2.2, f[0] * k, f[1] * k, f[2] * k, s];
     }
     const s = -Math.sin(th), dep = lerp(0.56, 0.15, Math.pow(L, 0.8)) * e;
-    const k = 0.9 + 0.2 * (1 - s);
-    return [w * Math.sign(c) * Math.pow(Math.abs(c), 0.78), top - dep * Math.pow(s, 0.72), z, th / TAU, L * 2.2, k, k, k];
+    const k = 0.72 + 0.25 * (1 - s);   // the chin in the dark scales of the flank, not the pale plates of the belly
+    return [w * Math.sign(c) * Math.pow(Math.abs(c), 0.78), top - dep * Math.pow(s, 0.72), z, 0.4 + (th / TAU - 0.5) * 0.4, L * 2.2, k, k, k];
   });
   jg.translate(-HINGE[0], -HINGE[1], -HINGE[2]); jaw.add(new THREE.Mesh(jg, [mouth, hide]));
   const lt = []; for (const sx of [-1, 1]) for (let i = 0; i < 10; i++) { const L = 0.3 + i * 0.062, w = jw(L); lt.push(place(new THREE.ConeGeometry(0.026, 0.14, 5), [sx * (w * 0.8) - HINGE[0], jlip(L) + 0.0 - HINGE[1], jz(L) - HINGE[2]], [0.4, 0, sx * 0.25])); }
@@ -133,19 +133,20 @@ export function buildSerpentHead(hide) {
   tongue.add(new THREE.Mesh(taper([[0, 0, 0], [0, 0.01, 0.5], [0, 0, 1.0]], 0.055, 0.032, 7, 1), tm));
   for (const sx of [-1, 1]) tongue.add(new THREE.Mesh(taper([[0, 0, 0.98], [sx * 0.05, 0.01, 1.2], [sx * 0.14, -0.01, 1.5]], 0.03, 0.004, 6, 1), tm));
   tongue.position.set(0, serpentLip(0.5) - 0.06, 1.15); tongue.scale.setScalar(0.001); head.add(tongue); parts.tongue = tongue;
+  head.add(new THREE.Mesh(white(place(new THREE.SphereGeometry(1, 20, 14), [0, HINGE[1] - 0.06, -0.18], [0, 0, 0], [0.74, 0.62, 0.62])), dark));   // the gullet
   // ---- the cheeks: skin stretched between the jaws, rebuilt as they open; and ropes of spittle
   const CN = 9, CM = 5, cpos = new Float32Array(2 * (CN + 1) * (CM + 1) * 3), ccol = [], cidx = [];
   for (let sd = 0; sd < 2; sd++) for (let i = 0; i <= CN; i++) for (let j = 0; j <= CM; j++) { const t = j / CM, f = flesh(0.12 + 0.3 * i / CN, 0.3), k = 0.55 + 0.45 * Math.sin(Math.PI * t); ccol.push(f[0] * k, f[1] * k, f[2] * k); }
   for (let sd = 0; sd < 2; sd++) for (let i = 0; i < CN; i++) for (let j = 0; j < CM; j++) { const a = sd * (CN + 1) * (CM + 1) + i * (CM + 1) + j, b = a + 1, c = a + CM + 1, d = c + 1; cidx.push(a, b, c, b, d, c); }
   const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.BufferAttribute(cpos, 3).setUsage(THREE.DynamicDrawUsage)); cg.setAttribute('color', new THREE.Float32BufferAttribute(ccol, 3)); cg.setIndex(cidx);
   const cheeks = new THREE.Mesh(cg, mouth); cheeks.frustumCulled = false; head.add(cheeks);
-  const SP = [[0.5, 0.42], [-0.44, 0.5], [0.3, 0.62], [-0.62, 0.36]], strands = [], sm = new THREE.MeshStandardMaterial({ color: 0xc8c4b0, roughness: 0.08, transparent: true, opacity: 0.5, depthWrite: false });
+  const SP = [[0.5, 0.42], [-0.44, 0.5], [0.3, 0.62], [-0.62, 0.36]], strands = [], sm = new THREE.MeshStandardMaterial({ color: 0x8a8678, roughness: 0.08, transparent: true, opacity: 0.5, depthWrite: false });
   for (const [fx, L] of SP) { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.02, 1, 5, 1, true), sm); m.scale.setScalar(0.001); head.add(m); strands.push({ m, fx, L }); }
   head.traverse((o) => { if (o.isMesh) { o.castShadow = o.material !== sm; o.receiveShadow = true; } });
   const _a = new THREE.Vector3(), _b = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
   // open the mouth: g 0 shut .. 1 the full gape of a strike
   parts.gape = (g, time = 0) => {
-    const au = -0.34 * g, aj = 0.86 * g; upper.rotation.x = au; jaw.rotation.x = aj;
+    const au = -0.3 * g, aj = 0.64 * g; upper.rotation.x = au; jaw.rotation.x = aj;
     const fang = lerp(1.32, -0.12, smooth(clamp(g * 1.7, 0, 1))); for (const f of parts.fangs) f.rotation.x = fang;
     const rot = (v, a) => { const y = v.y - HINGE[1], z = v.z - HINGE[2], c = Math.cos(a), s = Math.sin(a); v.y = HINGE[1] + y * c - z * s; v.z = HINGE[2] + y * s + z * c; return v; };
     let o = 0;

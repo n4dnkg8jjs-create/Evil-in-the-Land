@@ -577,7 +577,7 @@ export class DragonFire {
             vec3 col = mix(fireCol(heat * mix(0.85, 1.0, uCore)), vec3(1.0, 0.92, 0.7), uCore * heat * 0.6);
             gl_FragColor = vec4(col * heat * uInt * 1.6, 1.0); }`,
       }));
-      m.frustumCulled = false; m.visible = false; m.renderOrder = 11; this.group.add(m); return m;
+      m.frustumCulled = false; m.renderOrder = 11; this.group.add(m); return m;   // (left visible, drawing nothing, so the chapter's warm-up compiles it)
     });
     this._prevDir = new THREE.Quaternion(); this._lag = new THREE.Vector3(0, 0, 1); this._q = new THREE.Quaternion(); this._v = new THREE.Vector3(); this.jetK = 0;
     // ---- flames on the ground

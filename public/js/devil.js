@@ -993,7 +993,7 @@ export class Serpent extends Boss {
     super(scene, 'serpent');
     this.name = 'The Old Serpent'; this.title = 'Serpens Antiquus';
     this.party = Math.max(1, partySize || 1);
-    this.maxHp = this.hp = Math.round(3400 * (1 + 0.7 * (this.party - 1)));
+    this.maxHp = this.hp = Math.round(3000 * (1 + 0.6 * (this.party - 1)));
     this.maxPoise = this.poise = 340 * (1 + 0.25 * (this.party - 1));
     this.phases = [0.66, 0.33]; this.cad = 1 + 0.1 * (this.party - 1); this.cds = { coil: 10, brood: 3, rain: 0, sweep: 2, thrash: 0 }; this.chainN = 0; this.last = ''; this.f = {}; this.threat = new Map(); this.hurtT = 0; this.hood = 0;
     this.camH = 4.5; this.camD = 2.4;
@@ -1106,7 +1106,7 @@ export class Serpent extends Boss {
     if (['loom', 'slither', 'spit'].includes(this.state)) { this.setState(n === 2 ? 'brood' : 'rain'); }
   }
   // the companions are not as quick on their feet as a player: his blows fall a little lighter on them
-  hurt(C, k, dmg, from, opts) { super.hurt(C, k, dmg * (k && k.isAI ? 0.65 : 1), from, opts); }
+  hurt(C, k, dmg, from, opts) { super.hurt(C, k, dmg * (k && k.isAI ? 0.55 : 1), from, opts); }
   takeHit(dmg, dir, stagger, C) {
     if (C && this.alive) {   // who struck: the knight nearest the part that was hit is close enough a guess
       let best = null, bd = 6; for (const k of C.knights) { if (k.downed) continue; for (let i = 0; i < SN; i += 4) { const dd = Math.hypot(k.pos.x - this.vis[i].x, k.pos.z - this.vis[i].z) - serpentRad(i); if (dd < bd) { bd = dd; best = k; } } }
@@ -1204,7 +1204,7 @@ export class Serpent extends Boss {
         else if (!this.aim) {   // committed: at where they will be in a moment
           const ax = tp.x + (T ? clamp((T.vel?.x || 0) * 0.3, -2, 2) : 0) - this.headPos.x, az = tp.z + (T ? clamp((T.vel?.z || 0) * 0.3, -2, 2) : 0) - this.headPos.z;
           const yaw = T ? Math.atan2(ax, az) : Math.atan2(this.headDir.x, this.headDir.z), len = clamp(Math.hypot(ax, az) + 4.5, 8, 18), ox = this.headPos.x - Math.sin(yaw) * 1.5, oz = this.headPos.z - Math.cos(yaw) * 1.5;
-          this.aim = { x: ox, z: oz, yaw, len }; this.warn('line', ox, oz, len, 3.6, yaw, tele + 0.12, 0, 0, (Tl) => this.hurtIn(C, Tl, 44, this.headPos.clone(), { knockdown: true }));
+          this.aim = { x: ox, z: oz, yaw, len }; this.warn('line', ox, oz, len, 3.6, yaw, tele + 0.12, 0, 0, (Tl) => this.hurtIn(C, Tl, 38, this.headPos.clone(), { knockdown: true }));
         }
         const A = this.aim;
         if (A) {
@@ -1225,13 +1225,13 @@ export class Serpent extends Boss {
         break;
       }
       case 'sweep': { // the head carried low and far round to one side, and then through them all in one stroke
-        const F = this.f, wind = 0.8 / cad, sw = 0.34, RS = 7.2;
+        const F = this.f, wind = 0.95 / Math.sqrt(cad), sw = 0.34, RS = 6.6;
         if (!F.i) {
-          F.i = 1; F.yaw = T ? want : Math.atan2(this.headDir.x, this.headDir.z); F.px = this.headPos.x - Math.sin(F.yaw) * 3.2; F.pz = this.headPos.z - Math.cos(F.yaw) * 3.2; F.dir = R() < 0.5 ? 1 : -1; this.cds.sweep = 8;
-          const px = F.px, pz = F.pz; this.warn('cone', px, pz, 9.4, 1.5, F.yaw, wind + sw * 0.6, 0, 0, (Tl) => this.hurtIn(C, Tl, 30, new THREE.Vector3(px, 0, pz), { knockback: 12, stagger: true }));
+          F.i = 1; F.yaw = T ? want : Math.atan2(this.headDir.x, this.headDir.z); F.px = this.headPos.x - Math.sin(F.yaw) * 3.2; F.pz = this.headPos.z - Math.cos(F.yaw) * 3.2; F.dir = R() < 0.5 ? 1 : -1; this.cds.sweep = 9.5;
+          const px = F.px, pz = F.pz; this.warn('cone', px, pz, 8.4, 1.15, F.yaw, wind + sw * 0.6, 0, 0, (Tl) => this.hurtIn(C, Tl, 26, new THREE.Vector3(px, 0, pz), { knockback: 12, stagger: true }));
           C.ev('bossSfx', this, 'hiss');
         }
-        const a0 = F.yaw - F.dir * 1.55, a1 = F.yaw + F.dir * 1.55, at = (a, k) => { const gx = F.px + Math.sin(a) * RS, gz = F.pz + Math.cos(a) * RS; this.headPos.x += (gx - this.headPos.x) * k; this.headPos.z += (gz - this.headPos.z) * k; turn(a + F.dir * 1.2, 14); };
+        const a0 = F.yaw - F.dir * 1.2, a1 = F.yaw + F.dir * 1.2, at = (a, k) => { const gx = F.px + Math.sin(a) * RS, gz = F.pz + Math.cos(a) * RS; this.headPos.x += (gx - this.headPos.x) * k; this.headPos.z += (gz - this.headPos.z) * k; turn(a + F.dir * 1.2, 14); };
         if (this.t < wind) { at(lerp(F.yaw, a0, smooth(clamp(this.t / (wind * 0.75), 0, 1))), 1 - Math.exp(-7 * dt)); rearTo(1.9, 5); pitchTo(0.05); jaw(0.4); }
         else if (this.t < wind + sw) { at(lerp(a0, a1, smooth((this.t - wind) / sw)), 1); rearTo(0.9, 14); pitchTo(0.12); jaw(0.95, 24); if (!this.hitDone) { this.hitDone = true; C.ev('bossSfx', this, 'crash'); } }
         else { F.down = 1; rearTo(0.85, 5); jaw(0.3, 4); pitchTo(0.16, 4); if (this.t > wind + sw + (this.phase >= 3 ? 0.7 : 1.0)) { this.cd = 1.1 / cad; this.setState('loom'); } }
@@ -1249,7 +1249,7 @@ export class Serpent extends Boss {
       case 'thrash': // the coils near the knights who have gone to hack at his body heave up and come down on them; the tail lashes
         rearTo(5.2, 3); jaw(0.5); if (T) turn(want, 2);
         if (!this.hitDone) {
-          this.hitDone = true; this.cds.thrash = 4.5; const pts = [];
+          this.hitDone = true; this.cds.thrash = 6.5; const pts = [];
           for (const { i } of this.knightsNearBody(C)) { const p = this.vis[i]; if (pts.every((q) => Math.hypot(q.p.x - p.x, q.p.z - p.z) > 4.5)) pts.push({ p: p.clone(), tail: i > SN * 0.62 }); if (pts.length >= 3) break; }
           const dur = 1.0 / Math.sqrt(cad);
           for (const { p, tail } of pts) this.warn('circle', p.x, p.z, tail ? 5.4 : 3.8, 0, 0, tail ? dur * 0.85 : dur, 0, tail ? 4 : 1, (Tl) => { this.hurtIn(C, Tl, tail ? 26 : 30, p, { knockback: tail ? 13 : 10 }); C.ev('slam', new THREE.Vector3(p.x, W.heightAt(p.x, p.z), p.z), tail ? 4.6 : 3.6); });
@@ -1326,7 +1326,7 @@ export class Serpent extends Boss {
     }
     // the venom where it lies
     this.poolT -= dt;
-    if (this.poolT <= 0) { this.poolT = 0.8; for (const Tl of this.tele.map.values()) if (Tl.shape === 'pool' && Tl.t > 0.3) for (const k of C.knights) if (!k.downed && inside(k, Tl, 0.1)) this.hurt(C, k, 7, new THREE.Vector3(Tl.x, 0, Tl.z), {}); }
+    if (this.poolT <= 0) { this.poolT = 0.8; for (const Tl of this.tele.map.values()) if (Tl.shape === 'pool' && Tl.t > 0.3) for (const k of C.knights) if (!k.downed && inside(k, Tl, 0.1)) this.hurt(C, k, 5, new THREE.Vector3(Tl.x, 0, Tl.z), {}); }
     this.finish(W, dt);
   }
   finish(W, dt) {
@@ -1500,9 +1500,9 @@ export class Cryptid extends Boss {
     }));
     this.veil.frustumCulled = false; this.veil.renderOrder = 2; scene.add(this.veil); this.veilA = 0;
     this.party = Math.max(1, partySize || 1);
-    this.maxHp = this.hp = Math.round(5200 * (1 + 0.6 * (this.party - 1)));
+    this.maxHp = this.hp = Math.round(3600 * (1 + 0.6 * (this.party - 1)));
     this.maxPoise = this.poise = 420 * this.party;
-    this.phases = [0.65, 0.3]; this.cad = 1 + 0.08 * (this.party - 1); this.cds = { legion: 6, pillars: 0, scream: 0, eclipse: 8, rebuke: 0, stomp: 0 }; this.combo = 0; this.last = ''; this.wind = 0.8;
+    this.phases = [0.65, 0.3]; this.cad = 1 + 0.08 * (this.party - 1); this.cds = { legion: 6, pillars: 0, scream: 0, eclipse: 8, rebuke: 0, stomp: 0, vanish: 5 }; this.combo = 0; this.last = ''; this.wind = 0.8;
     this.camH = 3.4; this.camD = 2;
     const S = DS;
     this.spheres = [
@@ -1522,7 +1522,7 @@ export class Cryptid extends Boss {
   // his strength is set by who has come: a companion counts for a little more than half a player
   size(C) {
     this.sized = true; let n = 0; for (const k of C.knights) n += k.isAI ? 0.55 : 1; n = Math.max(1, n);
-    const f = this.hp / this.maxHp; this.maxHp = Math.round(5200 * (1 + 0.6 * (n - 1))); this.hp = this.maxHp * f; this.maxPoise = this.poise = 420 * n; this.cad = 1 + 0.08 * (n - 1); this.party = n;
+    const f = this.hp / this.maxHp; this.maxHp = Math.round(3600 * (1 + 0.6 * (n - 1))); this.hp = this.maxHp * f; this.maxPoise = this.poise = 420 * n; this.cad = 1 + 0.08 * (n - 1); this.party = n;
   }
   canReel() { return ['stalk', 'strike', 'reach', 'stomp', 'pillars', 'legion', 'appear', 'eclipse'].includes(this.state); }
   onPoiseBreak(C) { this.interrupt(); this.combo = 0; this.poiseCd = 14; this.setState('stagger'); C?.ev('bossSfx', this, 'scream'); }
@@ -1587,7 +1587,7 @@ export class Cryptid extends Boss {
     if (d < 8.2) o.push(['strike', T.blocking ? 1.4 : 3.4]);
     if (this.cds.stomp <= 0 && (near >= 2 || behind)) o.push(['stomp', 1.6 + behind * 1.5 + (near - 1) * 0.5]);
     if (d > 4.5 && d < 16) o.push(['reach', (d > 8 ? 3 : 1.2) * (T.blocking ? 2 : 1)]);
-    o.push(['vanish', V.urgent ? 6 : d > 14 || this.far > 2 ? 3.4 : V.k && V.k !== T ? 1.6 : 0.5]);
+    if (this.cds.vanish <= 0 || d > 18) o.push(['vanish', d > 14 || this.far > 2 ? 4 : V.urgent ? 3 : V.k && V.k !== T ? 1.2 : 0.4]);
     if (P >= 2 && this.cds.legion <= 0) o.push(['legion', 2.2]);
     if (P >= 2 && this.cds.pillars <= 0) o.push(['pillars', d > 9 ? 2.8 : 1.4]);
     if (P >= 2 && this.cds.eclipse <= 0) o.push(['eclipse', 3]);
@@ -1628,7 +1628,7 @@ export class Cryptid extends Boss {
           const wind = (third ? 0.9 : n ? 0.52 : 0.8) * (this.held ? 1.6 : 1) / cad;
           this.atk = third ? 2 : n % 2; this.lockYaw = want; this.wind = wind;
           if (third) { const cx = this.pos.x + Math.sin(want) * 3.8, cz = this.pos.z + Math.cos(want) * 3.8; this.aimT = this.warn('circle', cx, cz, 4.1, 0, 0, wind + 0.14, 0, 1, (Tl) => { this.hurtIn(C, Tl, 44, this.pos.clone(), { knockdown: true }); C.ev('slam', gp(Tl.x, Tl.z), 4.1); }); }
-          else this.aimT = this.warn('cone', this.pos.x, this.pos.z, 7.8, 1.1, want, wind + 0.1, 0, 0, (Tl) => this.hurtIn(C, Tl, 30 + n * 3, this.pos.clone(), { knockback: 9, stagger: true }));
+          else this.aimT = this.warn('cone', this.pos.x, this.pos.z, 7.6, 1.0, want, wind + 0.1, 0, 0, (Tl) => this.hurtIn(C, Tl, 26 + n * 3, this.pos.clone(), { knockback: 9, stagger: true }));
           C.ev('bossSfx', this, n ? 'snarl' : 'growl');
         }
         const wind = this.wind; face(9, this.lockYaw);
@@ -1683,7 +1683,7 @@ export class Cryptid extends Boss {
       case 'appear': // out of the smoke already striking
         if (this.t > 1.0) {
           if (--this.steps > 0) { this.victim = this.stepVictim(C).k; this.setState('vanish'); }
-          else { this.steps = 0; this.cd = 0.8 / cad; this.setState('stalk'); }
+          else { this.steps = 0; this.cds.vanish = (this.phase >= 3 ? 6 : 9) / cad; this.cd = 0.8 / cad; this.setState('stalk'); }
         }
         break;
       case 'legion': // arms raised, presenting his legion: they come up out of the ground about him
@@ -1769,11 +1769,11 @@ export class Cryptid extends Boss {
     this.mesh.position.set(this.pos.x, footGround(W, this.pos.x, this.pos.z, 1.2, this.pos.y), this.pos.z); this.mesh.rotation.y = this.yaw;
     // ---- the dark he brings (a little of it always; all of it when he puts out the light), and the hush with it
     const G = came || (this.dark > 0) !== this.wasDark ? devilGame(this) : null;
-    if (this.dark > 0 && !this.wasDark && G) { try { G.audio?.silence?.(Math.min(8, this.dark)); G.audio?.heartbeat?.(0.5); } catch {} }
+    if (this.dark > 0 && !this.wasDark && G) { try { G.audio?.silence?.(Math.min(3, this.dark)); G.audio?.heartbeat?.(0.5); } catch {} }
     this.wasDark = this.dark > 0;
     if (came && st === 'appear' && G && G.me && G.dread) { try { if (Math.hypot(G.me.pos.x - this.pos.x, G.me.pos.z - this.pos.z) < 6.5) { G.dread.level = Math.min(1, G.dread.level + 0.14); G.audio?.heartbeat?.(0.6); } } catch {} }   // he is behind YOU
-    let va = !this.alive ? 0 : this.dark > 0 ? 0.8 * clamp(this.dark / 1.2, 0, 1) + 0.2 : [0, 0.1, 0.17, 0.24][this.phase] || 0.1;
-    if (st === 'intro') va *= clamp(T / 3, 0, 1); if (st === 'eclipse') va = Math.max(va, 0.8 * smooth(clamp((T - 0.5) / 0.9, 0, 1)));
+    let va = !this.alive ? 0 : this.dark > 0 ? 0.5 * clamp(this.dark / 1.2, 0, 1) + 0.22 : [0, 0.1, 0.17, 0.24][this.phase] || 0.1;
+    if (st === 'intro') va *= clamp(T / 3, 0, 1); if (st === 'eclipse') va = Math.max(va, 0.72 * smooth(clamp((T - 0.5) / 0.9, 0, 1)));
     this.veilA = damp(this.veilA, va, 2.5, dt); this.veilU.uA.value = this.veilA;
     // ---- the head goes first: it has turned on the one he wants before the body does, in snaps, and further than a neck should go
     const ld = Math.hypot(this.look.x - this.pos.x, this.look.z - this.pos.z), lw = ld > 0.5 ? clamp(angleDiff(this.yaw, Math.atan2(this.look.x - this.pos.x, this.look.z - this.pos.z)), -2.0, 2.0) : 0;
@@ -1982,7 +1982,7 @@ export class Dragon extends Boss {
       if (k.downed) continue;
       const dx = k.pos.x - this.pos.x, dz = k.pos.z - this.pos.z, d = Math.hypot(dx, dz);
       let s = 110 / (d + 7) + (k === cur ? 3 : 0);
-      if (k.praying) { let rev = false; for (const o of C.knights) if (o.downed && o.pos.distanceTo(k.pos) < 2.8) rev = true; s += rev ? 12 : air ? 14 : 9; }
+      if (k.praying) { let rev = false; for (const o of C.knights) if (o.downed && o.pos.distanceTo(k.pos) < 2.8) rev = true; s += rev ? 7 : air ? 9 : 6; }
       if (k.hp < k.maxHp * 0.4) s += 6;
       let ally = false; for (const o of C.knights) if (o !== k && !o.downed && o.pos.distanceTo(k.pos) < 9) ally = true;
       if (!ally && C.knights.length > 1) s += 4;
@@ -2045,6 +2045,7 @@ export class Dragon extends Boss {
     const gp = (x, z) => new THREE.Vector3(x, W.heightAt(x, z), z);
     const lead = (k, s) => (k && k.vel ? [k.pos.x + k.vel.x * s, k.pos.z + k.vel.z * s] : [tp.x, tp.z]);
     const into = (x, z, r) => { const l = Math.hypot(x, z); return l > r ? [x * r / l, z * r / l] : [x, z]; };
+    if (this.phase === 3 && this.hp > this.maxHp * 0.35) this.hp = this.maxHp * 0.35;   // cast down, his strength is spent: the last of the fight stays short
     const hpF = this.hp / this.maxHp;
     // ---- the fight changes
     if (this.phase === 1 && hpF < 0.7 && this.state === 'stalk') { this.phase = 2; this.interrupt(); this.setState('takeoff'); C.ev('bossPhase', this, 2); }
@@ -2194,7 +2195,7 @@ export class Dragon extends Boss {
             if (k.downed) continue;
             for (let j = 0; j < (k.isAI ? 1 : 3); j++) this.later(0.3 + j * 0.75 + R() * 0.2, () => {
               if (k.downed) return; const a = R() * TAU, r = j ? 1.2 + R() * 2.6 : 0, [lx, lz] = lead(k, 0.5), x = lx + Math.sin(a) * r, z = lz + Math.cos(a) * r;
-              this.warn('circle', x, z, 3.3, 0, 0, 1.25, 2, 5, (Tl) => { this.hurtIn(C, Tl, 26, new THREE.Vector3(x, 0, z), { knockback: 6, unblockable: true, fire: true }); this.pool(C, x, z, 2.6, 5); }, true);
+              this.warn('circle', x, z, 3.3, 0, 0, 1.3, 2, 5, (Tl) => { this.hurtIn(C, Tl, 22, new THREE.Vector3(x, 0, z), { knockback: 6, unblockable: true, fire: true }); this.pool(C, x, z, 2.6, 5); }, true);
             }, true);
           }
         }
@@ -2212,7 +2213,7 @@ export class Dragon extends Boss {
         this.breath = 0; this.alt = 0; this.fly = Math.max(0.25, this.fly - dt * 1.5);
         if (this.t > DRG.stun) {
           this.aimT = null;
-          if (this.wardsDone >= 3 && this.phase < 3) { this.phase = 3; this.cad *= 1.3; this.dmgScale = 1.15; this.cds.storm = 3; this.cds.charge = 1; this.cds.roar = 0; C.ev('bossPhase', this, 3); this.setState('rage'); }
+          if (this.wardsDone >= 3 && this.phase < 3) { this.hp = Math.min(this.hp, this.maxHp * 0.25); this.phase = 3; this.cad *= 1.15; this.dmgScale = 1.1; this.cds.storm = 3; this.cds.charge = 1; this.cds.roar = 0; C.ev('bossPhase', this, 3); this.setState('rage'); }
           else { this.groundT = 0; this.cd = 0; this.setState('buffet'); }
         }
         break;
@@ -2267,20 +2268,20 @@ export class Dragon extends Boss {
               }
             }
           }
-          if (s > P.len + 6) { this.breath = 0; this.fv = P.spd * 0.7; this.airWait = 1.6 + R() * 1.4; this.ringDir = (fx * pos.z - fz * pos.x) > 0 ? 1 : -1; this.setState('circle'); }
+          if (s > P.len + 6) { this.breath = 0; this.fv = P.spd * 0.7; this.airWait = 2.6 + R() * 1.6; this.ringDir = (fx * pos.z - fz * pos.x) > 0 ? 1 : -1; this.setState('circle'); }
         }
         break;
       }
       case 'spit': { // he hangs on his wings over the rim and spits fire on them: on the ones kneeling first
         this.fly = 1; this.steer(dt, 0, 0, 1.5, 2.2); this.alt = damp(this.alt, 12.5, 1.5, dt);
         if (T) this.yaw = dampAngle(this.yaw, want, 2.5, dt);
-        const n = Math.min(6, 2 + this.wardsDone + Math.floor(C.knights.length / 2));
+        const n = Math.min(4, 1 + this.wardsDone + Math.floor(C.knights.length / 3));
         if (this.shots < n && this.t > 0.8 + this.shots * 0.55) {
           const list = C.knights.filter((k) => !k.downed).sort((a, b) => (b.praying ? 2 : 0) + (b.isAI ? 0 : 1) - (a.praying ? 2 : 0) - (a.isAI ? 0 : 1));
           const k = list[this.shots % Math.max(1, list.length)]; this.shots++;
-          if (k) { const [x, z] = lead(k, k.praying ? 0 : 0.6); this.look.set(x, k.pos.y, z); this.warn('circle', x, z, 3.4, 0, 0, 1.5, 2, 5, (Tl) => { this.hurtIn(C, Tl, 30, new THREE.Vector3(x, 0, z), { knockback: 7, unblockable: true, fire: true }); this.pool(C, x, z, 3.0, 6); }, true); C.ev('bossSfx', this, 'erupt'); }
+          if (k) { const [x, z] = lead(k, k.praying ? 0 : 0.6); this.look.set(x, k.pos.y, z); this.warn('circle', x, z, 3.2, 0, 0, 1.6, 2, 5, (Tl) => { this.hurtIn(C, Tl, 24, new THREE.Vector3(x, 0, z), { knockback: 7, unblockable: true, fire: true }); this.pool(C, x, z, 3.0, 6); }, true); C.ev('bossSfx', this, 'erupt'); }
         }
-        if (this.t > 0.8 + n * 0.55 + 0.9) { this.airWait = 1.5 + R() * 1.5; this.setState('circle'); }
+        if (this.t > 0.8 + n * 0.55 + 0.9) { this.airWait = 2.6 + R() * 1.6; this.setState('circle'); }
         break;
       }
       case 'dive': { // he folds his wings and comes down on the circle with his whole weight

@@ -941,16 +941,17 @@ diffuseColor.rgb *= mix(1.0, 0.5 + n1 * 0.4, vFx.w);
 float bl = smoothstep(0.76, 0.84, vn(vFP * 3.1 + 7.3)) * vFx.w * (1.0 - smoothstep(0.2, 0.4, vFx.x));
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.014, 0.012), bl * 0.75);
 // frozen through: the dye dull, a bloom of hoarfrost on all of it, and snow lying on what faces the sky
-float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.72) * 0.9;
-float ny = normalize(vFN).y * (gl_FrontFacing ? 1.0 : -1.0);
-float hoar = (0.1 + 0.26 * vn(vFP * 37.0) * vn(vFP * 9.0 + 3.0)) * mix(0.5, 1.0, uSnow);
-float rime = smoothstep(0.12, 0.62, ny + (fh(floor(vFP * 18.0)) - 0.5) * 0.3 + (n1 - 0.5) * 0.55) * mix(0.3, 0.94, uSnow);
-diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.6, 0.66, 0.74), hoar);
-diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.25;`)
+float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.85) * 0.92;
+float ny = normalize(vFN).y;
+float hoar = (0.06 + 0.1 * vn(vFP * 41.0)) * mix(0.4, 1.0, uSnow) * (1.0 - vFx.x * 0.4);
+float rime = smoothstep(0.5, 0.92, ny + (vn(vFP * 19.0) - 0.5) * 0.25) * mix(0.2, mix(0.6, 0.85, vFx.x), uSnow);
+rime = max(rime, (1.0 - step(0.5, vFx.w + vFx.y + vFx.z + vFx.x)) * step(0.0, ny - 2.0));   // (drifts are snow already)
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), hoar);
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.2;`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(vRough, 0.9, max(rime, hoar * 1.5));')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vFx.x * (1.0 - rime) * (1.0 - hoar);');
   };
-  m.customProgramCacheKey = () => 'frostBaked2';
+  m.customProgramCacheKey = () => 'frostBaked4';
   return m;
 }
 // a garment round a bone, cut into panels with gaps (the slashes); the lining puffs out between them
@@ -1057,7 +1058,7 @@ function katzbalger(iron, leather) {
 }
 // a soft drift of snow: a low dome that feathers out to nothing at its edge (sunk a little so no edge stands proud)
 function drift(L, W, H, sd) {
-  const RN = 9, SN = 32, pos = [], idx = [];
+  const RN = 7, SN = 24, pos = [], idx = [];
   for (let r = 0; r <= RN; r++) for (let a = 0; a < SN; a++) {
     const t = r / RN, ang = (a / SN) * Math.PI * 2, wob = 1 + 0.14 * Math.sin(ang * 3 + sd) + 0.07 * Math.sin(ang * 5 + sd * 1.7);
     const h = H * Math.pow(1 - t * t, 1.6) * (1 + 0.1 * Math.sin(ang * 4 + t * 6 + sd)) - 0.025;
@@ -1209,9 +1210,18 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const SUB = { spine: ['spine', 'chest'], thighR: ['thighR', 'shinR', 'footR'], thighL: ['thighL', 'shinL', 'footL'], clavR: ['uArmR', 'fArmR', 'handR'], clavL: ['uArmL', 'fArmL', 'handL'], neck: ['neck', 'head'] };
   const SUBPEN = { spine: ['spine', 'chest', 'clavR', 'clavL', 'neck'], thighR: SUB.thighR, thighL: SUB.thighL, clavR: SUB.clavR, clavL: SUB.clavL, neck: SUB.neck };
   const thin = (ids, k) => (ids || []).filter((_, i) => i % k === 0);
-  // Of his body, only what no garment covers is drawn (head, neck, hands).
+  // What lies hidden under the slashed garments (their linings are closed): the hose all down the thigh, and with a
+  // doublet the shirt along each arm (but not at the joints, nor the cuff at the wrist). Not drawn.
+  { const BP = body.geometry.attributes.position, BI = body.geometry.attributes.skinIndex, BW = body.geometry.attributes.skinWeight, v = new THREE.Vector3();
+    const span = (bones) => { const out = new Uint8Array(BP.count); for (let i = 0; i < BP.count; i++) { let bi = BI.getX(i), bw = BW.getX(i); for (const [ii, ww] of [[BI.getY(i), BW.getY(i)], [BI.getZ(i), BW.getZ(i)], [BI.getW(i), BW.getW(i)]]) if (ww > bw) { bw = ww; bi = ii; } const r = bones[JOINTS[bi]]; if (!r || bw < 0.8) continue; v.fromBufferAttribute(BP, i).applyMatrix4(body.skeleton.boneInverses[bi]); if (v.y > r[0] && v.y < r[1]) out[i] = 1; } return out; };
+    hoseL.userData.hide = span({ thighR: [-0.4, 0.03], thighL: [-0.4, 0.03] });
+    if (!gambeson) shirtL.userData.hide = span({ uArmR: [-0.28, 0.0], uArmL: [-0.28, 0.0], fArmR: [-0.18, 0.0], fArmL: [-0.18, 0.0] }); }
+  // Of his body, only what no garment covers is drawn (head, neck, hands); the hands thinned (vertices closer than
+  // 4 mm made one), the face left as it is.
   if (body.geometry.index) { const cov = [hoseL, shirtL].map((m) => m.userData.keep), ix = body.geometry.index.array, keepI = [];
-    for (let t = 0; t < ix.length; t += 3) { const a = ix[t], b = ix[t + 1], c = ix[t + 2]; if (cov.some((K) => K[a] && K[b] && K[c])) continue; keepI.push(a, b, c); }
+    const BP = body.geometry.attributes.position, BI = body.geometry.attributes.skinIndex, BW = body.geometry.attributes.skinWeight, hands = new Set([JOINTS.indexOf('handR'), JOINTS.indexOf('handL')]), rep = new Int32Array(BP.count).fill(-1), cell = new Map(), cs = 0.004;
+    for (let i = 0; i < BP.count; i++) { if (!hands.has(BI.getX(i)) || BW.getX(i) < 0.5) { rep[i] = i; continue; } const k = Math.floor(BP.getX(i) / cs) + ',' + Math.floor(BP.getY(i) / cs) + ',' + Math.floor(BP.getZ(i) / cs) + ',' + BI.getX(i); const r = cell.get(k); if (r === undefined) { cell.set(k, i); rep[i] = i; } else rep[i] = r; }
+    for (let t = 0; t < ix.length; t += 3) { const a = rep[ix[t]], b = rep[ix[t + 1]], c = rep[ix[t + 2]]; if (a === b || b === c || a === c) continue; if (cov.some((K) => K[ix[t]] && K[ix[t + 1]] && K[ix[t + 2]])) continue; keepI.push(a, b, c); }
     const bg = new THREE.BufferGeometry(); for (const n in body.geometry.attributes) bg.setAttribute(n, body.geometry.attributes[n]); bg.setIndex(keepI); body.geometry = bg; }
   // Once he lies as he will lie: everything on him and round him made one mesh. Garments are skinned here, once,
   // to where they are (their normals with them); gear, ice and drifts are taken as they stand.
@@ -1219,25 +1229,41 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   const bake = () => {
     for (const c of [...baked.children]) { baked.remove(c); c.geometry.dispose(); }
     wrap.updateMatrixWorld(true);
-    const inv = wrap.matrixWorld.clone().invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3(), v = new THREE.Vector3(), w = new THREE.Vector3(), nn = new THREE.Vector3();
-    const pos = [], nrm = [], col = [], fxs = [], rgh = [], idx = [], list = [];
+    const inv = wrap.matrixWorld.clone().invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3(), v = new THREE.Vector3(), w = new THREE.Vector3(), nn = new THREE.Vector3(), sk = new THREE.Vector3();
+    const pos = [], nrm = [], col = [], fxs = [], rgh = [], idx = [], list = [], outw = [], soft = [];   // outw: which way is out of him (garments); soft: faces whose normals are rebuilt
     wrap.traverse((o) => { if (o.isMesh && o !== body && o.parent !== baked && o.material.userData.fx) list.push(o); });
     for (const o of list) {
       const g = o.geometry, P = g.attributes.position, N = g.attributes.normal, ix = g.index ? g.index.array : null, fx = o.material.userData.fx, c = o.material.color, base = pos.length / 3;
       M.multiplyMatrices(inv, o.matrixWorld); NM.getNormalMatrix(M);
       const put = (i) => {
-        if (o.isSkinnedMesh) { o.getVertexPosition(i, v); w.fromBufferAttribute(P, i).addScaledVector(nn.fromBufferAttribute(N, i), 0.01); o.applyBoneTransform(i, w); nn.subVectors(w, v).transformDirection(M); v.applyMatrix4(M); }
-        else { v.fromBufferAttribute(P, i).applyMatrix4(M); nn.fromBufferAttribute(N, i).applyMatrix3(NM).normalize(); }
+        if (o.isSkinnedMesh) {   // a garment vertex is his own vertex pushed out from the skin: outward is away from that
+          o.getVertexPosition(i, v); body.getVertexPosition(i, sk); sk.subVectors(v, sk).transformDirection(M); v.applyMatrix4(M); nn.set(0, 0, 0);
+        } else { v.fromBufferAttribute(P, i).applyMatrix4(M); nn.fromBufferAttribute(N, i).applyMatrix3(NM).normalize(); }
+        if (o.isSkinnedMesh) { const q = pos.length; outw[q] = sk.x; outw[q + 1] = sk.y; outw[q + 2] = sk.z; }
         pos.push(v.x, v.y, v.z); nrm.push(nn.x, nn.y, nn.z); col.push(c.r, c.g, c.b); fxs.push(fx.metal, fx.quilt, fx.weave, fx.snow ? 0 : fx.grime); rgh.push(fx.rough);
       };
       if (o.isSkinnedMesh) {   // only the vertices its faces use; and no face that lies wholly under the garment over it
-        const map = new Int32Array(P.count).fill(-1), under = o.userData.under; let nv = 0;
+        const map = new Int32Array(P.count).fill(-1), under = o.userData.under, hide = o.userData.hide; let nv = 0;
         for (let t = 0; t < ix.length; t += 3) {
-          const a = ix[t], b = ix[t + 1], d = ix[t + 2]; if (under && under[a] && under[b] && under[d]) continue;
-          for (const q of [a, b, d]) { if (map[q] < 0) { map[q] = nv++; put(q); } idx.push(base + map[q]); }
+          const a = ix[t], b = ix[t + 1], d = ix[t + 2]; if (under && under[a] && under[b] && under[d]) continue; if (hide && hide[a] && hide[b] && hide[d]) continue;
+          soft.push(idx.length); for (const q of [a, b, d]) { if (map[q] < 0) { map[q] = nv++; put(q); } idx.push(base + map[q]); }
         }
       } else { for (let i = 0; i < P.count; i++) put(i); if (ix) for (let t = 0; t < ix.length; t++) idx.push(base + ix[t]); else for (let t = 0; t < P.count; t++) idx.push(base + t); }
       o.visible = false;
+    }
+    // the garments' normals: each face turned to face out of him, then smooth normals from the faces (welded where
+    // the cloth was welded), so no stored normal is trusted
+    { const key = (q) => Math.round(pos[q] * 4000) + ',' + Math.round(pos[q + 1] * 4000) + ',' + Math.round(pos[q + 2] * 4000), acc = new Map();
+      for (const t of soft) {
+        const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3, ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2], wx = pos[c] - pos[a], wy = pos[c + 1] - pos[a + 1], wz = pos[c + 2] - pos[a + 2];
+        let fx = uy * wz - uz * wy, fy = uz * wx - ux * wz, fz = ux * wy - uy * wx;
+        if (fx * (outw[a] + outw[b] + outw[c]) + fy * (outw[a + 1] + outw[b + 1] + outw[c + 1]) + fz * (outw[a + 2] + outw[b + 2] + outw[c + 2]) < 0) { const x = idx[t + 1]; idx[t + 1] = idx[t + 2]; idx[t + 2] = x; fx = -fx; fy = -fy; fz = -fz; }
+        for (const q of [a, b, c]) { const k = key(q); let A = acc.get(k); if (!A) acc.set(k, A = [0, 0, 0]); A[0] += fx; A[1] += fy; A[2] += fz; }
+      }
+      for (const t of soft) for (let j = 0; j < 3; j++) { const q = idx[t + j] * 3, A = acc.get(key(q)), l = Math.hypot(A[0], A[1], A[2]) || 1; nrm[q] = A[0] / l; nrm[q + 1] = A[1] / l; nrm[q + 2] = A[2] / l; } }
+    for (let t = 0; t < idx.length; t += 3) {   // each face wound the way its normals point
+      const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3, ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2], wx = pos[c] - pos[a], wy = pos[c + 1] - pos[a + 1], wz = pos[c + 2] - pos[a + 2];
+      if ((uy * wz - uz * wy) * (nrm[a] + nrm[b] + nrm[c]) + (uz * wx - ux * wz) * (nrm[a + 1] + nrm[b + 1] + nrm[c + 1]) + (ux * wy - uy * wx) * (nrm[a + 2] + nrm[b + 2] + nrm[c + 2]) < 0) { const x = idx[t + 1]; idx[t + 1] = idx[t + 2]; idx[t + 2] = x; }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
