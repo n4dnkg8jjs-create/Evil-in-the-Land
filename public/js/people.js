@@ -944,7 +944,7 @@ diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.014, 0.012), bl * 0.75);
 float fl = dot(diffuseColor.rgb, vec3(0.3, 0.5, 0.2)); diffuseColor.rgb = mix(vec3(fl), diffuseColor.rgb, 0.85) * 0.92;
 float ny = normalize(vFN).y;
 float hoar = (0.06 + 0.1 * vn(vFP * 41.0)) * mix(0.4, 1.0, uSnow) * (1.0 - vFx.x * 0.4);
-float rime = smoothstep(0.5, 0.92, ny + (vn(vFP * 19.0) - 0.5) * 0.25) * mix(0.2, mix(0.6, 0.85, vFx.x), uSnow);
+float rime = smoothstep(0.55, 0.95, ny + (vn(vFP * 19.0) - 0.5) * 0.3) * mix(0.15, mix(0.34, 0.5, vFx.x), uSnow) * (0.55 + 0.45 * vn(vFP * 5.0));
 rime = max(rime, (1.0 - step(0.5, vFx.w + vFx.y + vFx.z + vFx.x)) * step(0.0, ny - 2.0));   // (drifts are snow already)
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), hoar);
 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), rime) + step(0.985, fh(floor(vFP * 140.0))) * rime * 0.2;`)
@@ -1104,10 +1104,10 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
   // shoes: plain leather, broad at the toe
   // (the 'cow's mouth': a flat sole, low sides, the toe as broad as the ball of the foot and cut off square)
   { const RN = 9, SN = 14, pos = [], idx = [];
-    for (let j = 0; j <= RN; j++) { const t = j / RN, z = -0.075 + 0.275 * t, wd = (0.04 + 0.022 * Math.sin(Math.min(1, t * 1.25) * Math.PI * 0.5)) * (j === 0 || j === RN ? 0.72 : 1) * (t > 0.88 ? 0.97 : 1), ht = t < 0.3 ? 0.085 : 0.085 - 0.04 * Math.min(1, (t - 0.3) / 0.45);
-      for (let a = 0; a < SN; a++) { const an = (a / SN) * Math.PI * 2, c = Math.cos(an), sn = Math.sin(an), sq = Math.sign(c) * Math.abs(c) ** 0.6; pos.push(sq * wd, -0.098 + (sn > 0 ? sn ** 0.7 * ht * (j === 0 || j === RN ? 0.7 : 1) : sn * 0.012), z); } }
+    for (let j = 0; j <= RN; j++) { const t = j / RN, z = -0.08 + 0.315 * t, wd = (0.044 + 0.024 * Math.sin(Math.min(1, t * 1.25) * Math.PI * 0.5)) * (j === 0 || j === RN ? 0.72 : 1) * (t > 0.88 ? 0.97 : 1), ht = t < 0.3 ? 0.095 : 0.095 - 0.03 * Math.min(1, (t - 0.3) / 0.45);
+      for (let a = 0; a < SN; a++) { const an = (a / SN) * Math.PI * 2, c = Math.cos(an), sn = Math.sin(an), sq = Math.sign(c) * Math.abs(c) ** 0.6; pos.push(sq * wd, -0.102 + (sn > 0 ? sn ** 0.7 * ht * (j === 0 || j === RN ? 0.7 : 1) : sn * 0.012), z); } }
     for (let j = 0; j < RN; j++) for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; idx.push(i0, i0 + SN, i1, i1, i0 + SN, i1 + SN); }
-    for (const [j, f] of [[0, 1], [RN, 0]]) { const c = pos.length / 3; pos.push(0, -0.07, j ? 0.2 : -0.075); for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; if (f) idx.push(c, i0, i1); else idx.push(c, i1, i0); } }
+    for (const [j, f] of [[0, 1], [RN, 0]]) { const c = pos.length / 3; pos.push(0, -0.07, j ? 0.235 : -0.08); for (let a = 0; a < SN; a++) { const i0 = j * SN + a, i1 = j * SN + (a + 1) % SN; if (f) idx.push(c, i0, i1); else idx.push(c, i1, i0); } }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
     for (const k of ['R', 'L']) J['foot' + k].add(new THREE.Mesh(g, leather)); }
   // a belt
@@ -1230,6 +1230,16 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     for (const c of [...baked.children]) { baked.remove(c); c.geometry.dispose(); }
     wrap.updateMatrixWorld(true);
     const inv = wrap.matrixWorld.clone().invert(), M = new THREE.Matrix4(), NM = new THREE.Matrix3(), v = new THREE.Vector3(), w = new THREE.Vector3(), nn = new THREE.Vector3(), sk = new THREE.Vector3();
+    // his skin and his garments share one skeleton and bind: skin a vertex of either by the blend of its bones
+    body.skeleton.update(); const BMs = body.skeleton.boneMatrices, SIa = body.geometry.attributes.skinIndex.array, SWa = body.geometry.attributes.skinWeight.array;
+    const pre = new THREE.Matrix4().multiplyMatrices(inv, body.matrixWorld).multiply(body.bindMatrixInverse).elements, bnd = body.bindMatrix.elements, Bl = new Float32Array(16), BPa = body.geometry.attributes.position.array;
+    const skin = (i, src, out) => {   // vertex i of src (a position array) into out, in his own frame
+      Bl.fill(0); for (let k = 0; k < 4; k++) { const wgt = SWa[i * 4 + k]; if (!wgt) continue; const o = SIa[i * 4 + k] * 16; for (let e = 0; e < 16; e++) Bl[e] += BMs[o + e] * wgt; }
+      const x = src[i * 3], y = src[i * 3 + 1], z = src[i * 3 + 2];
+      const qx = bnd[0] * x + bnd[4] * y + bnd[8] * z + bnd[12], qy = bnd[1] * x + bnd[5] * y + bnd[9] * z + bnd[13], qz = bnd[2] * x + bnd[6] * y + bnd[10] * z + bnd[14];
+      const rx = Bl[0] * qx + Bl[4] * qy + Bl[8] * qz + Bl[12], ry = Bl[1] * qx + Bl[5] * qy + Bl[9] * qz + Bl[13], rz = Bl[2] * qx + Bl[6] * qy + Bl[10] * qz + Bl[14];
+      out.set(pre[0] * rx + pre[4] * ry + pre[8] * rz + pre[12], pre[1] * rx + pre[5] * ry + pre[9] * rz + pre[13], pre[2] * rx + pre[6] * ry + pre[10] * rz + pre[14]);
+    };
     const pos = [], nrm = [], col = [], fxs = [], rgh = [], idx = [], list = [], outw = [], soft = [];   // outw: which way is out of him (garments); soft: faces whose normals are rebuilt
     wrap.traverse((o) => { if (o.isMesh && o !== body && o.parent !== baked && o.material.userData.fx) list.push(o); });
     for (const o of list) {
@@ -1237,7 +1247,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
       M.multiplyMatrices(inv, o.matrixWorld); NM.getNormalMatrix(M);
       const put = (i) => {
         if (o.isSkinnedMesh) {   // a garment vertex is his own vertex pushed out from the skin: outward is away from that
-          o.getVertexPosition(i, v); body.getVertexPosition(i, sk); sk.subVectors(v, sk).transformDirection(M); v.applyMatrix4(M); nn.set(0, 0, 0);
+          skin(i, P.array, v); skin(i, BPa, sk); sk.subVectors(v, sk); nn.set(0, 0, 0);
         } else { v.fromBufferAttribute(P, i).applyMatrix4(M); nn.fromBufferAttribute(N, i).applyMatrix3(NM).normalize(); }
         if (o.isSkinnedMesh) { const q = pos.length; outw[q] = sk.x; outw[q + 1] = sk.y; outw[q + 2] = sk.z; }
         pos.push(v.x, v.y, v.z); nrm.push(nn.x, nn.y, nn.z); col.push(c.r, c.g, c.b); fxs.push(fx.metal, fx.quilt, fx.weave, fx.snow ? 0 : fx.grime); rgh.push(fx.rough);
@@ -1271,7 +1281,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     const m = new THREE.Mesh(g, frostBaked(snow ? 1 : 0)); m.castShadow = true; m.receiveShadow = true; baked.add(m);
     body.computeBoundingSphere(); body.frustumCulled = true;   // he will not move again: his bounds are known
   };
-  const settle = (ground, x, z, yaw, sink = 0.01) => {
+  const settle = (ground, x, z, yaw, sink = 0.01, rough = false) => {
     // the search below always gives the same answer for the same man on the same ground: remember it, so reloading
     // the chapter (after a wipe, say) need not search again
     const memo = !opts.debug && SETTLE_MEMO, gk = [0, 0.5, -0.5].map((d) => ground(x + d, z - d).toFixed(4)).join(',');
@@ -1339,6 +1349,7 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     if (opts.debug) settle.log.push('final ' + [...CONTACT.rest, ...CONTACT.must].map((b) => b + ':' + lowOf(ground, byBone[b] || []).toFixed(3)).join(' ') + ' all:' + lowOf(ground, all).toFixed(3));
     if (mk) { const jr = {}; for (const n of JOINTS) if (J[n]) jr[n] = J[n].rotation.toArray(); memo.set(mk, { p: wrap.position.toArray(), q: wrap.quaternion.toArray(), j: jr }); }
     }
+    if (rough) return wrap;   // (the first rough settle on flat ground: only the pose matters)
     const cy = Math.cos(yaw), sy = Math.sin(yaw), inv = wrap.quaternion.clone().invert();
     const place = (obj, wx, wz, lift, tilt, flat) => {
       if (obj.parent !== wrap) wrap.add(obj);
@@ -1387,6 +1398,6 @@ export function makeFrozen(pose = 'sit', seed = 0, opts = {}) {
     wrap.updateMatrixWorld(true); const per = {}; for (const b of [...CONTACT.rest, ...CONTACT.must]) per[b] = lowOf(ground, byBone[b] || []);
     return { low: lowOf(ground, all), per };
   };
-  if (opts.settle !== false) settle(() => 0, 0, 0, 0);   // (a caller that will settle him on his own ground says so, and saves the search)
+  settle(() => 0, 0, 0, 0, 0.01, true);   // roughly, on flat ground first: the search on his real ground then starts near its answer
   return { root: wrap, rig, head: J.head, settle, gaps, pose, log: () => settle.log };
 }

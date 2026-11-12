@@ -404,10 +404,10 @@ export function dragonHideMaterial() {
         dPat = mix(dPat, vec4(0.5, 0.5 + (smoothstep(0.1, 0.0, pl) - smoothstep(0.8, 1.0, pl)) * 0.45, seam, 0.5 + 0.3 * dn(vec3(floor(vDUv.y * 1.6), 3.0, 7.0))), dBelly);
         float ht = dPat.b, tint = dPat.a;                // the scale's height (0 in the gaps, 1 on its keel) and its own shade
         float mott = dn(vBindP * 0.9) * 0.6 + dn(vBindP * 3.1) * 0.4;
-        vec3 red = mix(vec3(0.05, 0.011, 0.008), vec3(0.125, 0.03, 0.015), tint);
+        vec3 red = mix(vec3(0.085, 0.014, 0.01), vec3(0.19, 0.036, 0.018), tint);
         vec3 soot = vec3(0.02, 0.017, 0.016);
         float low = rLimb * smoothstep(2.6, 0.2, vBindP.y) * 0.55;                    // the feet and the hands, dark with ash
-        vec3 hide = mix(red, soot, clamp(back * 0.9 + (mott - 0.42) * 1.2 + rLimb * 0.15 + low, 0.0, 1.0));
+        vec3 hide = mix(red, soot, clamp(back * 0.7 + (mott - 0.5) * 1.1 + rLimb * 0.15 + low, 0.0, 1.0));
         hide = mix(hide, vec3(0.24, 0.17, 0.1) * (0.55 + 0.5 * tint), dBelly * 0.92);
         hide *= mix(0.12, 1.0, smoothstep(0.08, 0.6, ht)) * (0.75 + 0.5 * mott);
         hide += vec3(0.045, 0.03, 0.022) * smoothstep(0.82, 1.0, ht) * (1.0 - dBelly);   // the keels worn pale
