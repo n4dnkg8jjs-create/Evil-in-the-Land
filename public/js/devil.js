@@ -2568,7 +2568,7 @@ export class Dragon extends Boss {
       const dir = this.mouthDir; jl = dir.y < -0.06 ? clamp((this.mouth.y - this.gY) / -dir.y, 5, 20) : 11;
       const hx = this.mouth.x + dir.x * jl, hz = this.mouth.z + dir.z * jl, hy = dir.y < -0.06 ? H(hx, hz) : this.mouth.y + dir.y * jl;
       // where it strikes the ground it boils up and spreads
-      if (dir.y < -0.06) { for (let i = 0; i < 6; i++) { const a = i * 2.4 + Math.floor(time * 7) * 1.3, r = 0.4 + (i % 3) * 0.9; F.flame(hx + Math.sin(a) * r, hy, hz + Math.cos(a) * r, 2.6, 2.6 + (i % 2) * 1.3, i * 1.9, 1.2); } if (!this._scT || time - this._scT > 0.3) { this._scT = time; F.scorchAt(hx, hz, 3, W, time); } }
+      if (dir.y < -0.06) { for (let i = 0; i < 6; i++) { const a = i * 2.4 + Math.floor(time * 7) * 1.3, r = 0.4 + (i % 3) * 0.9, fx2 = hx + Math.sin(a) * r, fz2 = hz + Math.cos(a) * r; F.flame(fx2, H(fx2, fz2) - 0.1, fz2, 2.6, 2.6 + (i % 2) * 1.3, i * 1.9, 1.2); }   // (each on the ground where it stands) if (!this._scT || time - this._scT > 0.3) { this._scT = time; F.scorchAt(hx, hz, 3, W, time); } }
       if (fx) {
         if (R() < dt * 22) fx.fireStream(this.mouth, dir, jl * 0.85, 0.3, 0.3);
         dragonLight(fx, 3, _d0.set(hx, hy + 1.6, hz), 0xff6a20, 55 + 20 * Math.sin(time * 31), 30); dragonLight(fx, 2, _d1.copy(this.mouth).addScaledVector(dir, 2.5), 0xff7a30, 30, 18);
@@ -2578,9 +2578,11 @@ export class Dragon extends Boss {
     let lit = false;
     for (const P of this.tele.map.values()) {
       if (P.shape === 'pool') {
-        if (!P.seen) { P.seen = true; P.gy = H(P.x, P.z); F.scorchAt(P.x, P.z, P.a * 1.3, W, time); }
         const k = clamp(P.t / 0.35, 0, 1) * clamp((P.dur - P.t) / 1.2, 0, 1), n = Math.min(7, Math.round(P.a * 2.2));
-        for (let i = 0; i < n; i++) { const a = P.id * 2.4 + i * 2.399, r = P.a * 0.8 * Math.sqrt((i + 0.5) / n); F.flame(P.x + Math.sin(a) * r, P.gy - 0.1, P.z + Math.cos(a) * r, 1.6 + ((i * 7 + P.id) % 5) * 0.25, 2.0 + ((i * 3 + P.id) % 4) * 0.6, P.id + i * 1.7, k); }
+        // (each tongue of fire stands on the ground where it is: all at the height of the middle, they hung in the air
+        // over every hollow and off the edge of the rock, metres up)
+        if (!P.seen) { P.seen = true; P.gy = H(P.x, P.z); P.fy = []; for (let i = 0; i < n; i++) { const a = P.id * 2.4 + i * 2.399, r = P.a * 0.8 * Math.sqrt((i + 0.5) / n); P.fy.push(H(P.x + Math.sin(a) * r, P.z + Math.cos(a) * r)); } F.scorchAt(P.x, P.z, P.a * 1.3, W, time); }
+        for (let i = 0; i < n; i++) { const a = P.id * 2.4 + i * 2.399, r = P.a * 0.8 * Math.sqrt((i + 0.5) / n); F.flame(P.x + Math.sin(a) * r, P.fy[i] - 0.1, P.z + Math.cos(a) * r, 1.6 + ((i * 7 + P.id) % 5) * 0.25, 2.0 + ((i * 3 + P.id) % 4) * 0.6, P.id + i * 1.7, k); }
         if (fx && R() < dt * 3 * k) fx.hellfire(P.x, P.gy, P.z, P.a);
         if (fx && !lit && !this.breath && k > 0.5) { lit = true; dragonLight(fx, 3, _d0.set(P.x, P.gy + 1.5, P.z), 0xff6a20, 26 + 8 * Math.sin(time * 27 + P.id), 20); }
       } else if (P.fxk === 5 && !P.fired) {   // a gout of fire on its way down to its mark

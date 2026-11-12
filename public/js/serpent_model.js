@@ -183,13 +183,24 @@ float sRough = mix(mix(0.82, 0.36, rim), 0.55, lod);
 sRough = mix(sRough, 0.3, kind > 0.5 ? 0.6 : 0.0);
 sRough = mix(sRough, 0.8, scar);
 float sGlow = mix(pow(1.0 - rim, 2.0), 0.12, lod) * (1.0 - scar);
+#ifdef DBG
+#if DBG == 1
+diffuseColor.rgb = pc * 3.0;
+#elif DBG == 2
+diffuseColor.rgb = vec3(scar);
+#elif DBG == 4
+diffuseColor.rgb = vec3(rim);
+#elif DBG == 5
+diffuseColor.rgb = vec3(fract(sp * 0.1), 0.0);
+#endif
+#endif
 `;
 
 const _dummyN = (() => { const t = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1); t.needsUpdate = true; return t; })();
 // head: the head's own variant (its UVs are a chart of the head, not of the body). eye: [a, z, a, z] of the eye and of its brow plate
 export function serpentSkin(head = false, eye = [0.4, 1.4, 0.7, 1.4]) {
   const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 0, normalMap: _dummyN, normalScale: new THREE.Vector2(1, 1), clearcoat: 0.22, clearcoatRoughness: 0.38, emissive: 0xff3a10, emissiveIntensity: 0, side: head ? THREE.DoubleSide : THREE.FrontSide });
-  m.defines = head ? { SERP_HEAD: '' } : {};
+  m.defines = head ? { SERP_HEAD: '' } : {}; if (globalThis.__serpDbg) m.defines.DBG = globalThis.__serpDbg;
   const uEye = { value: new THREE.Vector4(...eye) };
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uEye = uEye;
@@ -266,7 +277,7 @@ function grid(NI, NJ, fn, flip = false) {
   const pos = [], col = [], idx = [];
   for (let i = 0; i <= NI; i++) for (let j = 0; j <= NJ; j++) { const r = fn(i, j); pos.push(r[0], r[1], r[2]); col.push(r[3] ?? 1, r[4] ?? 1, r[5] ?? 1); }
   for (let i = 0; i < NI; i++) for (let j = 0; j < NJ; j++) { const a = i * (NJ + 1) + j, b = a + 1, c = a + NJ + 1, d = c + 1; if (flip) idx.push(a, c, b, b, c, d); else idx.push(a, b, c, b, d, c); }
-  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setIndex(idx); return g;
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setIndex(idx); g.computeVertexNormals(); return g;
 }
 // the head's chart for the skin shader: u the distance round from the nearest lip (negative on the jaw), v forward; in scales
 function chartUV(g, NI, NJ, sign) {

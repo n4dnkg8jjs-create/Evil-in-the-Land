@@ -459,7 +459,7 @@ export function buildHoundModel() {
   const TC = [0.16, 0.11, 0.055], TT = [0.5, 0.44, 0.32];
   const upG = (z) => [stAt(HST, z, 10), stAt(HST, z, 11)], loG = (z) => [(stAt(JST, z, 2) + stAt(JST, z, 4)) / 2, Math.max(stAt(JST, z, 3), stAt(JST, z, 5))];
   const tooth = (up, s, z, xa, crown, rx, rz, blade, tilt = 0, fwd = 0, curve = 0) => {
-    const [gx, gy] = up ? upG(z) : loG(z), X = s * (xa ?? gx), sg = up ? -1 : 1, sink = 0.013, d = [s * tilt, sg, fwd];
+    const [gx, gy] = up ? upG(z) : loG(z), X = s * (xa ?? gx), sg = up ? -1 : 1, sink = 0.017, d = [s * tilt, sg, fwd];
     const root = F(X - s * tilt * sink, gy - sg * sink, z - fwd * sink);
     part({ kind: 'tooth', root: root.slice(), up }, () => spike(M, root, d, (crown + sink) * HS, rx * HS, rz * HS, [0, 0, 1], [0, 0, -curve], TC, TT, [[up ? 'head' : 'jaw', 1]], 0.65, blade));
   };
@@ -513,7 +513,10 @@ export function buildHoundModel() {
 // each lock: a strip of three rows from a root a little under the hide, out along the grain, bowed by its weight;
 // lit with the normal of the hide it grows from (so the coat shades as one)
 function buildCards(geo, cards, rnd) {
-  const P = geo.attributes.position, N = geo.attributes.normal, SI = geo.attributes.skinIndex, SW = geo.attributes.skinWeight;
+  const P = geo.attributes.position, N = geo.attributes.normal, SI = geo.attributes.skinIndex, SW = geo.attributes.skinWeight, I = geo.index.array;
+  const want = new Set(cards.map((C) => C.vi)), fan = new Map();   // the triangles round each vertex that grows a lock
+  for (let t = 0; t < I.length; t += 3) for (let k = 0; k < 3; k++) if (want.has(I[t + k])) { const L = fan.get(I[t + k]) || fan.set(I[t + k], []).get(I[t + k]); L.push(t); }
+  const pa = new V3(), pb = new V3(), pc = new V3();
   const n = cards.length, NV = n * 6, pos = new Float32Array(NV * 3), nrm = new Float32Array(NV * 3), uv = new Float32Array(NV * 2), col = new Float32Array(NV * 3), root = new Float32Array(NV * 3), hk = new Float32Array(NV);
   const si = new Uint16Array(NV * 4), sw = new Float32Array(NV * 4), ind = new Uint32Array(n * 12);
   const nv = new V3(), cb = new V3(), sd = new V3(), d0 = new V3(), r0 = new V3(), c = new V3(), t1 = new V3(), down = new V3(0, -1, 0);
@@ -522,7 +525,12 @@ function buildCards(geo, cards, rnd) {
     nv.fromBufferAttribute(N, C.vi).normalize(); r0.fromBufferAttribute(P, C.vi);
     cb.set(...C.comb); cb.addScaledVector(nv, -cb.dot(nv)); if (cb.lengthSq() < 1e-6) cb.set(0, -1, 0).addScaledVector(nv, -nv.y); cb.normalize();
     sd.crossVectors(nv, cb).normalize();
-    r0.addScaledVector(sd, (rnd() - 0.5) * 0.04).addScaledVector(cb, (rnd() - 0.5) * 0.03).addScaledVector(nv, -0.007);   // scattered off the ring, rooted under the hide
+    const F = fan.get(C.vi);   // scattered over the hide round its vertex (a point of one of its triangles), rooted a little under it
+    let wb = [[C.vi, 1]];   // and skinned as that point of the hide is: its corners' weights, blended
+    if (F) { const t = F[(rnd() * F.length) | 0]; pa.fromBufferAttribute(P, I[t]); pb.fromBufferAttribute(P, I[t + 1]); pc.fromBufferAttribute(P, I[t + 2]); let u = rnd(), w = rnd(); if (u + w > 1) { u = 1 - u; w = 1 - w; } r0.copy(pa).multiplyScalar(1 - u - w).addScaledVector(pb, u).addScaledVector(pc, w).lerp(r0, 0.25); wb = [[I[t], 0.75 * (1 - u - w)], [I[t + 1], 0.75 * u], [I[t + 2], 0.75 * w], [C.vi, 0.25]]; }
+    const bw = new Map(); for (const [vi, f] of wb) for (let k = 0; k < 4; k++) { const x = SW.getComponent(vi, k) * f; if (x > 0) { const b = SI.getComponent(vi, k); bw.set(b, (bw.get(b) || 0) + x); } }
+    const top = [...bw].sort((p, q) => q[1] - p[1]).slice(0, 4), wsum = top.reduce((a, e) => a + e[1], 0);
+    r0.addScaledVector(nv, -0.007);
     const tw = (rnd() - 0.5) * 0.7; cb.applyAxisAngle(nv, tw); sd.crossVectors(nv, cb).normalize();
     d0.copy(cb).multiplyScalar(Math.cos(C.stand)).addScaledVector(nv, Math.sin(C.stand)).normalize();
     const L = C.len, wd = C.wd, col0 = (rnd() * 4) | 0, tint = 0.7 + 0.6 * rnd(), base = v, NRW = L > 0.085 ? 3 : 2;
@@ -533,16 +541,16 @@ function buildCards(geo, cards, rnd) {
         t1.copy(c).addScaledVector(sd, e * hw);
         pos.set([t1.x, t1.y, t1.z], v * 3); nrm.set([nv.x, nv.y, nv.z], v * 3); root.set([r0.x, r0.y, r0.z], v * 3); hk[v] = C.hack || 0;
         uv.set([(col0 + (e > 0 ? 1 : 0)) / 4, u], v * 2); col.set([tint, tint, tint], v * 3);
-        for (let k = 0; k < 4; k++) { si[v * 4 + k] = SI.getComponent(C.vi, k); sw[v * 4 + k] = SW.getComponent(C.vi, k); }
+        for (let k = 0; k < 4; k++) { si[v * 4 + k] = top[k] ? top[k][0] : 0; sw[v * 4 + k] = top[k] ? top[k][1] / wsum : 0; }
         v++;
       }
     }
     for (let r = 0; r < NRW - 1; r++) { const a = base + r * 2; ind.set([a, a + 1, a + 2, a + 1, a + 3, a + 2], ni); ni += 6; }
   });
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.setAttribute('aRoot', new THREE.BufferAttribute(root, 3)); g.setAttribute('aHack', new THREE.BufferAttribute(hk, 1));
-  g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  const g = new THREE.BufferGeometry(), A = (a, k) => new THREE.BufferAttribute(a.slice(0, v * k), k);
+  g.setAttribute('position', A(pos, 3)); g.setAttribute('normal', A(nrm, 3)); g.setAttribute('uv', A(uv, 2));
+  g.setAttribute('color', A(col, 3)); g.setAttribute('aRoot', A(root, 3)); g.setAttribute('aHack', A(hk, 1));
+  g.setAttribute('skinIndex', A(si, 4)); g.setAttribute('skinWeight', A(sw, 4));
   g.setIndex(new THREE.BufferAttribute(ind.slice(0, ni), 1)); g.setDrawRange(0, ni); g.computeBoundingSphere(); g.boundingSphere.radius *= 1.6;
   return g;
 }

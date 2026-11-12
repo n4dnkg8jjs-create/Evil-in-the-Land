@@ -1291,7 +1291,9 @@ export class World {
         // Each root is the foot of one of the vines on the cross: it leaves the vine where it meets the plinth, runs to
         // the plinth's edge and down onto the steps, thickening as it goes, lies on each step and drapes over its edge
         // onto the next, then onto the ground.
-        const V = vines[k % vines.length], ang = V.a0 + (r() - 0.5) * 0.9, pts = [], RT = 0.07;
+        // spread evenly round the altar, each from the vine nearest its way out, half turning one way and half the other
+        const ang = (k / 9) * TAU + (r() - 0.5) * 0.5, dA = (A0) => Math.atan2(Math.sin(ang - A0), Math.cos(ang - A0));
+        const V = vines.reduce((b, v) => (Math.abs(dA(v.a0)) < Math.abs(dA(b.a0)) ? v : b), vines[0]), turn = (k % 2 ? 1 : -1) * (0.35 + 0.35 * ((k * 0.618) % 1)), pts = [], RT = 0.07;
         const cy = Math.cos(yaw), sy = Math.sin(yaw);
         const stepTop = (x, z) => {   // the top of the plinth, of the octagonal steps at (x, z), or the ground beyond them
           const lx = x * cy - z * sy, lz = x * sy + z * cy; if (Math.abs(lx) < 0.3 && Math.abs(lz) < 0.3) return 0.95;
@@ -1303,7 +1305,7 @@ export class World {
         const thick = (t) => V.tr + (RT - V.tr) * smooth(Math.min(1, t / 0.12));   // the vine's own thickness at its foot
         const r0 = Math.hypot(V.p0.x, V.p0.z);
         for (let s = 0; s <= 170; s++) {
-          const t = s / 170, rr = r0 + t * (4.85 - r0), aa = V.a0 + (ang - V.a0) * smooth(Math.min(1, t * 4)) + t * 0.6, x = Math.cos(aa) * rr, z = Math.sin(aa) * rr;
+          const t = s / 170, rr = r0 + t * (4.85 - r0), aa = V.a0 + dA(V.a0) * smooth(Math.min(1, t * 4)) + t * turn, x = Math.cos(aa) * rr, z = Math.sin(aa) * rr;
           pts.push(new THREE.Vector3(x, lie(x, z, thick(t)) + Math.max(0, Math.sin(t * 9)) * 0.03 * Math.min(1, t * 5), z));
         }
         pts[0].set(V.p0.x, V.p0.y, V.p0.z);   // it is the vine's own foot

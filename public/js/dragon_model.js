@@ -555,7 +555,9 @@ const FIRE_NOISE = `
   float fn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(fh(i), fh(i + vec2(1, 0)), f.x), mix(fh(i + vec2(0, 1)), fh(i + vec2(1, 1)), f.x), f.y); }
   float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * fn(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return s; }
   vec3 fireCol(float heat){ vec3 c = mix(vec3(0.45, 0.04, 0.01), vec3(1.0, 0.32, 0.04), smoothstep(0.08, 0.4, heat)); c = mix(c, vec3(1.0, 0.6, 0.18), smoothstep(0.42, 0.75, heat)); return mix(c, vec3(1.0, 0.88, 0.62), smoothstep(0.88, 1.0, heat)); }`;
-const N_FLAME = 200, N_SCORCH = 28, SG = 6;
+const N_FLAME = 200, N_SCORCH = 28, SG = 11;   // (SG: a patch of char is SG x SG squares of the ground's own grid)
+// the ground's grid (world.js: 257 x 257 heights over 300 m; heightAt cuts each square along the same diagonal as here)
+const GROUND_HALF = 150, groundN = (world) => (world?.H ? Math.round(Math.sqrt(world.H.length)) : 257);
 export class DragonFire {
   constructor(scene) {
     this.scene = scene; this.group = new THREE.Group(); scene.add(this.group); this.time = 0;
@@ -614,7 +616,7 @@ export class DragonFire {
     const SV = (SG + 1) * (SG + 1), sp = new Float32Array(N_SCORCH * SV * 3), sq = new Float32Array(N_SCORCH * SV * 4), si = [];
     for (let n = 0; n < N_SCORCH; n++) {
       for (let i = 0; i <= SG; i++) for (let j = 0; j <= SG; j++) { const v = n * SV + i * (SG + 1) + j; sq[v * 4] = i / SG * 2 - 1; sq[v * 4 + 1] = j / SG * 2 - 1; sq[v * 4 + 2] = -1e4; sq[v * 4 + 3] = n * 1.37; sp[v * 3 + 1] = -1e4; }
-      for (let i = 0; i < SG; i++) for (let j = 0; j < SG; j++) { const a = n * SV + i * (SG + 1) + j; si.push(a, a + 1, a + SG + 1, a + 1, a + SG + 2, a + SG + 1); }
+      for (let i = 0; i < SG; i++) for (let j = 0; j < SG; j++) { const a = n * SV + j * (SG + 1) + i, b = a + 1, c = a + SG + 1, d = c + 1; si.push(a, c, b, d, b, c); }   // (i across x, j across z: the ground's own split)
     }
     const sg = new THREE.BufferGeometry(); this.sPos = new THREE.BufferAttribute(sp, 3); this.sQ = new THREE.BufferAttribute(sq, 4); this.sPos.setUsage(THREE.DynamicDrawUsage); this.sQ.setUsage(THREE.DynamicDrawUsage);
     sg.setAttribute('position', this.sPos); sg.setAttribute('q', this.sQ); sg.setIndex(si);
@@ -637,12 +639,16 @@ export class DragonFire {
   begin(time) { this.time = time; this.nF = 0; this.flameU.uTime.value = time; this.scorchU.uTime.value = time; }
   flame(x, y, z, w, h, seed, k) { const n = this.nF; if (n >= N_FLAME || k <= 0.01) return; this.fPos.array[n * 3] = x; this.fPos.array[n * 3 + 1] = y; this.fPos.array[n * 3 + 2] = z; const a = this.fPar.array; a[n * 4] = w; a[n * 4 + 1] = h; a[n * 4 + 2] = seed; a[n * 4 + 3] = k; this.nF = n + 1; }
   end() { this.flames.geometry.instanceCount = this.nF; if (this.nF) { this.fPos.needsUpdate = true; this.fPar.needsUpdate = true; } this.flames.visible = this.nF > 0; }
-  // a patch of burnt ground, draped on the terrain
+  // a patch of burnt ground, laid on the terrain: the points of the ground's own grid round (x, z), so it lies exactly
+  // on what is drawn (sampled on a grid of its own it stood half a metre off the rough summit in places); the char is
+  // cut out of it by q, its place in the patch over r
   scorchAt(x, z, r, world, time) {
-    const n = this.nS++ % N_SCORCH, SV = (SG + 1) * (SG + 1), P = this.sPos.array, Q = this.sQ.array;
-    for (let i = 0; i <= SG; i++) for (let j = 0; j <= SG; j++) {
-      const v = n * SV + i * (SG + 1) + j, px = x + (i / SG * 2 - 1) * r, pz = z + (j / SG * 2 - 1) * r;
-      P[v * 3] = px; P[v * 3 + 1] = (world ? world.heightAt(px, pz) : 0) + 0.05; P[v * 3 + 2] = pz; Q[v * 4 + 2] = time;
+    const n = this.nS++ % N_SCORCH, SV = (SG + 1) * (SG + 1), P = this.sPos.array, Q = this.sQ.array, gn = groundN(world), cell = GROUND_HALF * 2 / (gn - 1);
+    r = Math.min(r, (SG / 2 - 1) * cell);   // (what the patch reaches round its middle, whichever point that falls on)
+    const i0 = clamp(Math.round((x + GROUND_HALF) / cell) - (SG >> 1), 0, gn - 1 - SG), j0 = clamp(Math.round((z + GROUND_HALF) / cell) - (SG >> 1), 0, gn - 1 - SG);
+    for (let j = 0; j <= SG; j++) for (let i = 0; i <= SG; i++) {
+      const v = n * SV + j * (SG + 1) + i, px = -GROUND_HALF + (i0 + i) * cell, pz = -GROUND_HALF + (j0 + j) * cell;
+      P[v * 3] = px; P[v * 3 + 1] = (world ? world.heightAt(px, pz) : 0) + 0.03; P[v * 3 + 2] = pz; Q[v * 4] = (px - x) / r; Q[v * 4 + 1] = (pz - z) / r; Q[v * 4 + 2] = time;
     }
     this.sPos.needsUpdate = true; this.sQ.needsUpdate = true;
   }
