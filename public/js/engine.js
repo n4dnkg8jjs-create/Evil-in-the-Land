@@ -225,11 +225,17 @@ export class Engine {
   // time a thing comes into view, which is a hitch at every camera cut of a cutscene and at every corner turned.
   warmUp() {
     if (this.headless) return;
-    const sc = this.scene, held = [];
+    const sc = this.scene, held = [], shown = [];
+    // what is hidden now and shown later (the Devil, the candles of an altar, things that step out in a scare) is
+    // drawn in this one frame too, or its mesh, textures and shadow shader are sent to the card at the moment it
+    // first appears: a stall on the very cut that shows it. Not what holds a light: showing a light would build
+    // every shader for a number of lights the game never has.
+    sc.traverse((o) => { if (o.visible || o.isLight) return; let light = false; o.traverse((c) => { if (c.isLight) light = true; }); if (!light) { o.visible = true; shown.push(o); } });
     try { this.renderer.compile(sc, this.camera); } catch (e) { console.warn('warm-up compile', e); }
     sc.traverse((o) => { if (o.frustumCulled && (o.isMesh || o.isPoints || o.isLine || o.isSprite)) { o.frustumCulled = false; held.push(o); } });
     try { this.render(0); } catch (e) { console.warn('warm-up draw', e); }
     for (const o of held) o.frustumCulled = true;
+    for (const o of shown) o.visible = false;
   }
 
   // keep the shadow frustum centred on the action

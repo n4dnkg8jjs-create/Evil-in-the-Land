@@ -8,7 +8,7 @@ import * as THREE from 'three';
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _p = new THREE.Vector3(), _d = new THREE.Vector3();
 // what the camera can see this frame (set by the game); cloth out of view is not simulated, and catches up when seen
 const VIEW = { frustum: new THREE.Frustum(), m: new THREE.Matrix4(), set: false }, _s = new THREE.Sphere();
-export function setViewFrustum(cam) { VIEW.m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse); VIEW.frustum.setFromProjectionMatrix(VIEW.m); VIEW.set = true; }
+export function setViewFrustum(cam) { VIEW.m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse); VIEW.frustum.setFromProjectionMatrix(VIEW.m); VIEW.set = true; VIEW.cx = cam.position.x; VIEW.cy = cam.position.y; VIEW.cz = cam.position.z; }
 export function inView(p, r = 2.5) { if (!VIEW.set) return true; _s.center.copy(p); _s.radius = r; return VIEW.frustum.intersectsSphere(_s); }
 
 export class Cloth {
@@ -76,7 +76,7 @@ export class Cloth {
   }
   // capsule: { a: bone, b: bone | null, ao, bo: local offsets, r }
   addCapsule(c) { this.capsules.push(c); return this; }
-  step(dt) {
+  step(dt, iters = 6) {
     const P = this.pos, Q = this.prev, n = this.n, cols = this.cols;
     this.time += dt;
     const g = -9.8 * dt * dt, damp = this.damping;
@@ -102,7 +102,7 @@ export class Cloth {
     const H = this.hull; let HI = null, HW = null;
     if (H) { H.bone.updateWorldMatrix(true, false); (this.hullInv || (this.hullInv = new THREE.Matrix4())).copy(H.bone.matrixWorld).invert(); HI = this.hullInv.elements; HW = H.bone.matrixWorld.elements; }
     const sA = this.sA, sB = this.sB, sL = this.sL, sK = this.sK, sWa = this.sWa, sWb = this.sWb, ns = sA.length, minR = this.minR, ground = this.ground + 0.01, thick = this.thick;
-    for (let it = 0; it < 6; it++) {
+    for (let it = 0; it < iters; it++) {
       for (let q = 0; q < ns; q++) {
         const a = sA[q], b = sB[q];
         const dx = P[b] - P[a], dy = P[b + 1] - P[a + 1], dz = P[b + 2] - P[a + 2];
@@ -141,11 +141,24 @@ export class Cloth {
   }
   // not seen this frame: remember how long, so it can catch up before it is next drawn
   idle(dt) { this.idleT = (this.idleT || 0) + dt; }
+  // The sheet is solved in full only when it is close enough for the difference to show. A cassock and a cloak in
+  // full cost several milliseconds of every frame, anywhere they were in view; further off they take one coarser
+  // step a frame, and far off one every few frames.
   update(dt) {
     if (!this.inited) this.init();
-    if (this.idleT > 0.2) { const n = Math.min(40, Math.round(this.idleT * 30)); for (let i = 0; i < n; i++) { this.step(1 / 60); this.step(1 / 60); } }
+    // back in view after a while unseen: a few steps to pick up the body's new place (it hangs nearly still, so it
+    // does not need the whole time made up; making it all up stalled the frame it came back into view)
+    if (this.idleT > 0.2) { const n = Math.min(6, Math.round(this.idleT * 10)); for (let i = 0; i < n; i++) this.step(1 / 30, 4); }
     this.idleT = 0;
-    const h = Math.min(dt, 1 / 30); this.step(h / 2); this.step(h / 2);
+    let d = 0; if (VIEW.set) { const P = this.pos; d = Math.hypot(P[0] - VIEW.cx, P[1] - VIEW.cy, P[2] - VIEW.cz); }
+    const h = Math.min(dt, 1 / 30);
+    if (d < 7) { this.step(h / 2); this.step(h / 2); }
+    else if (d < 18) this.step(h, 5);
+    else {
+      const every = d < 40 ? 2 : 4; this.skipT = (this.skipT || 0) + h; this.skipN = (this.skipN || 0) + 1;
+      if (this.skipN < every) return;
+      this.step(Math.min(this.skipT, 1 / 15), 4); this.skipT = 0; this.skipN = 0;
+    }
     this.geo.attributes.position.needsUpdate = true; this.geo.computeVertexNormals();
   }
   dispose() { this.mesh.removeFromParent(); this.geo.dispose(); }

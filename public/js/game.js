@@ -48,6 +48,7 @@ export class Game {
     // two lights for the cutscenes, in the scene from the start and dark until a shot wants them: a light added in the
     // middle of a game makes the renderer rebuild every lit shader at once (a long freeze on the cut)
     this.cineLights = [new THREE.PointLight(0x9fb0c8, 0, 7, 2), new THREE.PointLight(0x5a6890, 0, 9, 2)]; for (const l of this.cineLights) this.scene.add(l);
+    this.cineDark = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 10), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, fog: false })); this.cineDark.visible = false; this.scene.add(this.cineDark);
     this.prayerLine = 0; this.prayerLineT = 0; this.downedShown = false;
     // roster: humans + companions (same ids on every machine)
     for (const p of opts.players) this.addKnight(p);
@@ -109,6 +110,7 @@ export class Game {
     // stalled it just as its cutscene began), one demon of each kind is put out, and one frame is drawn with nothing
     // culled, so every shader, mesh and texture is ready before the opening shots.
     this.readyBosses(ch); this.horde.keepWarm(true);
+    for (const D of [this.watcher, this._phantomDevil]) D?.setShadows?.(true);   // His shadow shader too (it is off while He is far away)
     this.engine.warmUp();
     this.horde.keepWarm(false); for (const B of this.bossReady.values()) for (const o of B.roots) { o.userData.shown = o.visible; o.visible = false; }
     setTimeout(() => this.ui.fade(false), 200);
@@ -237,11 +239,11 @@ export class Game {
       this.handleRevive(me, myInput, dt);
       me.simulate(dt, myInput, W);
       // companions on the host
-      if (this.isHost) for (const c of this.companions) { const inp = inCine ? this.emptyInput() : c.think(dt, this); this.handleRevive(c.k, inp, dt); c.k.simulate(dt, inp, W); }
+      if (this.isHost) for (const c of this.companions) { const inp = inCine && !(this.cinema.active && this.cinema.local) ? this.emptyInput() : c.think(dt, this); this.handleRevive(c.k, inp, dt); c.k.simulate(dt, inp, W); }
       // remote puppets
       for (const k of this.knightList) if (!this.owns(k)) k.puppet(dt, k.netS, this.world);
       // host simulation
-      if (this.isHost && !this.paused) this.hostUpdate(dt);
+      if (this.isHost && !this.paused) this.hostUpdate(dt, rawDt);
       else if (this.lastSnap) this.applySnapshot(this.lastSnap, dt);
       // combat for knights this machine owns
       for (const k of this.knightList) if (this.owns(k)) this.resolveKnightCombat(k, dt);
@@ -329,13 +331,15 @@ export class Game {
       canPrayAt(k) { return self.altarFor(k) !== null || self.downedNear(k) !== null; },
     };
   }
+  // The altar a knight may kneel at: only the one whose prayer is being counted (the next blighted altar on the road;
+  // on the summit, the ward that is awake). Any blighted altar used to do, so a knight could kneel at one the host
+  // was not counting and watch a meter that showed another altar's prayer, with "no one is praying" under it.
   altarFor(k) {
-    for (const a of this.world.altars) {
-      if (a.state === 'cleansed') continue;
-      if (CHAPTERS[this.chapterIdx].boss && !this.obj.wards) continue; // wards wake only when the dragon takes flight
-      if (Math.hypot(k.pos.x - a.x, k.pos.z - a.z) < ALTAR_R) return a;
-    }
-    return null;
+    const boss = !!CHAPTERS[this.chapterIdx].boss;
+    if (boss && !this.obj.wards) return null;   // wards wake only when the dragon takes flight
+    const a = boss ? this.activeWard() : this.currentAltar();
+    if (!a || a.state === 'cleansed') return null;
+    return Math.hypot(k.pos.x - a.x, k.pos.z - a.z) < ALTAR_R ? a : null;
   }
   downedNear(k) { for (const o of this.knightList) if (o !== k && o.downed && o.pos.distanceTo(k.pos) < 2.4) return o; return null; }
   currentAltar() { if (!this.world) return null; return this.world.altars[this.obj.a] || null; }
@@ -400,7 +404,11 @@ export class Game {
       case 'firePatch': break;
     }
   }
-  hostUpdate(dt) {
+  // rt: the real time since the last frame. The game's own step is capped at 1/20 s, so on a host running below 20
+  // frames a second everything it simulates runs in slow motion; the prayer must not, or guests kneel for a minute
+  // and see the meter crawl. Prayer and the waves it calls are timed on the clock.
+  hostUpdate(dt, rt = dt) {
+    rt = dt > 0 ? Math.min(Math.max(rt, dt), 0.25) : 0;
     const C = this.hostCtx(); const o = this.obj; const ch = CHAPTERS[this.chapterIdx];
     this.horde.simulate(dt, C);
     if (this.boss) this.boss.simulate(dt, C);
@@ -419,9 +427,9 @@ export class Game {
       const n = pk.length, faith = n ? pk.reduce((m, k) => Math.max(m, k.prayMul || 1), 1) : 1; o.n = n;
       let rate = n ? (1 + (n - 1) * 0.55) * faith : 0;
       for (const d of this.horde.list) if (d.alive && d.type === 'wraith' && d.pos.distanceTo(a) < 10) { rate *= 0.5; break; }
-      o.p[o.a] = Math.min(1, o.p[o.a] + dt * rate / (ch.prayer * this.diff.prayer));
+      o.p[o.a] = Math.min(1, o.p[o.a] + rt * rate / (ch.prayer * this.diff.prayer));
       a.progress = o.p[o.a];
-      o.waveT -= dt;
+      o.waveT -= rt;
       if (o.waveT <= 0) { o.waveT = lerp(11, 6, a.progress) * (0.8 + R() * 0.4); this.spawnWave(a); }
       if (o.p[o.a] >= 1) this.hostCleanse(o.a);
     }
@@ -432,15 +440,15 @@ export class Game {
         const i = this.world.altars.indexOf(ward);
         const n = this.knightList.filter((k) => k.praying && !k.downed && Math.hypot(k.pos.x - ward.x, k.pos.z - ward.z) < ALTAR_R + 0.5).length; o.n = n;
         if (ward.state === 'blighted') { ward.state = 'active'; o.s[i] = 'active'; }
-        o.p[i] = Math.min(1, o.p[i] + dt * (n ? 1 + (n - 1) * 0.55 : 0) / (ch.prayer * this.diff.prayer)); ward.progress = o.p[i];
-        o.waveT -= dt; if (o.waveT <= 0) { o.waveT = 9; this.spawnWave(ward, 0.6); }
+        o.p[i] = Math.min(1, o.p[i] + rt * (n ? 1 + (n - 1) * 0.55 : 0) / (ch.prayer * this.diff.prayer)); ward.progress = o.p[i];
+        o.waveT -= rt; if (o.waveT <= 0) { o.waveT = 9; this.spawnWave(ward, 0.6); }
         if (o.p[i] >= 1) { o.s[i] = 'cleansed'; this.bcast('ward', { i }); if (this.boss && this.boss.wardStrike) this.boss.wardStrike(this.hostCtx()); }
       }
     }
     // wipe: every knight down
     if (o.ph !== 'wipe' && o.ph !== 'intro' && o.ph !== 'outro' && this.knightList.length && this.knightList.every((k) => k.downed)) { o.ph = 'wipe'; this.bcast('wipe', {}); setTimeout(() => this.hostRespawn(), 4200); }
     // snapshot
-    this.snapT -= dt;
+    this.snapT -= rt;
     if (this.snapT <= 0 && !this.opts.solo) {
       this.snapT = 1 / 15;
       this.net.send('snap', {
@@ -454,7 +462,7 @@ export class Game {
     this.horde.applySnapshot(m.d, dt, this.world);
     const o = this.obj;
     o.ph = m.o.ph; o.a = m.o.a; o.wards = m.o.wards; o.n = m.o.n || 0;
-    m.o.p.forEach((p, i) => { o.p[i] = p; const a = this.world.altars[i]; if (a) { a.progress = p; if (m.o.s[i] === 'active' && a.state === 'blighted') a.state = 'active'; } });
+    m.o.p.forEach((p, i) => { o.p[i] = p; const a = this.world.altars[i]; if (a) { a.progress = p; if (m.o.s[i] === 'active' && a.state === 'blighted') a.state = 'active'; else if (m.o.s[i] === 'blighted' && a.state === 'active') a.state = 'blighted'; /* put back to sleep after the company fell */ } o.s[i] = m.o.s[i]; });
     for (const [id, s] of m.ai) { const k = this.knights.get(id); if (k) k.netS = s; }
     if (m.w && this.watcher && !(this.watcher.holdNet > performance.now())) this.watcher.applyNet(m.w);
     if (m.b) { if (!this.boss) this.createBoss(m.b[0], V(m.b[1], m.b[2], m.b[3])); if (this.boss) this.boss.applySnap(m.b, dt, this.world); }
@@ -1147,14 +1155,13 @@ export class Game {
             // the dark: black all round, the world lit only by a cold glimmer on his face
             const saved = { fc: sc.fog.color.clone(), fd: sc.fog.density, sun: e.sun.intensity, hemi: e.hemi.intensity, fill: e.fill.intensity, exp: e.renderer.toneMappingExposure };
             sc.fog.color.setHex(0x010102); sc.fog.density = 0.1; e.sun.intensity *= 0.15; e.hemi.intensity *= 0.35; e.fill.intensity = 0;
-            const dark = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 10), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, fog: false }));
-            dark.position.set(best.x, gy, best.z); sc.add(dark);
+            const dark = this.cineDark; dark.position.set(best.x, gy, best.z); dark.visible = true;
             const [key, rim] = this.cineLights; key.intensity = 14; rim.intensity = 30;
             rim.position.set(best.x - fx * 2.5 - fz * 2.2, gy + 4, best.z - fz * 2.5 + fx * 2.2); key.position.set(best.x + fx * 2.2 + fz * 1.4, gy + 3.6, best.z + fz * 2.2 - fx * 1.4);
             this.audio.whisper(V(best.x, gy + 3, best.z), 3, 0.6); this.audio.setAmbience?.(1.1, 0.2);
             undo = () => {
               sc.fog.color.copy(saved.fc); sc.fog.density = saved.fd; e.sun.intensity = saved.sun; e.hemi.intensity = saved.hemi; e.fill.intensity = saved.fill; e.renderer.toneMappingExposure = saved.exp;
-              dark.removeFromParent(); dark.geometry.dispose(); dark.material.dispose(); key.intensity = 0; rim.intensity = 0;
+              dark.visible = false; key.intensity = 0; rim.intensity = 0;
               robeWind(0, 0); D.state = 'hidden'; D.mesh.visible = false; D.cool = 20;
             };
           } });
@@ -1265,7 +1272,8 @@ export class Game {
     if (this.watcher) this.scene.remove(this.watcher.mesh);
     if (this._phantomDevil) this.scene.remove(this._phantomDevil.mesh);
     for (const l of this.cineLights) this.scene.remove(l);
-    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; this.weather?.dispose(); this.weather = null; for (const k of this.fallenKnights || []) k.dispose();
+    this.scene.remove(this.cineDark); this.cineDark.geometry.dispose(); this.cineDark.material.dispose();
+    this.story.dispose(); this.dread.dispose(); this.shop.dispose(); this.shop.clearCamp(); this.terror.dispose(); this.cave?.dispose(); this.cave = null; this.weather?.dispose(); this.weather = null; for (const k of this.fallenKnights || []) k.dispose();
     for (const k of ['k:sv', 'k:ks', 'k:snap', 'k:ev', 'k:hit', 'k:bhit', 'k:dmg', 'k:parried', 'k:rev', 'k:relic', 'k:gear', 'k:skip', 'k:skipreq', 'k:kc', 'left']) this.net?.off(k);
   }
 }
